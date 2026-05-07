@@ -59,24 +59,23 @@ def upgrade() -> None:
     )
     op.create_index("ix_oauth_states_state", "oauth_states", ["state"])
 
-    document_status = sa.Enum("draft", "processing", "accepted", name="documentstatus")
-    document_status.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "documents",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("user_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
         sa.Column("moysklad_id", sa.String(length=255), nullable=True),
         sa.Column("name", sa.String(length=500), nullable=False),
-        sa.Column("status", document_status, nullable=False, server_default="draft"),
+        sa.Column(
+            "status",
+            sa.Enum("draft", "processing", "accepted", name="documentstatus"),
+            nullable=False,
+            server_default="draft",
+        ),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_documents_user_id", "documents", ["user_id"])
     op.create_index("ix_documents_moysklad_id", "documents", ["moysklad_id"])
-
-    scan_status = sa.Enum("pending", "valid", "invalid", "duplicate", name="scanstatus")
-    scan_status.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
         "scans",
@@ -85,7 +84,12 @@ def upgrade() -> None:
         sa.Column("code", sa.Text(), nullable=False),
         sa.Column("gtin", sa.String(length=14), nullable=True),
         sa.Column("serial", sa.String(length=50), nullable=True),
-        sa.Column("status", scan_status, nullable=False, server_default="pending"),
+        sa.Column(
+            "status",
+            sa.Enum("pending", "valid", "invalid", "duplicate", name="scanstatus"),
+            nullable=False,
+            server_default="pending",
+        ),
         sa.Column("product_name", sa.String(length=500), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
         sa.Column("scanned_at", sa.DateTime(timezone=True), nullable=False),
@@ -117,8 +121,8 @@ def downgrade() -> None:
     op.drop_index("ix_documents_moysklad_id", table_name="documents")
     op.drop_index("ix_documents_user_id", table_name="documents")
     op.drop_table("documents")
-    sa.Enum(name="scanstatus").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="documentstatus").drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name="scanstatus").drop(op.get_bind(), checkfirst=False)
+    sa.Enum(name="documentstatus").drop(op.get_bind(), checkfirst=False)
     op.drop_index("ix_oauth_states_state", table_name="oauth_states")
     op.drop_table("oauth_states")
     op.drop_table("integrations")
