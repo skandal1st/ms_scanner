@@ -1,0 +1,21 @@
+{$DOMAIN} {
+    encode gzip
+
+    @ws path /ws/*
+    handle @ws {
+        reverse_proxy backend:8000
+    }
+
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy backend:8000
+    }
+
+    handle {
+        reverse_proxy frontend:80
+    }
+}
