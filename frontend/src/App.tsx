@@ -3,6 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AcceptancePage } from './pages/Acceptance'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
+import { MsIframePage } from './pages/MsIframe'
+import { LaunchPage } from './pages/Launch'
 import { useScanStore } from './store/scanStore'
 
 const queryClient = new QueryClient({
@@ -63,6 +65,8 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/ms" element={<MsIframePage />} />
+          <Route path="/launch" element={<LaunchPage />} />
           <Route
             path="/"
             element={

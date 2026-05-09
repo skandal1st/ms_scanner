@@ -1,10 +1,13 @@
 import secrets
+import time
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import RedirectResponse
+from jose import jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, EmailStr
+import redis.asyncio as aioredis
 
 from app.db.session import get_db
 from app.db.models import User, Integration, OAuthState
@@ -16,6 +19,9 @@ from app.core.security import (
 from app.core.config import settings
 from app.core.logging import logger
 import httpx
+
+LAUNCH_TOKEN_TTL_SECONDS = 60
+LAUNCH_TOKEN_PREFIX = "ms_launch:"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -167,3 +173,140 @@ def _issue_tokens(user_id: str) -> TokenResponse:
         access_token=create_access_token({"sub": user_id}),
         refresh_token=create_refresh_token({"sub": user_id}),
     )
+
+
+class MsLaunchRequest(BaseModel):
+    contextKey: str
+
+
+class MsLaunchResponse(BaseModel):
+    launch_token: str
+    employee_name: str | None = None
+    account_name: str | None = None
+
+
+class LaunchExchangeRequest(BaseModel):
+    launch_token: str
+
+
+def _build_vendor_jwt() -> str:
+    """JWT Разработчик→МойСклад: sub=appUid + iat + exp + jti, HS256(secretKey)."""
+    now = int(time.time())
+    payload = {
+        "sub": settings.MOYSKLAD_APP_UID,
+        "iat": now,
+        "exp": now + 60,
+        "jti": secrets.token_urlsafe(24),
+    }
+    return jwt.encode(
+        payload, settings.MOYSKLAD_VENDOR_SECRET_KEY, algorithm="HS256"
+    )
+
+
+@router.post("/ms-launch", response_model=MsLaunchResponse)
+async def moysklad_launch(
+    body: MsLaunchRequest, db: AsyncSession = Depends(get_db)
+):
+    """
+    Лаунчер из iframe МойСклада. По contextKey проверяет, что пользователь имеет
+    активированное решение, и выдаёт одноразовый launch_token (TTL 60s в Redis).
+    Сам JWT не возвращаем — фронт-лаунчер откроет новую вкладку, та обменяет
+    launch_token на JWT через /auth/launch. Это нужно, чтобы JWT не светился
+    в URL новой вкладки (история, Referer, логи).
+    """
+    if not settings.MOYSKLAD_APP_UID or not settings.MOYSKLAD_VENDOR_SECRET_KEY:
+        raise HTTPException(503, "Vendor API не настроен на сервере")
+
+    vendor_jwt = _build_vendor_jwt()
+    url = f"{settings.MOYSKLAD_VENDOR_BASE}/context/{body.contextKey}"
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {vendor_jwt}",
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+            },
+        )
+
+    if resp.status_code != 200:
+        logger.warning(
+            "ms_launch.context_failed",
+            status=resp.status_code,
+            body=resp.text[:300],
+        )
+        raise HTTPException(
+            status_code=401, detail="Не удалось получить контекст из МойСклад"
+        )
+
+    ctx = resp.json()
+    account_id = ctx.get("accountId")
+    if not account_id:
+        meta = ctx.get("meta") or {}
+        href = meta.get("href") or ""
+        if "/employee/" in href:
+            account_id = href.rsplit("/employee/", 1)[0].rsplit("/", 1)[-1]
+    if not account_id:
+        logger.warning("ms_launch.no_account_id", ctx_keys=list(ctx.keys()))
+        raise HTTPException(401, "В контексте нет accountId")
+
+    result = await db.execute(
+        select(Integration).where(Integration.moysklad_account_id == account_id)
+    )
+    integration = result.scalar_one_or_none()
+    if integration is None:
+        # Vendor API ещё не активировал решение на этом аккаунте
+        logger.warning("ms_launch.no_integration", account_id=account_id)
+        raise HTTPException(
+            403,
+            "Решение не активировано на вашем аккаунте. "
+            "Установите приложение через каталог решений МойСклад.",
+        )
+
+    employee_name = ctx.get("name") or ctx.get("fullName")
+    launch_token = secrets.token_urlsafe(32)
+
+    redis = aioredis.from_url(settings.REDIS_URL)
+    try:
+        await redis.set(
+            f"{LAUNCH_TOKEN_PREFIX}{launch_token}",
+            str(integration.user_id),
+            ex=LAUNCH_TOKEN_TTL_SECONDS,
+        )
+    finally:
+        await redis.aclose()
+
+    logger.info(
+        "ms_launch.issued",
+        account_id=account_id,
+        user_id=str(integration.user_id),
+        employee=employee_name,
+    )
+    return MsLaunchResponse(
+        launch_token=launch_token,
+        employee_name=employee_name,
+        account_name=integration.moysklad_account_name,
+    )
+
+
+@router.post("/launch", response_model=TokenResponse)
+async def exchange_launch_token(body: LaunchExchangeRequest):
+    """
+    Обмен одноразового launch_token на JWT-пару. Вызывается новой вкладкой
+    после window.open из iframe-лаунчера. Токен удаляется атомарно (GETDEL),
+    повторный обмен невозможен.
+    """
+    redis = aioredis.from_url(settings.REDIS_URL)
+    try:
+        user_id = await redis.getdel(f"{LAUNCH_TOKEN_PREFIX}{body.launch_token}")
+    finally:
+        await redis.aclose()
+
+    if not user_id:
+        raise HTTPException(401, "Ссылка устарела или уже использована")
+
+    if isinstance(user_id, bytes):
+        user_id = user_id.decode()
+
+    logger.info("launch.exchanged", user_id=user_id)
+    return _issue_tokens(user_id)

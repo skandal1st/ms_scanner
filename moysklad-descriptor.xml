@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ServerApplication xmlns="https://apps-api.moysklad.ru/xml/ns/appstore/app/v2"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="https://apps-api.moysklad.ru/xml/ns/appstore/app/v2
+                                       https://apps-api.moysklad.ru/xml/ns/appstore/app/v2/application-v2.xsd">
+    <iframes>
+        <iframe type="main" sourceUrl="https://skandata.ru/ms"/>
+    </iframes>
+    <vendorApi>
+        <endpointBase>https://skandata.ru</endpointBase>
+    </vendorApi>
+    <access>
+        <resource>https://api.moysklad.ru/api/remap/1.2</resource>
+        <scope>custom</scope>
+        <permissions>
+            <supply>
+                <view/>
+                <create/>
+                <update/>
+            </supply>
+            <good>
+                <view/>
+            </good>
+            <employee>
+                <view/>
+            </employee>
+        </permissions>
+    </access>
+</ServerApplication>

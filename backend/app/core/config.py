@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     MOYSKLAD_TOKEN_URL: str = "https://online.moysklad.ru/oauth/token"
     MOYSKLAD_API_BASE: str = "https://api.moysklad.ru/api/remap/1.2"
 
+    # МойСклад Vendor API (входящие callbacks от МойСклада к нам)
+    # Заполняются после создания черновика решения в dev.moysklad.ru
+    MOYSKLAD_APP_UID: str = ""              # алиас_решения.алиас_разработчика
+    MOYSKLAD_VENDOR_SECRET_KEY: str = ""    # для проверки JWT-подписи
+    MOYSKLAD_VENDOR_JWT_MAX_LIFETIME: int = 300  # секунд
+    MOYSKLAD_VENDOR_BASE: str = "https://apps-api.moysklad.ru/api/vendor/1.0"
+
     # Честный Знак
     CZ_MOCK_MODE: bool = True
     CZ_API_BASE_URL: str = "https://markirovka.sandbox.crptech.ru"

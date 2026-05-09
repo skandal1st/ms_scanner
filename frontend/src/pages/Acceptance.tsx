@@ -11,6 +11,7 @@ export function AcceptancePage() {
   const { document, setDocument, stats, scans } = useScanStore()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [closingTab, setClosingTab] = useState(false)
 
   const acceptMutation = useAcceptDocument()
 
@@ -25,6 +26,12 @@ export function AcceptancePage() {
     if (!document) return
     await acceptMutation.mutateAsync(document.id)
     setShowConfirm(false)
+    // Если вкладка открыта из МС-лаунчера, закрываем её — пользователь
+    // возвращается в МойСклад и видит обновлённый документ.
+    if (window.opener && !window.opener.closed) {
+      setClosingTab(true)
+      setTimeout(() => window.close(), 1200)
+    }
   }
 
   const hasErrors = stats.invalid > 0 || stats.duplicate > 0
@@ -83,6 +90,30 @@ export function AcceptancePage() {
           {acceptMutation.isPending ? 'Обрабатывается…' : 'Принять товары'}
         </button>
       </footer>
+
+      {closingTab && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(255,255,255,0.92)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+          }}
+        >
+          <div style={{ textAlign: 'center', color: '#1f2937' }}>
+            <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
+              Принято ✓
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280' }}>
+              Возвращаемся в МойСклад…
+            </div>
+          </div>
+        </div>
+      )}
 
       {showConfirm && (
         <div className="popup">

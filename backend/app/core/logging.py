@@ -13,8 +13,7 @@ def setup_logging() -> None:
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
+            structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.dev.ConsoleRenderer(),

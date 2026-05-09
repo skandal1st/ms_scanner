@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
-from app.api import auth, documents, scans, integrations
+from app.api import auth, documents, scans, integrations, moysklad_vendor
 
 
 class WebSocketManager:
@@ -95,6 +95,7 @@ app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(scans.router)
 app.include_router(integrations.router)
+app.include_router(moysklad_vendor.router)
 
 
 @app.websocket("/ws/{user_id}")
