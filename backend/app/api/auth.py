@@ -181,6 +181,9 @@ class MsLaunchRequest(BaseModel):
 
 class MsLaunchResponse(BaseModel):
     launch_token: str
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
     employee_name: str | None = None
     account_name: str | None = None
 
@@ -265,12 +268,13 @@ async def moysklad_launch(
 
     employee_name = ctx.get("name") or ctx.get("fullName")
     launch_token = secrets.token_urlsafe(32)
+    user_id = str(integration.user_id)
 
     redis = aioredis.from_url(settings.REDIS_URL)
     try:
         await redis.set(
             f"{LAUNCH_TOKEN_PREFIX}{launch_token}",
-            str(integration.user_id),
+            user_id,
             ex=LAUNCH_TOKEN_TTL_SECONDS,
         )
     finally:
@@ -279,11 +283,14 @@ async def moysklad_launch(
     logger.info(
         "ms_launch.issued",
         account_id=account_id,
-        user_id=str(integration.user_id),
+        user_id=user_id,
         employee=employee_name,
     )
+    iframe_tokens = _issue_tokens(user_id)
     return MsLaunchResponse(
         launch_token=launch_token,
+        access_token=iframe_tokens.access_token,
+        refresh_token=iframe_tokens.refresh_token,
         employee_name=employee_name,
         account_name=integration.moysklad_account_name,
     )

@@ -4,7 +4,12 @@ import { integrationsApi, czAuthApi, Integration } from '../api/client'
 import { detectPlugin, signCadesBes, PluginStatus } from '../lib/cprob'
 import { CzCertPicker } from '../components/CzCertPicker'
 
-export function SettingsPage() {
+interface SettingsPageProps {
+  /** В iframe МС ручная привязка токена не нужна — токен уже выдан Vendor API. */
+  embedded?: boolean
+}
+
+export function SettingsPage({ embedded = false }: SettingsPageProps = {}) {
   const [msToken, setMsToken] = useState('')
   const [pluginStatus, setPluginStatus] = useState<PluginStatus | 'checking'>('checking')
   const [certThumb, setCertThumb] = useState<string | null>(null)
@@ -65,28 +70,32 @@ export function SettingsPage() {
           {integration?.moysklad_account_name && (
             <p className="hint">Аккаунт: <b>{integration.moysklad_account_name}</b></p>
           )}
-          <p className="hint">
-            Вставьте API-токен МойСклад (Настройки → Доступ к API).
-            Или используйте <a href="/api/auth/moysklad/login">OAuth авторизацию</a>.
-          </p>
-          <div className="field-row mt-8">
-            <input
-              type="password"
-              value={msToken}
-              onChange={(e) => setMsToken(e.target.value)}
-              placeholder="Bearer токен МойСклад"
-              className="ui-input ui-input--block"
-              style={{ fontFamily: 'monospace' }}
-            />
-            <button
-              type="button"
-              className="button button--success"
-              disabled={!msToken.trim() || updateMutation.isPending}
-              onClick={() => updateMutation.mutate({ moysklad_token: msToken })}
-            >
-              Сохранить
-            </button>
-          </div>
+          {!embedded && (
+            <>
+              <p className="hint">
+                Вставьте API-токен МойСклад (Настройки → Доступ к API).
+                Или используйте <a href="/api/auth/moysklad/login">OAuth авторизацию</a>.
+              </p>
+              <div className="field-row mt-8">
+                <input
+                  type="password"
+                  value={msToken}
+                  onChange={(e) => setMsToken(e.target.value)}
+                  placeholder="Bearer токен МойСклад"
+                  className="ui-input ui-input--block"
+                  style={{ fontFamily: 'monospace' }}
+                />
+                <button
+                  type="button"
+                  className="button button--success"
+                  disabled={!msToken.trim() || updateMutation.isPending}
+                  onClick={() => updateMutation.mutate({ moysklad_token: msToken })}
+                >
+                  Сохранить
+                </button>
+              </div>
+            </>
+          )}
         </section>
 
         <CzSection
