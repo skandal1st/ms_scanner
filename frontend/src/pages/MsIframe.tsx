@@ -52,11 +52,12 @@ export function MsIframePage() {
       })
   }, [])
 
-  const handleStartAcceptance = () => {
+  const openInNewTab = (mode: 'acceptance' | 'shipment') => {
     if (state.kind !== 'ready') return
     // Без noopener, чтобы window.close() сработал из новой вкладки
-    // после «Принять товары». Origin совпадает (skandata.ru).
-    window.open(`/launch?t=${encodeURIComponent(state.payload.launch_token)}`, '_blank')
+    // после подтверждения. Origin совпадает (skandata.ru).
+    const t = encodeURIComponent(state.payload.launch_token)
+    window.open(`/launch?t=${t}&mode=${mode}`, '_blank')
   }
 
   if (state.kind === 'loading') {
@@ -81,7 +82,7 @@ export function MsIframePage() {
     <div style={styles.page}>
       <header style={styles.header}>
         <div>
-          <div style={styles.brand}>МС-Сканер · Приёмка маркировки</div>
+          <div style={styles.brand}>МС-Сканер</div>
           {employee_name && (
             <div style={styles.muted}>
               {employee_name}
@@ -89,9 +90,14 @@ export function MsIframePage() {
             </div>
           )}
         </div>
-        <button type="button" style={styles.cta} onClick={handleStartAcceptance}>
-          📦 Начать приёмку
-        </button>
+        <div style={styles.ctaGroup}>
+          <button type="button" style={styles.cta} onClick={() => openInNewTab('acceptance')}>
+            📥 Начать приёмку
+          </button>
+          <button type="button" style={styles.ctaSecondary} onClick={() => openInNewTab('shipment')}>
+            📤 Начать отгрузку
+          </button>
+        </div>
       </header>
 
       <main style={styles.main}>
@@ -136,8 +142,25 @@ const styles: Record<string, CSSProperties> = {
     color: '#6b7280',
     marginTop: 2,
   },
+  ctaGroup: {
+    display: 'flex',
+    gap: 8,
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+  },
   cta: {
     background: '#16a34a',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 8,
+    padding: '10px 18px',
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  },
+  ctaSecondary: {
+    background: '#2563eb',
     color: '#fff',
     border: 'none',
     borderRadius: 8,

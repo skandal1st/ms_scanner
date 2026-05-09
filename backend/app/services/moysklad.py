@@ -4,6 +4,15 @@ from app.core.config import settings
 from app.core.logging import logger
 
 
+# Для каких МС-документов в позиции нужно записывать коды маркировки
+# (поле trackingCodes). Для приёмки маркировка идёт в ЧЗ (accept_batch),
+# в МС достаточно факта поступления без trackingCodes.
+WRITE_TRACKING_CODES_KINDS = {"demand", "loss", "move", "salesreturn"}
+
+# Все типы МС-документов, поддерживаемые приложением.
+SUPPORTED_KINDS = {"supply", "demand", "loss", "move", "salesreturn"}
+
+
 class MoySkladService:
     def __init__(self, token: str):
         self.token = token
@@ -14,11 +23,19 @@ class MoySkladService:
             "Accept-Encoding": "gzip",
         }
 
-    async def get_supplies(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Список поступлений товаров."""
+    @staticmethod
+    def _validate_kind(kind: str) -> None:
+        if kind not in SUPPORTED_KINDS:
+            raise ValueError(f"Неподдерживаемый тип документа МС: {kind}")
+
+    # --- Универсальные методы по типу документа ---
+
+    async def get_documents(self, kind: str, limit: int = 50) -> List[Dict[str, Any]]:
+        """Список МС-документов выбранного типа."""
+        self._validate_kind(kind)
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
-                f"{self.base_url}/entity/supply",
+                f"{self.base_url}/entity/{kind}",
                 headers=self.headers,
                 params={"limit": limit, "order": "moment,desc"},
             )
@@ -35,49 +52,64 @@ class MoySkladService:
             for r in rows
         ]
 
-    async def get_supply(self, supply_id: str) -> Dict[str, Any]:
-        """Детали поступления."""
+    async def get_document(self, kind: str, doc_id: str) -> Dict[str, Any]:
+        """Детали МС-документа выбранного типа."""
+        self._validate_kind(kind)
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
-                f"{self.base_url}/entity/supply/{supply_id}",
+                f"{self.base_url}/entity/{kind}/{doc_id}",
                 headers=self.headers,
             )
             resp.raise_for_status()
             return resp.json()
 
-    async def create_supply(self, name: str, positions: List[Dict]) -> Dict[str, Any]:
-        """Создать поступление."""
-        body = {
-            "name": name,
-            "positions": positions,
-        }
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{self.base_url}/entity/supply",
-                headers=self.headers,
-                json=body,
+    async def update_document(
+        self, kind: str, doc_id: str, scans: List[Dict]
+    ) -> Dict[str, Any]:
+        """
+        Обновить позиции МС-документа на основе сканов.
+        Сканы группируются по product_id: один товар = одна позиция с quantity
+        и (для отгрузочных типов) trackingCodes — список CIS маркировки.
+        """
+        self._validate_kind(kind)
+        write_codes = kind in WRITE_TRACKING_CODES_KINDS
+
+        # Группировка по product_id
+        groups: Dict[str, List[Dict]] = {}
+        for s in scans:
+            product_id = s.get("product_id")
+            if not product_id:
+                continue
+            groups.setdefault(product_id, []).append(s)
+
+        if not groups:
+            logger.warning(
+                "moysklad.update_document.no_positions",
+                kind=kind,
+                doc_id=doc_id,
             )
-            resp.raise_for_status()
-            return resp.json()
-
-    async def update_supply(self, supply_id: str, scans: List[Dict]) -> Dict[str, Any]:
-        """Обновить поступление — добавить отсканированные позиции."""
-        positions = [
-            {
-                "assortment": {"meta": {"href": f"{self.base_url}/entity/product/{s.get('product_id')}", "type": "product"}},
-                "quantity": 1,
-            }
-            for s in scans
-            if s.get("product_id")
-        ]
-
-        if not positions:
-            logger.warning("moysklad.update_supply.no_positions", supply_id=supply_id)
             return {}
+
+        positions: List[Dict[str, Any]] = []
+        for product_id, group in groups.items():
+            position: Dict[str, Any] = {
+                "assortment": {
+                    "meta": {
+                        "href": f"{self.base_url}/entity/product/{product_id}",
+                        "type": "product",
+                    }
+                },
+                "quantity": len(group),
+            }
+            if write_codes:
+                position["trackingCodes"] = [
+                    {"cis": s["code"]} for s in group if s.get("code")
+                ]
+            positions.append(position)
 
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.put(
-                f"{self.base_url}/entity/supply/{supply_id}",
+                f"{self.base_url}/entity/{kind}/{doc_id}",
                 headers=self.headers,
                 json={"positions": positions},
             )
@@ -96,3 +128,14 @@ class MoySkladService:
                 return None
             rows = resp.json().get("rows", [])
             return rows[0] if rows else None
+
+    # --- Алиасы для backward-совместимости старого приёмочного кода ---
+
+    async def get_supplies(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return await self.get_documents("supply", limit=limit)
+
+    async def get_supply(self, supply_id: str) -> Dict[str, Any]:
+        return await self.get_document("supply", supply_id)
+
+    async def update_supply(self, supply_id: str, scans: List[Dict]) -> Dict[str, Any]:
+        return await self.update_document("supply", supply_id, scans)

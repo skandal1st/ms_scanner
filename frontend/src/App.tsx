@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Link } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AcceptancePage } from './pages/Acceptance'
+import { ShipmentPage } from './pages/Shipment'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
 import { MsIframePage } from './pages/MsIframe'
@@ -49,6 +50,9 @@ function Layout({ children }: { children: React.ReactNode }) {
         <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
           Приёмка
         </NavLink>
+        <NavLink to="/shipment" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Отгрузка
+        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
           Настройки
         </NavLink>
@@ -73,6 +77,16 @@ export default function App() {
               <RequireAuth>
                 <Layout>
                   <AcceptancePage />
+                </Layout>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/shipment"
+            element={
+              <RequireAuth>
+                <Layout>
+                  <ShipmentPage />
                 </Layout>
               </RequireAuth>
             }

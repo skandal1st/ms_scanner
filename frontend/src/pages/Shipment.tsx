@@ -5,15 +5,25 @@ import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
-import type { Document } from '../api/client'
+import type { Document, DocumentKind } from '../api/client'
 
-export function AcceptancePage() {
+type ShipmentKind = Exclude<DocumentKind, 'supply'>
+
+const KIND_OPTIONS: { kind: ShipmentKind; label: string }[] = [
+  { kind: 'demand', label: 'Отгрузка' },
+  { kind: 'loss', label: 'Списание' },
+  { kind: 'move', label: 'Перемещение' },
+  { kind: 'salesreturn', label: 'Возврат покупателя' },
+]
+
+export function ShipmentPage() {
   const { document, setDocument, stats, scans } = useScanStore()
+  const [kind, setKind] = useState<ShipmentKind>('demand')
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
 
-  const acceptMutation = useProcessDocument()
+  const processMutation = useProcessDocument()
 
   useLoadDocument(pendingDoc?.id ?? null)
 
@@ -22,12 +32,18 @@ export function AcceptancePage() {
     setDocument(doc)
   }
 
-  const handleAccept = async () => {
+  const handleKindChange = (next: ShipmentKind) => {
+    if (next === kind) return
+    setKind(next)
+    // При смене подтипа сбрасываем выбранный документ — он принадлежит другому типу
+    setPendingDoc(null)
+    setDocument(null)
+  }
+
+  const handleProcess = async () => {
     if (!document) return
-    await acceptMutation.mutateAsync(document.id)
+    await processMutation.mutateAsync(document.id)
     setShowConfirm(false)
-    // Если вкладка открыта из МС-лаунчера, закрываем её — пользователь
-    // возвращается в МойСклад и видит обновлённый документ.
     if (window.opener && !window.opener.closed) {
       setClosingTab(true)
       setTimeout(() => window.close(), 1200)
@@ -39,14 +55,14 @@ export function AcceptancePage() {
     document?.status === 'accepted' ? 'badge badge--ok' :
     document?.status === 'processing' ? 'badge badge--info' : 'badge badge--warn'
   const docStatusText =
-    document?.status === 'accepted' ? 'Принято' :
+    document?.status === 'accepted' ? 'Завершено' :
     document?.status === 'processing' ? 'Обрабатывается' : 'В процессе'
 
   return (
     <div className="acc-page">
       <header className="acc-header">
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
-          <h1 className="acc-header__title">Приёмка маркировки</h1>
+          <h1 className="acc-header__title">Отгрузка маркировки</h1>
           {document && <span className={docStatusCls}>{docStatusText}</span>}
         </div>
         <span className="acc-header__doc">
@@ -56,7 +72,18 @@ export function AcceptancePage() {
 
       <div className="acc-body">
         <div className="acc-left">
-          <DocumentSelector kind="supply" onSelect={handleSelectDoc} selected={document} />
+          <ul className="tabs__buttons" style={{ margin: '0 0 12px 0', flexWrap: 'wrap' }}>
+            {KIND_OPTIONS.map((opt) => (
+              <li
+                key={opt.kind}
+                className={`tabs__button ${kind === opt.kind ? 'b-active' : ''}`}
+                onClick={() => handleKindChange(opt.kind)}
+              >
+                {opt.label}
+              </li>
+            ))}
+          </ul>
+          <DocumentSelector kind={kind} onSelect={handleSelectDoc} selected={document} />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
         </div>
@@ -84,10 +111,10 @@ export function AcceptancePage() {
         <button
           type="button"
           className="button button--success"
-          disabled={!document || scans.length === 0 || acceptMutation.isPending}
+          disabled={!document || scans.length === 0 || processMutation.isPending}
           onClick={() => setShowConfirm(true)}
         >
-          {acceptMutation.isPending ? 'Обрабатывается…' : 'Принять товары'}
+          {processMutation.isPending ? 'Обрабатывается…' : 'Отгрузить товары'}
         </button>
       </footer>
 
@@ -106,7 +133,7 @@ export function AcceptancePage() {
         >
           <div style={{ textAlign: 'center', color: '#1f2937' }}>
             <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
-              Принято ✓
+              Готово ✓
             </div>
             <div style={{ fontSize: 13, color: '#6b7280' }}>
               Возвращаемся в МойСклад…
@@ -125,7 +152,7 @@ export function AcceptancePage() {
               onClick={() => setShowConfirm(false)}
               aria-label="Закрыть"
             />
-            <div className="popup__title">Подтверждение приёмки</div>
+            <div className="popup__title">Подтверждение отгрузки</div>
             <div className="popup__content">
               <div className="settings-status">
                 <div className="settings-status__row">
@@ -145,7 +172,7 @@ export function AcceptancePage() {
               </div>
               {hasErrors && (
                 <p className="hint">
-                  Будут приняты только валидные коды ({stats.valid} шт.)
+                  Будут отгружены только валидные коды ({stats.valid} шт.)
                 </p>
               )}
             </div>
@@ -156,10 +183,10 @@ export function AcceptancePage() {
               <button
                 type="button"
                 className="button button--success"
-                onClick={handleAccept}
+                onClick={handleProcess}
                 disabled={stats.valid === 0}
               >
-                Принять {stats.valid} валидных
+                Отгрузить {stats.valid} валидных
               </button>
             </div>
           </dialog>

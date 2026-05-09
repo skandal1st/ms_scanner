@@ -6,6 +6,12 @@ from app.worker.celery_app import celery_app
 from app.core.logging import logger
 
 
+# Типы документов, которые требуют ввода в оборот в ЧЗ при подтверждении.
+# Для всех остальных (demand/loss/move/salesreturn) ЧЗ-API не вызывается —
+# только обновление МС-документа с записью кодов в positions[].trackingCodes.
+CZ_INTRODUCE_KINDS = {"supply"}
+
+
 def _run(coro):
     """Запустить корутину из синхронного Celery воркера."""
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -129,17 +135,28 @@ async def _push_cz_token_expired(user_id: str):
         await r.aclose()
 
 
-@celery_app.task(name="accept_document")
-def accept_document_task(document_id: str, user_id: str):
-    """Подтверждение приёмки: отправить в ЧЗ + обновить МойСклад."""
+@celery_app.task(name="process_document")
+def process_document_task(document_id: str, user_id: str):
+    """
+    Завершить документ. Поведение зависит от document.kind:
+    - supply: ввод в оборот в ЧЗ + обновление МС.
+    - demand/loss/move/salesreturn: только обновление МС с trackingCodes
+      (поиск product_id по GTIN на лету).
+    """
     try:
-        _run(_accept_document_async(document_id, user_id))
+        _run(_process_document_async(document_id, user_id))
     except Exception as exc:
-        logger.error("accept_document.error", document_id=document_id, error=str(exc))
+        logger.error("process_document.error", document_id=document_id, error=str(exc))
         raise
 
 
-async def _accept_document_async(document_id: str, user_id: str):
+# Backward-совместимый алиас для старого имени задачи.
+@celery_app.task(name="accept_document")
+def accept_document_task(document_id: str, user_id: str):
+    process_document_task(document_id, user_id)
+
+
+async def _process_document_async(document_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus, Scan, ScanStatus, Integration
     from app.services.chestnyznak import ChestnyZnakService
@@ -148,7 +165,16 @@ async def _accept_document_async(document_id: str, user_id: str):
     from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
-        # Получаем валидные сканы документа
+        # Получаем сам документ — нужен kind для разветвления
+        doc_result = await db.execute(select(Document).where(Document.id == document_id))
+        doc = doc_result.scalar_one_or_none()
+        if not doc:
+            logger.error("process_document.not_found", document_id=document_id)
+            return
+
+        kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
+
+        # Валидные сканы документа
         result = await db.execute(
             select(Scan).where(
                 Scan.document_id == document_id,
@@ -158,7 +184,11 @@ async def _accept_document_async(document_id: str, user_id: str):
         valid_scans = result.scalars().all()
 
         if not valid_scans:
-            logger.warning("accept_document.no_valid_scans", document_id=document_id)
+            logger.warning(
+                "process_document.no_valid_scans",
+                document_id=document_id,
+                kind=kind,
+            )
 
         # Интеграции
         int_result = await db.execute(
@@ -166,30 +196,49 @@ async def _accept_document_async(document_id: str, user_id: str):
         )
         integration = int_result.scalar_one_or_none()
 
-        # ЧЗ — подтверждаем приёмку
-        cz_token = decrypt_token(integration.cz_token) if integration and integration.cz_token else None
-        cz = ChestnyZnakService(token=cz_token)
-        codes = [s.code for s in valid_scans]
-        await cz.accept_batch(codes, document_id)
+        # Шаг 1 — ЧЗ ввод в оборот (только для приёмки)
+        if kind in CZ_INTRODUCE_KINDS and valid_scans:
+            cz_token = decrypt_token(integration.cz_token) if integration and integration.cz_token else None
+            cz = ChestnyZnakService(token=cz_token)
+            codes = [s.code for s in valid_scans]
+            await cz.accept_batch(codes, document_id)
 
-        # МойСклад — обновляем документ
-        doc_result = await db.execute(select(Document).where(Document.id == document_id))
-        doc = doc_result.scalar_one_or_none()
-
-        if doc and doc.moysklad_id and integration and integration.moysklad_token:
+        # Шаг 2 — обновление МС-документа
+        if doc.moysklad_id and integration and integration.moysklad_token and valid_scans:
             ms_token = decrypt_token(integration.moysklad_token)
             ms = MoySkladService(ms_token)
-            scans_data = [{"code": s.code, "gtin": s.gtin, "product_name": s.product_name}
-                          for s in valid_scans]
-            await ms.update_supply(doc.moysklad_id, scans_data)
 
-        # Обновляем статус документа
-        if doc:
-            doc.status = DocumentStatus.accepted
-            await db.commit()
+            # product_id ищем на лету по уникальным GTIN'ам — в Scan он не хранится
+            unique_gtins = {s.gtin for s in valid_scans if s.gtin}
+            gtin_to_product_id: dict[str, str] = {}
+            for gtin in unique_gtins:
+                product = await ms.find_product_by_gtin(gtin)
+                if product:
+                    gtin_to_product_id[gtin] = product["id"]
+                else:
+                    logger.warning(
+                        "process_document.product_not_found",
+                        gtin=gtin,
+                        document_id=document_id,
+                    )
+
+            scans_data = [
+                {
+                    "code": s.code,
+                    "gtin": s.gtin,
+                    "product_id": gtin_to_product_id.get(s.gtin) if s.gtin else None,
+                }
+                for s in valid_scans
+            ]
+            await ms.update_document(kind, doc.moysklad_id, scans_data)
+
+        # Шаг 3 — финальный статус документа
+        doc.status = DocumentStatus.accepted
+        await db.commit()
 
         logger.info(
-            "accept_document.done",
+            "process_document.done",
             document_id=document_id,
+            kind=kind,
             valid_count=len(valid_scans),
         )

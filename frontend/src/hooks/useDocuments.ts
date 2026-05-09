@@ -1,27 +1,34 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { documentsApi, scansApi } from '../api/client'
+import { documentsApi, scansApi, type DocumentKind } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 
-export function useMsSupplies() {
+export function useMsDocuments(kind: DocumentKind) {
   return useQuery({
-    queryKey: ['ms-supplies'],
-    queryFn: () => documentsApi.listMsSupplies().then((r) => r.data),
+    queryKey: ['ms-docs', kind],
+    queryFn: () => documentsApi.listMs(kind).then((r) => r.data),
     staleTime: 60_000,
   })
 }
 
-export function useDocuments() {
+export function useDocuments(kind?: DocumentKind) {
   return useQuery({
-    queryKey: ['documents'],
-    queryFn: () => documentsApi.list().then((r) => r.data),
+    queryKey: ['documents', kind ?? 'all'],
+    queryFn: () => documentsApi.list(kind).then((r) => r.data),
   })
 }
 
 export function useCreateDocument() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ name, moysklad_id }: { name: string; moysklad_id?: string }) =>
-      documentsApi.create(name, moysklad_id).then((r) => r.data),
+    mutationFn: ({
+      name,
+      kind,
+      moysklad_id,
+    }: {
+      name: string
+      kind: DocumentKind
+      moysklad_id?: string
+    }) => documentsApi.create(name, kind, moysklad_id).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   })
 }
@@ -45,10 +52,10 @@ export function useLoadDocument(documentId: string | null) {
   })
 }
 
-export function useAcceptDocument() {
+export function useProcessDocument() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => documentsApi.accept(id).then((r) => r.data),
+    mutationFn: (id: string) => documentsApi.process(id).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   })
 }

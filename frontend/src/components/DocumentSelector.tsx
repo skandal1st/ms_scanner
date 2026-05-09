@@ -1,25 +1,35 @@
 import { useState } from 'react'
-import { useMsSupplies, useDocuments, useCreateDocument } from '../hooks/useDocuments'
-import type { Document } from '../api/client'
+import { useMsDocuments, useDocuments, useCreateDocument } from '../hooks/useDocuments'
+import type { Document, DocumentKind } from '../api/client'
 
 interface Props {
+  kind: DocumentKind
   onSelect: (doc: Document) => void
   selected: Document | null
 }
 
-export function DocumentSelector({ onSelect, selected }: Props) {
+const KIND_LABEL: Record<DocumentKind, string> = {
+  supply: 'поступление',
+  demand: 'отгрузку',
+  loss: 'списание',
+  move: 'перемещение',
+  salesreturn: 'возврат покупателя',
+}
+
+export function DocumentSelector({ kind, onSelect, selected }: Props) {
   const [mode, setMode] = useState<'select' | 'create'>('select')
   const [newName, setNewName] = useState('')
   const [selectedMsId, setSelectedMsId] = useState('')
 
-  const { data: supplies, isLoading: suppliesLoading } = useMsSupplies()
-  const { data: documents } = useDocuments()
+  const { data: msDocs, isLoading: msLoading } = useMsDocuments(kind)
+  const { data: documents } = useDocuments(kind)
   const createMutation = useCreateDocument()
 
   const handleCreate = async () => {
     if (!newName.trim()) return
     const doc = await createMutation.mutateAsync({
       name: newName.trim(),
+      kind,
       moysklad_id: selectedMsId || undefined,
     })
     setNewName('')
@@ -78,19 +88,19 @@ export function DocumentSelector({ onSelect, selected }: Props) {
 
       {mode === 'create' && (
         <div className="login-form">
-          {!suppliesLoading && supplies && supplies.length > 0 && (
+          {!msLoading && msDocs && msDocs.length > 0 && (
             <select
               className="ui-select"
               style={{ minWidth: 0, width: '100%' }}
               value={selectedMsId}
               onChange={(e) => {
                 setSelectedMsId(e.target.value)
-                const s = supplies.find((x) => x.id === e.target.value)
+                const s = msDocs.find((x) => x.id === e.target.value)
                 if (s) setNewName(s.name)
               }}
             >
-              <option value="">Привязать поступление из МойСклад…</option>
-              {supplies.map((s) => (
+              <option value="">Привязать {KIND_LABEL[kind]} из МойСклад…</option>
+              {msDocs.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>

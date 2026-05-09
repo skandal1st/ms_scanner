@@ -18,6 +18,22 @@
                 <create/>
                 <update/>
             </supply>
+            <demand>
+                <view/>
+                <update/>
+            </demand>
+            <loss>
+                <view/>
+                <update/>
+            </loss>
+            <move>
+                <view/>
+                <update/>
+            </move>
+            <salesreturn>
+                <view/>
+                <update/>
+            </salesreturn>
             <good>
                 <view/>
             </good>

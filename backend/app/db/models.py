@@ -22,6 +22,24 @@ class DocumentStatus(str, PyEnum):
     accepted = "accepted"
 
 
+class DocumentKind(str, PyEnum):
+    """
+    Тип МС-документа, к которому привязан наш Document.
+    supply        — Поступление (приёмка от поставщика, ввод в оборот в ЧЗ).
+    demand        — Отгрузка покупателю.
+    loss          — Списание.
+    move          — Перемещение.
+    salesreturn   — Возврат покупателя.
+    Для всех отгрузочных типов вывод из оборота в ЧЗ не делается —
+    только сохранение кодов в positions[].things в МС.
+    """
+    supply = "supply"
+    demand = "demand"
+    loss = "loss"
+    move = "move"
+    salesreturn = "salesreturn"
+
+
 class ScanStatus(str, PyEnum):
     pending = "pending"
     valid = "valid"
@@ -79,6 +97,12 @@ class Document(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     moysklad_id = Column(String(255), nullable=True, index=True)
     name = Column(String(500), nullable=False)
+    kind = Column(
+        Enum(DocumentKind),
+        default=DocumentKind.supply,
+        server_default=DocumentKind.supply.value,
+        nullable=False,
+    )
     status = Column(Enum(DocumentStatus), default=DocumentStatus.draft, nullable=False)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

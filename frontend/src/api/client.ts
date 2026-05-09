@@ -33,7 +33,9 @@ export const authApi = {
 }
 
 // --- Documents ---
-export interface MsSupply {
+export type DocumentKind = 'supply' | 'demand' | 'loss' | 'move' | 'salesreturn'
+
+export interface MsDocument {
   id: string
   name: string
   moment: string | null
@@ -43,18 +45,21 @@ export interface Document {
   id: string
   moysklad_id: string | null
   name: string
+  kind: DocumentKind
   status: 'draft' | 'processing' | 'accepted'
   scan_count: number
   created_at: string
 }
 
 export const documentsApi = {
-  listMsSupplies: () => api.get<MsSupply[]>('/documents/moysklad-supplies'),
-  list: () => api.get<Document[]>('/documents/'),
-  create: (name: string, moysklad_id?: string) =>
-    api.post<Document>('/documents/', { name, moysklad_id }),
+  listMs: (kind: DocumentKind) =>
+    api.get<MsDocument[]>(`/documents/moysklad/${kind}`),
+  list: (kind?: DocumentKind) =>
+    api.get<Document[]>('/documents/', { params: kind ? { kind } : {} }),
+  create: (name: string, kind: DocumentKind, moysklad_id?: string) =>
+    api.post<Document>('/documents/', { name, kind, moysklad_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
-  accept: (id: string) => api.post(`/documents/${id}/accept`),
+  process: (id: string) => api.post(`/documents/${id}/process`),
 }
 
 // --- Scans ---

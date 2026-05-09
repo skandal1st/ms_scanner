@@ -8,10 +8,13 @@ export function LaunchPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
+    const mode = params.get('mode')
     if (!launchToken) {
       setError('Ссылка повреждена: нет токена.')
       return
     }
+
+    const target = mode === 'shipment' ? '/shipment' : '/'
 
     fetch('/api/auth/launch', {
       method: 'POST',
@@ -25,7 +28,7 @@ export function LaunchPage() {
         }
         localStorage.setItem('access_token', data.access_token)
         localStorage.setItem('refresh_token', data.refresh_token)
-        navigate('/', { replace: true })
+        navigate(target, { replace: true })
       })
       .catch((err) => {
         const message = typeof err?.message === 'string' ? err.message : 'Не удалось войти'
