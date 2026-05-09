@@ -4,9 +4,9 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Column, String, DateTime, Boolean, Integer, Text, Enum,
-    ForeignKey, JSON, func,
+    ForeignKey, JSON, UniqueConstraint, func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from app.db.base import Base
@@ -45,6 +45,7 @@ class ScanStatus(str, PyEnum):
     valid = "valid"
     invalid = "invalid"
     duplicate = "duplicate"
+    overflow = "overflow"  # сверх плана: визуально красный, но идёт в отгрузку
 
 
 class User(Base):
@@ -104,6 +105,9 @@ class Document(Base):
         nullable=False,
     )
     status = Column(Enum(DocumentStatus), default=DocumentStatus.draft, nullable=False)
+    # План сборки: массив объектов {gtin, product_id, product_name, expected_qty}.
+    # Пустой массив = режим без плана (произвольная сборка).
+    plan = Column(JSONB, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -113,6 +117,9 @@ class Document(Base):
 
 class Scan(Base):
     __tablename__ = "scans"
+    __table_args__ = (
+        UniqueConstraint("document_id", "code", name="ix_scans_document_code_unique"),
+    )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)

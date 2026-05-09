@@ -7,6 +7,7 @@ const STATUS_CONFIG = {
   valid:     { label: 'Валиден',     cls: 'badge--ok' },
   invalid:   { label: 'Ошибка',      cls: 'badge--error' },
   duplicate: { label: 'Дубль',       cls: 'badge--warn' },
+  overflow:  { label: 'Сверх плана', cls: 'badge--error' },
 } as const
 
 export function CodesTable() {

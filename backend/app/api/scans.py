@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import UUID
@@ -9,6 +10,11 @@ from datetime import datetime
 from app.db.session import get_db
 from app.db.models import User, Scan, Document, ScanStatus
 from app.api.deps import get_current_user
+from app.services.chestnyznak import (
+    ChestnyZnakService,
+    is_sscc,
+    extract_gtin,
+)
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -31,53 +37,116 @@ class CreateScanRequest(BaseModel):
     code: str
 
 
+class CreateBoxRequest(BaseModel):
+    document_id: UUID
+    sscc: str
+
+
+async def _ensure_document_owner(
+    document_id: UUID, current_user: User, db: AsyncSession
+) -> Document:
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+async def _create_scan_record(
+    db: AsyncSession, document_id: UUID, code: str, current_user_id: UUID
+) -> tuple[Scan, bool]:
+    """
+    Создаёт скан или возвращает существующий со статусом duplicate.
+    Возвращает (scan, is_duplicate).
+    """
+    gtin = extract_gtin(code)
+    scan = Scan(
+        document_id=document_id,
+        code=code,
+        gtin=gtin,
+        status=ScanStatus.pending,
+    )
+    db.add(scan)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Дубль по unique (document_id, code) — берём существующий, помечаем duplicate.
+        await db.rollback()
+        existing_q = await db.execute(
+            select(Scan).where(
+                Scan.document_id == document_id,
+                Scan.code == code,
+            )
+        )
+        existing = existing_q.scalar_one()
+        existing.status = ScanStatus.duplicate
+        existing.error_message = "Дубль: код уже сканировался в этом документе"
+        await db.commit()
+        await db.refresh(existing)
+        return existing, True
+
+    await db.refresh(scan)
+
+    # Очередь Celery для проверки в ЧЗ
+    from app.worker.tasks import verify_code_task
+    verify_code_task.delay(str(scan.id), code, str(current_user_id))
+    return scan, False
+
+
 @router.post("/", response_model=ScanResponse, status_code=201)
 async def create_scan(
     body: CreateScanRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    # Проверяем что документ принадлежит пользователю
-    doc_result = await db.execute(
-        select(Document).where(
-            Document.id == body.document_id,
-            Document.user_id == current_user.id,
+    """Создать скан кода маркировки (KM, не SSCC). Для коробов — POST /scans/box."""
+    await _ensure_document_owner(body.document_id, current_user, db)
+    if is_sscc(body.code):
+        raise HTTPException(
+            400,
+            "Это код короба (SSCC). Используйте /scans/box.",
         )
-    )
-    if not doc_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    # Проверяем дубликат в рамках документа
-    dup_result = await db.execute(
-        select(Scan).where(
-            Scan.document_id == body.document_id,
-            Scan.code == body.code,
-        )
-    )
-    if dup_result.scalar_one_or_none():
-        # Возвращаем существующий скан со статусом duplicate
-        existing = dup_result.scalar_one()
-        existing.status = ScanStatus.duplicate
-        await db.commit()
-        await db.refresh(existing)
-        return ScanResponse.model_validate(existing)
-
-    gtin = _extract_gtin(body.code)
-    scan = Scan(
-        document_id=body.document_id,
-        code=body.code,
-        gtin=gtin,
-        status=ScanStatus.pending,
-    )
-    db.add(scan)
-    await db.commit()
-    await db.refresh(scan)
-
-    # Ставим в очередь Celery для проверки
-    from app.worker.tasks import verify_code_task
-    verify_code_task.delay(str(scan.id), body.code, str(current_user.id))
-
+    scan, _ = await _create_scan_record(db, body.document_id, body.code, current_user.id)
     return ScanResponse.model_validate(scan)
+
+
+@router.post("/box", response_model=List[ScanResponse], status_code=201)
+async def create_box_scans(
+    body: CreateBoxRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Принять SSCC-код короба: распаковать через ЧЗ на индивидуальные KM и
+    создать по скану на каждый. Возвращает массив созданных сканов
+    (включая дубли — они со статусом duplicate).
+    """
+    doc = await _ensure_document_owner(body.document_id, current_user, db)
+    if not is_sscc(body.sscc):
+        raise HTTPException(400, "Это не SSCC-код короба")
+
+    plan_gtins = [
+        item.get("gtin")
+        for item in (doc.plan or [])
+        if isinstance(item, dict) and item.get("gtin")
+    ]
+
+    cz = ChestnyZnakService(token=None)  # mock не требует токена
+    member_codes = await cz.unpack_box(body.sscc, plan_gtins)
+
+    scans: List[Scan] = []
+    for code in member_codes:
+        scan, _ = await _create_scan_record(
+            db, body.document_id, code, current_user.id
+        )
+        scans.append(scan)
+
+    return [ScanResponse.model_validate(s) for s in scans]
 
 
 @router.get("/{document_id}", response_model=List[ScanResponse])
@@ -86,15 +155,7 @@ async def list_scans(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    doc_result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.user_id == current_user.id,
-        )
-    )
-    if not doc_result.scalar_one_or_none():
-        raise HTTPException(status_code=404, detail="Document not found")
-
+    await _ensure_document_owner(document_id, current_user, db)
     result = await db.execute(
         select(Scan)
         .where(Scan.document_id == document_id)
@@ -122,12 +183,3 @@ async def delete_scan(
         raise HTTPException(status_code=404, detail="Scan not found")
     await db.delete(scan)
     await db.commit()
-
-
-def _extract_gtin(code: str) -> Optional[str]:
-    """Извлекает GTIN из DataMatrix кода маркировки.
-    Формат: 01{gtin14}{serial_prefix}{serial}
-    """
-    if code.startswith("01") and len(code) >= 16:
-        return code[2:16]
-    return None

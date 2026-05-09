@@ -63,6 +63,56 @@ class MoySkladService:
             resp.raise_for_status()
             return resp.json()
 
+    async def build_plan(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
+        """
+        Построить план сборки из позиций МС-документа.
+        Возвращает [{gtin, product_id, product_name, expected_qty}].
+        Использует expand=positions.assortment чтобы получить товары вместе
+        с позициями — избегаем N+1 запросов.
+        """
+        self._validate_kind(kind)
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/{kind}/{doc_id}/positions",
+                headers=self.headers,
+                params={"expand": "assortment", "limit": 1000},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        plan: List[Dict[str, Any]] = []
+        for pos in data.get("rows", []):
+            asrt = pos.get("assortment") or {}
+            product_id = asrt.get("id")
+            if not product_id:
+                # пропускаем услуги/неопределённые позиции
+                continue
+            product_name = asrt.get("name") or ""
+            barcodes = asrt.get("barcodes") or []
+            # Ищем GTIN среди штрихкодов товара (поле gtin или ean13).
+            gtin = None
+            for bc in barcodes:
+                if isinstance(bc, dict):
+                    gtin = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
+                    if gtin:
+                        break
+            qty = pos.get("quantity") or 0
+            try:
+                expected_qty = int(qty)
+            except (TypeError, ValueError):
+                expected_qty = 0
+            if expected_qty <= 0:
+                continue
+            plan.append(
+                {
+                    "gtin": gtin,
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "expected_qty": expected_qty,
+                }
+            )
+        return plan
+
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict]
     ) -> Dict[str, Any]:

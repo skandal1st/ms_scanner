@@ -111,6 +111,40 @@ class ChestnyZnakService:
         except httpx.HTTPStatusError as e:
             raise CZApiError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
 
+    async def unpack_box(
+        self, sscc: str, plan_gtins: Optional[list[str]] = None
+    ) -> list[str]:
+        """
+        Раскрыть SSCC-короб на индивидуальные коды маркировки (KM).
+        В mock режиме генерирует 3-5 фейковых KM на основе GTIN из плана документа,
+        чтобы коды попали в ожидаемые позиции. Если plan_gtins пустой —
+        используется случайный 14-значный GTIN.
+        Реальный режим должен звать ЧЗ /api/v3/facade/aggregation или подобный
+        — пока NotImplemented.
+        """
+        if self.mock:
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+            count = random.randint(3, 5)
+            codes: list[str] = []
+            pool = list(plan_gtins or [])
+            for i in range(count):
+                if pool:
+                    gtin = pool[i % len(pool)]
+                else:
+                    gtin = "".join(str(random.randint(0, 9)) for _ in range(14))
+                serial = "".join(
+                    random.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(13)
+                )
+                # GS1 DataMatrix: 01<gtin14>21<serial>
+                codes.append(f"01{gtin}21{serial}")
+            logger.info(
+                "cz.unpack_box.mock", sscc=sscc, count=count, plan_gtins=len(pool)
+            )
+            return codes
+        raise NotImplementedError(
+            "Реальное раскрытие коробов в ЧЗ ещё не реализовано"
+        )
+
     async def accept_batch(self, codes: list[str], document_id: str) -> bool:
         """Подтвердить приёмку партии кодов."""
         if self.mock:
@@ -195,10 +229,20 @@ class CZApiError(Exception):
     pass
 
 
-def _extract_gtin(code: str) -> Optional[str]:
-    if code.startswith("01") and len(code) >= 16:
+def extract_gtin(code: str) -> Optional[str]:
+    """GS1 DataMatrix: AI 01 + 14 цифр GTIN."""
+    if code.startswith("01") and len(code) >= 16 and code[2:16].isdigit():
         return code[2:16]
     return None
+
+
+def is_sscc(code: str) -> bool:
+    """SSCC-короб — AI 00 + 18 цифр (всего 20 знаков, цифры)."""
+    return code.startswith("00") and len(code) == 20 and code.isdigit()
+
+
+# Алиас для существующих внутренних использований
+_extract_gtin = extract_gtin
 
 
 def _extract_serial(code: str) -> Optional[str]:

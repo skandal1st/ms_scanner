@@ -29,11 +29,11 @@ def verify_code_task(self, scan_id: str, code: str, user_id: str):
 
 async def _verify_code_async(scan_id: str, code: str, user_id: str):
     from app.db.session import AsyncSessionLocal
-    from app.db.models import Scan, ScanStatus, Integration
+    from app.db.models import Scan, ScanStatus, Document, Integration
     from app.services.chestnyznak import ChestnyZnakService
     from app.core.security import decrypt_token
     from app.core.config import settings
-    from sqlalchemy import select
+    from sqlalchemy import select, func
 
     async with AsyncSessionLocal() as db:
         # Получаем токен ЧЗ пользователя
@@ -89,6 +89,42 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
         scan.serial = verify_result.serial
         scan.product_name = verify_result.product_name
         scan.verified_at = datetime.now(timezone.utc)
+
+        # Проверка плана: если документ имеет план и для GTIN скана уже
+        # отсканировано >= expected_qty валидных — текущий скан переводим
+        # в invalid с пометкой «Превышен план». Кладовщик слышит ошибку
+        # и видит причину, а склад не уезжает с лишним.
+        if scan.status == ScanStatus.valid and scan.gtin:
+            doc_q = await db.execute(
+                select(Document).where(Document.id == scan.document_id)
+            )
+            doc = doc_q.scalar_one_or_none()
+            plan_items = (doc.plan or []) if doc else []
+            expected = next(
+                (
+                    int(p.get("expected_qty") or 0)
+                    for p in plan_items
+                    if isinstance(p, dict) and p.get("gtin") == scan.gtin
+                ),
+                None,
+            )
+            if expected is not None and expected > 0:
+                count_q = await db.execute(
+                    select(func.count(Scan.id)).where(
+                        Scan.document_id == scan.document_id,
+                        Scan.gtin == scan.gtin,
+                        Scan.status == ScanStatus.valid,
+                        Scan.id != scan.id,
+                    )
+                )
+                already = count_q.scalar() or 0
+                if already + 1 > expected:
+                    # overflow — визуально красный, но при подтверждении
+                    # документа всё равно уйдёт в МС (вместе с valid).
+                    scan.status = ScanStatus.overflow
+                    scan.error_message = (
+                        f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
+                    )
         await db.commit()
 
         logger.info(
@@ -174,11 +210,12 @@ async def _process_document_async(document_id: str, user_id: str):
 
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
 
-        # Валидные сканы документа
+        # Сканы для отправки: valid + overflow.
+        # overflow — сверхплановые, визуально помечены красным, но идут в МС.
         result = await db.execute(
             select(Scan).where(
                 Scan.document_id == document_id,
-                Scan.status == ScanStatus.valid,
+                Scan.status.in_([ScanStatus.valid, ScanStatus.overflow]),
             )
         )
         valid_scans = result.scalars().all()

@@ -15,6 +15,13 @@ from app.core.security import decrypt_token
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
+class PlanItem(BaseModel):
+    gtin: Optional[str]
+    product_id: Optional[str]
+    product_name: str
+    expected_qty: int
+
+
 class DocumentResponse(BaseModel):
     id: UUID
     moysklad_id: Optional[str]
@@ -22,6 +29,7 @@ class DocumentResponse(BaseModel):
     kind: DocumentKind
     status: DocumentStatus
     scan_count: int = 0
+    plan: List[PlanItem] = []
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -47,6 +55,7 @@ def _doc_to_response(doc: Document) -> DocumentResponse:
         kind=doc.kind,
         status=doc.status,
         scan_count=len(doc.scans) if doc.scans else 0,
+        plan=doc.plan or [],
         created_at=doc.created_at,
     )
 
@@ -109,13 +118,59 @@ async def create_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    plan: list = []
+    if body.moysklad_id:
+        # Подгружаем план сборки из МС-документа: positions → expected_qty по товарам.
+        # Если МС не подключён или запрос упал — план остаётся пустым (произвольная сборка).
+        try:
+            ms = await _get_ms_service(current_user, db)
+            plan = await ms.build_plan(body.kind.value, body.moysklad_id)
+        except HTTPException:
+            pass
+        except Exception as exc:
+            # build_plan может упасть на любом этапе; не блокируем создание документа
+            from app.core.logging import logger as _lg
+            _lg.warning(
+                "create_document.build_plan_failed",
+                kind=body.kind.value,
+                moysklad_id=body.moysklad_id,
+                error=str(exc),
+            )
+
     doc = Document(
         user_id=current_user.id,
         name=body.name,
         kind=body.kind,
         moysklad_id=body.moysklad_id,
+        plan=plan,
     )
     db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return _doc_to_response(doc)
+
+
+@router.post("/{document_id}/refresh-plan", response_model=DocumentResponse)
+async def refresh_plan(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Перетянуть план сборки из МС-документа (если он привязан)."""
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    if not doc.moysklad_id:
+        raise HTTPException(400, "Документ не привязан к МойСклад")
+
+    ms = await _get_ms_service(current_user, db)
+    doc.plan = await ms.build_plan(doc.kind.value, doc.moysklad_id)
     await db.commit()
     await db.refresh(doc)
     return _doc_to_response(doc)

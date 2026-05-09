@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { scansApi } from '../api/client'
+import { scansApi, isSscc } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -39,7 +39,7 @@ export function useScanner(documentId: string | null) {
           error_message: data.error_message,
         })
         if (data.status === 'valid') playBeep('ok')
-        else if (data.status === 'invalid') playBeep('error')
+        else if (data.status === 'invalid' || data.status === 'overflow') playBeep('error')
       } else if (data.type === 'cz_token_expired') {
         setCzTokenExpired(true)
         playBeep('error')
@@ -60,15 +60,25 @@ export function useScanner(documentId: string | null) {
   const submitCode = useCallback(
     async (code: string) => {
       if (!documentId || !code.trim()) return
+      const trimmed = code.trim()
 
       try {
-        const { data: scan } = await scansApi.create(documentId, code.trim())
-
-        if (scan.status === 'duplicate') {
-          playBeep('error')
+        if (isSscc(trimmed)) {
+          // Короб → бэкенд распакует через ЧЗ и вернёт массив сканов
+          const { data: scans } = await scansApi.createBox(documentId, trimmed)
+          let anyDuplicate = false
+          for (const s of scans) {
+            addScan(s)
+            if (s.status === 'duplicate') anyDuplicate = true
+          }
+          playBeep(anyDuplicate ? 'error' : 'ok')
+        } else {
+          const { data: scan } = await scansApi.create(documentId, trimmed)
+          if (scan.status === 'duplicate') {
+            playBeep('error')
+          }
+          addScan(scan)
         }
-
-        addScan(scan)
       } catch (err) {
         playBeep('error')
         console.error('Scan error:', err)

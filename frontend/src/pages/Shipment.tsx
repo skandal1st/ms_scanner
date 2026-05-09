@@ -3,6 +3,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
+import { ProgressTable } from '../components/ProgressTable'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document, DocumentKind } from '../api/client'
@@ -17,7 +18,8 @@ const KIND_OPTIONS: { kind: ShipmentKind; label: string }[] = [
 ]
 
 export function ShipmentPage() {
-  const { document, setDocument, stats, scans } = useScanStore()
+  const { document, setDocument, stats, scans, getProgress } = useScanStore()
+  const progress = getProgress()
   const [kind, setKind] = useState<ShipmentKind>('demand')
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -89,6 +91,7 @@ export function ShipmentPage() {
         </div>
 
         <div className="acc-right">
+          <ProgressTable />
           <div className="acc-right__head">
             <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
             <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>
@@ -114,7 +117,13 @@ export function ShipmentPage() {
           disabled={!document || scans.length === 0 || processMutation.isPending}
           onClick={() => setShowConfirm(true)}
         >
-          {processMutation.isPending ? 'Обрабатывается…' : 'Отгрузить товары'}
+          {processMutation.isPending
+            ? 'Обрабатывается…'
+            : progress.hasPlan
+              ? stats.overflow > 0
+                ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
+                : `Отгрузить ${progress.total.scanned}/${progress.total.expected}`
+              : 'Отгрузить товары'}
         </button>
       </footer>
 
@@ -170,10 +179,28 @@ export function ShipmentPage() {
                   </span>
                 </div>
               </div>
-              {hasErrors && (
+              {(hasErrors || stats.overflow > 0) && (
                 <p className="hint">
-                  Будут отгружены только валидные коды ({stats.valid} шт.)
+                  В отгрузку попадут валидные ({stats.valid})
+                  {stats.overflow > 0 ? ` + сверх плана (${stats.overflow})` : ''}.
+                  Ошибки и дубли пропускаются.
                 </p>
+              )}
+              {progress.hasPlan && progress.total.scanned < progress.total.expected && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 10,
+                    background: '#fffbeb',
+                    border: '1px solid #fde68a',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: '#92400e',
+                  }}
+                >
+                  Сборка не завершена: {progress.total.scanned} из {progress.total.expected}.
+                  Будет отгружена только собранная часть.
+                </div>
               )}
             </div>
             <div className="buttons" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
@@ -184,9 +211,10 @@ export function ShipmentPage() {
                 type="button"
                 className="button button--success"
                 onClick={handleProcess}
-                disabled={stats.valid === 0}
+                disabled={stats.valid + stats.overflow === 0}
               >
-                Отгрузить {stats.valid} валидных
+                Отгрузить {stats.valid + stats.overflow}
+                {stats.overflow > 0 ? ` (вкл. ${stats.overflow} сверх)` : ''}
               </button>
             </div>
           </dialog>

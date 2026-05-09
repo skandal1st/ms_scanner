@@ -41,6 +41,13 @@ export interface MsDocument {
   moment: string | null
 }
 
+export interface PlanItem {
+  gtin: string | null
+  product_id: string | null
+  product_name: string
+  expected_qty: number
+}
+
 export interface Document {
   id: string
   moysklad_id: string | null
@@ -48,6 +55,7 @@ export interface Document {
   kind: DocumentKind
   status: 'draft' | 'processing' | 'accepted'
   scan_count: number
+  plan: PlanItem[]
   created_at: string
 }
 
@@ -59,16 +67,23 @@ export const documentsApi = {
   create: (name: string, kind: DocumentKind, moysklad_id?: string) =>
     api.post<Document>('/documents/', { name, kind, moysklad_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
+  refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   process: (id: string) => api.post(`/documents/${id}/process`),
 }
 
+export function isSscc(code: string): boolean {
+  return code.length === 20 && code.startsWith('00') && /^\d+$/.test(code)
+}
+
 // --- Scans ---
+export type ScanStatus = 'pending' | 'valid' | 'invalid' | 'duplicate' | 'overflow'
+
 export interface Scan {
   id: string
   document_id: string
   code: string
   gtin: string | null
-  status: 'pending' | 'valid' | 'invalid' | 'duplicate'
+  status: ScanStatus
   product_name: string | null
   error_message: string | null
   scanned_at: string
@@ -77,6 +92,8 @@ export interface Scan {
 export const scansApi = {
   create: (document_id: string, code: string) =>
     api.post<Scan>('/scans/', { document_id, code }),
+  createBox: (document_id: string, sscc: string) =>
+    api.post<Scan[]>('/scans/box', { document_id, sscc }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
 }
