@@ -33,7 +33,9 @@ export const authApi = {
 }
 
 // --- Documents ---
-export type DocumentKind = 'supply' | 'demand' | 'loss' | 'move' | 'salesreturn'
+// move исключён: XSD-схема дескриптора не разрешает update для перемещений
+// через scope=custom, а вся логика отгрузки = запись trackingCodes через PUT.
+export type DocumentKind = 'supply' | 'demand' | 'loss' | 'salesreturn'
 
 export interface MsDocument {
   id: string

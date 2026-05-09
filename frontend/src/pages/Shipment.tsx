@@ -13,7 +13,6 @@ type ShipmentKind = Exclude<DocumentKind, 'supply'>
 const KIND_OPTIONS: { kind: ShipmentKind; label: string }[] = [
   { kind: 'demand', label: 'Отгрузка' },
   { kind: 'loss', label: 'Списание' },
-  { kind: 'move', label: 'Перемещение' },
   { kind: 'salesreturn', label: 'Возврат покупателя' },
 ]
 

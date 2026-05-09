@@ -26,14 +26,10 @@
                 <view/>
                 <update/>
             </loss>
-            <move>
+            <salesReturn>
                 <view/>
                 <update/>
-            </move>
-            <salesreturn>
-                <view/>
-                <update/>
-            </salesreturn>
+            </salesReturn>
             <good>
                 <view/>
             </good>

@@ -7,10 +7,12 @@ from app.core.logging import logger
 # Для каких МС-документов в позиции нужно записывать коды маркировки
 # (поле trackingCodes). Для приёмки маркировка идёт в ЧЗ (accept_batch),
 # в МС достаточно факта поступления без trackingCodes.
-WRITE_TRACKING_CODES_KINDS = {"demand", "loss", "move", "salesreturn"}
+WRITE_TRACKING_CODES_KINDS = {"demand", "loss", "salesreturn"}
 
 # Все типы МС-документов, поддерживаемые приложением.
-SUPPORTED_KINDS = {"supply", "demand", "loss", "move", "salesreturn"}
+# move (Перемещение) исключён: XSD-схема дескриптора не разрешает update
+# для move через scope=custom — мы не можем записать trackingCodes в позиции.
+SUPPORTED_KINDS = {"supply", "demand", "loss", "salesreturn"}
 
 
 class MoySkladService:

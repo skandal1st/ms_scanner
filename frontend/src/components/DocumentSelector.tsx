@@ -12,7 +12,6 @@ const KIND_LABEL: Record<DocumentKind, string> = {
   supply: 'поступление',
   demand: 'отгрузку',
   loss: 'списание',
-  move: 'перемещение',
   salesreturn: 'возврат покупателя',
 }
 
