@@ -1,13 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 
 from app.db.session import get_db
-from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration
+from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, Scan
 from app.api.deps import get_current_user
 from app.services.moysklad import MoySkladService, SUPPORTED_KINDS
 from app.core.security import decrypt_token
@@ -47,17 +47,39 @@ class MoySkladDocumentItem(BaseModel):
     moment: Optional[str]
 
 
-def _doc_to_response(doc: Document) -> DocumentResponse:
+def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
+    # `doc.scans` НЕЛЬЗЯ дёргать из sync-кода — это lazy-relationship,
+    # а сессия async (asyncpg). MissingGreenlet → 500.
+    # Вызывающий должен передать scan_count явно (либо посчитать SELECT count,
+    # либо использовать selectinload, либо знать что документ только что создан).
     return DocumentResponse(
         id=doc.id,
         moysklad_id=doc.moysklad_id,
         name=doc.name,
         kind=doc.kind,
         status=doc.status,
-        scan_count=len(doc.scans) if doc.scans else 0,
+        scan_count=scan_count,
         plan=doc.plan or [],
         created_at=doc.created_at,
     )
+
+
+async def _scan_count(db: AsyncSession, document_id: UUID) -> int:
+    result = await db.execute(
+        select(func.count(Scan.id)).where(Scan.document_id == document_id)
+    )
+    return int(result.scalar() or 0)
+
+
+async def _scan_counts(db: AsyncSession, document_ids: List[UUID]) -> dict[UUID, int]:
+    if not document_ids:
+        return {}
+    result = await db.execute(
+        select(Scan.document_id, func.count(Scan.id))
+        .where(Scan.document_id.in_(document_ids))
+        .group_by(Scan.document_id)
+    )
+    return {doc_id: int(cnt) for doc_id, cnt in result.all()}
 
 
 async def _get_ms_service(
@@ -109,7 +131,8 @@ async def list_documents(
     query = query.order_by(Document.created_at.desc())
     result = await db.execute(query)
     documents = result.scalars().all()
-    return [_doc_to_response(d) for d in documents]
+    counts = await _scan_counts(db, [d.id for d in documents])
+    return [_doc_to_response(d, counts.get(d.id, 0)) for d in documents]
 
 
 @router.post("/", response_model=DocumentResponse, status_code=201)
@@ -147,7 +170,8 @@ async def create_document(
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
-    return _doc_to_response(doc)
+    # Документ только что создан — сканов заведомо нет.
+    return _doc_to_response(doc, scan_count=0)
 
 
 @router.post("/{document_id}/refresh-plan", response_model=DocumentResponse)
@@ -173,7 +197,7 @@ async def refresh_plan(
     doc.plan = await ms.build_plan(doc.kind.value, doc.moysklad_id)
     await db.commit()
     await db.refresh(doc)
-    return _doc_to_response(doc)
+    return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)
@@ -191,7 +215,7 @@ async def get_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    return _doc_to_response(doc)
+    return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
 @router.post("/{document_id}/process")
