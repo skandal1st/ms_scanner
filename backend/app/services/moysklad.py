@@ -130,9 +130,17 @@ class MoySkladService:
         Обновить позиции МС-документа на основе сканов.
         Сканы группируются по product_id: один товар = одна позиция с quantity
         и (для отгрузочных типов) trackingCodes — список CIS маркировки.
+
+        Важно: МС валидирует каждый CIS через реальный ЧЗ. Mock-коды от
+        нашего unpack_box не пройдут (МС вернёт 412 «неверный формат кода
+        маркировки»). Поэтому в mock-режиме (`CZ_MOCK_MODE=true`) шлём
+        позиции БЕЗ trackingCodes — это позволяет прогнать end-to-end pipe
+        (МС видит обновлённый документ с количеством), не упираясь в
+        реальную проверку кодов. Прод-режим (CZ_MOCK_MODE=false) пишет
+        настоящие коды от сканера — там валидность гарантирована ЧЗ.
         """
         self._validate_kind(kind)
-        write_codes = kind in WRITE_TRACKING_CODES_KINDS
+        write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
 
         # Группировка по product_id
         groups: Dict[str, List[Dict]] = {}
@@ -157,13 +165,17 @@ class MoySkladService:
                     "meta": {
                         "href": f"{self.base_url}/entity/product/{product_id}",
                         "type": "product",
+                        "mediaType": "application/json",
                     }
                 },
                 "quantity": len(group),
             }
             if write_codes:
+                # МС требует поле `type` у каждого trackingCode.
+                # Допустимые: trackingcode | transportpack | consumerpack.
                 position["trackingCodes"] = [
-                    {"cis": s["code"]} for s in group if s.get("code")
+                    {"cis": s["code"], "type": "trackingcode"}
+                    for s in group if s.get("code")
                 ]
             positions.append(position)
 
@@ -173,7 +185,18 @@ class MoySkladService:
                 headers=self.headers,
                 json={"positions": positions},
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # raise_for_status() прячет тело ответа МС с реальной причиной.
+                # Логируем body, чтобы не приходилось дёргать diff в проде.
+                logger.error(
+                    "moysklad.update_document.failed",
+                    kind=kind,
+                    doc_id=doc_id,
+                    status=resp.status_code,
+                    body=resp.text[:1000],
+                    sent_codes=write_codes,
+                )
+                resp.raise_for_status()
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:
