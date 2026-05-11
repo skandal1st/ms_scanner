@@ -41,7 +41,7 @@ function calcStats(scans: Scan[]): Stats {
   )
 }
 
-function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): PlanProgress {
+export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): PlanProgress {
   const items = plan ?? []
   if (items.length === 0) {
     return { byGtin: {}, total: { scanned: 0, expected: 0 }, hasPlan: false }

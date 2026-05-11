@@ -1,9 +1,14 @@
-import { useScanStore } from '../store/scanStore'
+import { useScanStore, buildProgress } from '../store/scanStore'
 import type { CSSProperties } from 'react'
 
 export function ProgressTable() {
-  const progress = useScanStore((s) => s.getProgress())
+  // Подписываемся на примитивные срезы стора, а сам прогресс считаем здесь.
+  // Если селектор вернёт новый объект на каждом вызове — useSyncExternalStore
+  // зациклится с "Maximum update depth exceeded" и выкинет белый экран.
+  const plan = useScanStore((s) => s.document?.plan)
+  const scans = useScanStore((s) => s.scans)
   const overflow = useScanStore((s) => s.stats.overflow)
+  const progress = buildProgress(plan, scans)
 
   if (!progress.hasPlan) return null
 
