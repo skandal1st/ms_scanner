@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, KeyboardEvent } from 'react'
 import { useScanner } from '../hooks/useScanner'
+import { normalizeScannerInput } from '../lib/scannerLayout'
 
 interface Props {
   documentId: string | null
@@ -21,8 +22,12 @@ export function ScanInput({ documentId }: Props) {
   }, [])
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && value.trim()) {
-      const code = value.trim()
+    if (e.key === 'Enter') {
+      // Берём значение прямо из DOM — у быстрого сканера Enter может прийти
+      // раньше, чем React успеет применить onChange и закрытие state.
+      const raw = inputRef.current?.value ?? value
+      const code = normalizeScannerInput(raw).trim()
+      if (!code) return
       setLastCode(code)
       setValue('')
       await submitCode(code)
@@ -36,7 +41,7 @@ export function ScanInput({ documentId }: Props) {
         id="scan-field"
         ref={inputRef}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
         onKeyDown={handleKeyDown}
         placeholder="Сканируйте или введите код…"
         disabled={!documentId}

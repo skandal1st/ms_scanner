@@ -95,11 +95,16 @@ class MoySkladService:
             product_name = asrt.get("name") or ""
             barcodes = asrt.get("barcodes") or []
             # Ищем GTIN среди штрихкодов товара (поле gtin или ean13).
+            # Нормализуем до GTIN-14: сканер DataMatrix шлёт `01<14цифр>`,
+            # extract_gtin извлекает 14 цифр после AI 01. Если в МС товар
+            # с EAN-13 (13 цифр) — добавляем ведущий 0 (стандарт GS1).
+            # Иначе план не сматчится с реальным сканом.
             gtin = None
             for bc in barcodes:
                 if isinstance(bc, dict):
-                    gtin = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
-                    if gtin:
+                    raw = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
+                    if raw:
+                        gtin = raw.zfill(14) if raw.isdigit() and len(raw) <= 14 else raw
                         break
             qty = pos.get("quantity") or 0
             try:
@@ -172,17 +177,33 @@ class MoySkladService:
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:
-        """Поиск товара по GTIN."""
+        """
+        Точный поиск товара по штрихкоду через `assortment?filter=barcode=...`.
+        - Поле фильтра — `barcode` (ед.ч.). `barcodes` (мн.ч.) даёт 412 от МС.
+        - Сканер шлёт GTIN-14 (`01<14цифр>`), но в МС товар может быть заведён
+          с EAN-13. По стандарту GS1 GTIN-14 = `0` + GTIN-13 для 13-значных
+          штрихкодов, поэтому если поиск по 14-значному пуст — пробуем
+          без ведущего нуля.
+        - Endpoint `/entity/assortment` отдаёт смешанные сущности (product/
+          variant/service), нас интересует только product — по нему делаем
+          обновление positions[].
+        """
+        candidates: list[str] = [gtin]
+        if len(gtin) == 14 and gtin.startswith("0"):
+            candidates.append(gtin[1:])
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{self.base_url}/entity/product",
-                headers=self.headers,
-                params={"filter": f"barcodes={gtin}"},
-            )
-            if resp.status_code != 200:
-                return None
-            rows = resp.json().get("rows", [])
-            return rows[0] if rows else None
+            for value in candidates:
+                resp = await client.get(
+                    f"{self.base_url}/entity/assortment",
+                    headers=self.headers,
+                    params={"filter": f"barcode={value}", "limit": 1},
+                )
+                if resp.status_code != 200:
+                    continue
+                for row in resp.json().get("rows", []):
+                    if (row.get("meta") or {}).get("type") == "product":
+                        return row
+        return None
 
     # --- Алиасы для backward-совместимости старого приёмочного кода ---
 
