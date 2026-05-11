@@ -19,6 +19,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
   const [mode, setMode] = useState<'select' | 'create'>('select')
   const [newName, setNewName] = useState('')
   const [selectedMsId, setSelectedMsId] = useState('')
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const { data: msDocs, isLoading: msLoading } = useMsDocuments(kind)
   const { data: documents } = useDocuments(kind)
@@ -26,14 +27,27 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    const doc = await createMutation.mutateAsync({
-      name: newName.trim(),
-      kind,
-      moysklad_id: selectedMsId || undefined,
-    })
-    setNewName('')
-    setSelectedMsId('')
-    onSelect(doc)
+    setCreateError(null)
+    try {
+      const doc = await createMutation.mutateAsync({
+        name: newName.trim(),
+        kind,
+        moysklad_id: selectedMsId || undefined,
+      })
+      setNewName('')
+      setSelectedMsId('')
+      onSelect(doc)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      const status = err?.response?.status
+      setCreateError(
+        typeof detail === 'string'
+          ? detail
+          : status
+            ? `Ошибка ${status} при создании документа`
+            : 'Не удалось создать документ',
+      )
+    }
   }
 
   return (
@@ -63,27 +77,89 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
         </div>
       )}
 
-      {mode === 'select' && (
-        <>
-          {documents && documents.length > 0 ? (
-            <div className="doc-list">
-              {documents.map((doc) => (
-                <button
-                  key={doc.id}
-                  type="button"
-                  className={`doc-list__item ${selected?.id === doc.id ? 'is-active' : ''}`}
-                  onClick={() => onSelect(doc)}
-                >
-                  <span>{doc.name}</span>
-                  <span className="doc-list__item-count">{doc.scan_count} кодов</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="hint">Нет документов</p>
-          )}
-        </>
-      )}
+      {mode === 'select' && (() => {
+        // Объединённый список: локальные привязки + МС-документы, ещё не привязанные.
+        // Клик по непривязанному МС-документу мгновенно создаёт локальный документ.
+        const boundMsIds = new Set(
+          (documents ?? []).map((d) => d.moysklad_id).filter(Boolean) as string[],
+        )
+        const unboundMs = (msDocs ?? []).filter((m) => !boundMsIds.has(m.id))
+        const isEmpty = (!documents || documents.length === 0) && unboundMs.length === 0
+
+        const handleBindMs = async (msId: string, msName: string) => {
+          setCreateError(null)
+          try {
+            const doc = await createMutation.mutateAsync({
+              name: msName || `МС ${msId.slice(0, 8)}`,
+              kind,
+              moysklad_id: msId,
+            })
+            onSelect(doc)
+          } catch (err: any) {
+            const detail = err?.response?.data?.detail
+            const status = err?.response?.status
+            setCreateError(
+              typeof detail === 'string'
+                ? detail
+                : status
+                  ? `Ошибка ${status} при создании документа`
+                  : 'Не удалось привязать документ',
+            )
+          }
+        }
+
+        if (isEmpty) {
+          return (
+            <p className="hint">
+              {msLoading ? 'Загружаю документы из МойСклад…' : 'Нет документов'}
+            </p>
+          )
+        }
+
+        return (
+          <div className="doc-list">
+            {(documents ?? []).map((doc) => (
+              <button
+                key={doc.id}
+                type="button"
+                className={`doc-list__item ${selected?.id === doc.id ? 'is-active' : ''}`}
+                onClick={() => onSelect(doc)}
+              >
+                <span>{doc.name}</span>
+                <span className="doc-list__item-count">{doc.scan_count} кодов</span>
+              </button>
+            ))}
+            {unboundMs.map((m) => (
+              <button
+                key={`ms-${m.id}`}
+                type="button"
+                className="doc-list__item"
+                onClick={() => handleBindMs(m.id, m.name)}
+                disabled={createMutation.isPending}
+                title="Привязать документ из МойСклад"
+              >
+                <span>{m.name || `Без имени · ${m.id.slice(0, 8)}`}</span>
+                <span className="doc-list__item-count">+ привязать</span>
+              </button>
+            ))}
+            {createError && (
+              <div
+                style={{
+                  marginTop: 8,
+                  padding: 8,
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 6,
+                  color: '#b91c1c',
+                  fontSize: 12,
+                }}
+              >
+                {createError}
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {mode === 'create' && (
         <div className="login-form">
@@ -119,6 +195,20 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
           >
             {createMutation.isPending ? 'Создаю…' : 'Создать'}
           </button>
+          {createError && (
+            <div
+              style={{
+                padding: 8,
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+                color: '#b91c1c',
+                fontSize: 12,
+              }}
+            >
+              {createError}
+            </div>
+          )}
         </div>
       )}
     </div>

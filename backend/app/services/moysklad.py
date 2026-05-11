@@ -48,7 +48,10 @@ class MoySkladService:
         return [
             {
                 "id": r["id"],
-                "name": r.get("name", ""),
+                # `dict.get(key, default)` возвращает default ТОЛЬКО если ключ
+                # отсутствует. Если МС вернёт {"name": null} — придёт None,
+                # фронт сломается на name.trim(). Поэтому `or ""`.
+                "name": r.get("name") or "",
                 "moment": r.get("moment"),
             }
             for r in rows
