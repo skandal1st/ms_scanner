@@ -9,12 +9,21 @@ export function LaunchPage() {
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
     const mode = params.get('mode')
+    const target = mode === 'shipment' ? '/shipment' : '/'
+
+    // Если у нас уже есть JWT (страница перезагрузилась, либо повторный заход
+    // с тем же URL после успешного обмена) — не дёргаем /auth/launch повторно.
+    // launch_token одноразовый (GETDEL), повторный обмен вернёт 401 «Ссылка
+    // устарела», и пользователь увидит ошибку, хотя сессия живая.
+    if (localStorage.getItem('access_token')) {
+      navigate(target, { replace: true })
+      return
+    }
+
     if (!launchToken) {
       setError('Ссылка повреждена: нет токена.')
       return
     }
-
-    const target = mode === 'shipment' ? '/shipment' : '/'
 
     fetch('/api/auth/launch', {
       method: 'POST',
@@ -31,6 +40,12 @@ export function LaunchPage() {
         navigate(target, { replace: true })
       })
       .catch((err) => {
+        // Если в процессе мы успели получить JWT (двойной useEffect в Strict
+        // Mode и т.п.) — лучше пустить пользователя, чем пугать ошибкой.
+        if (localStorage.getItem('access_token')) {
+          navigate(target, { replace: true })
+          return
+        }
         const message = typeof err?.message === 'string' ? err.message : 'Не удалось войти'
         setError(message)
       })
