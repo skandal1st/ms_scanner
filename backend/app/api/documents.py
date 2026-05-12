@@ -225,9 +225,8 @@ async def process_document(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Завершить документ: для supply — ввод в оборот в ЧЗ + обновление МС;
-    для demand/loss/move/salesreturn — только обновление МС с записью кодов
-    маркировки в positions[].trackingCodes.
+    Завершить документ: Celery обновляет МС (positions, при необходимости
+    trackingCodes) и ставит статус accepted. API Честного Знака не вызывается.
     """
     result = await db.execute(
         select(Document).where(

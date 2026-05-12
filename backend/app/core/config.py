@@ -47,9 +47,9 @@ class Settings(BaseSettings):
     MOYSKLAD_VENDOR_BASE: str = "https://apps-api.moysklad.ru/api/vendor/1.0"
 
     # Честный Знак
-    CZ_MOCK_MODE: bool = True
-    CZ_API_BASE_URL: str = "https://markirovka.sandbox.crptech.ru"
-    CZ_AUTH_METHOD: Literal["mock", "cprob_plugin"] = "mock"
+    CZ_MOCK_MODE: bool = False
+    CZ_API_BASE_URL: str = "https://markirovka.crpt.ru"
+    CZ_AUTH_METHOD: Literal["mock", "cprob_plugin"] = "cprob_plugin"
     CZ_CHALLENGE_TTL_SECONDS: int = 60
 
     # CORS

@@ -38,7 +38,9 @@ services:
       MOYSKLAD_REDIRECT_URI: ${MOYSKLAD_REDIRECT_URI}
       MOYSKLAD_APP_UID: ${MOYSKLAD_APP_UID:-}
       MOYSKLAD_VENDOR_SECRET_KEY: ${MOYSKLAD_VENDOR_SECRET_KEY:-}
-      CZ_MOCK_MODE: ${CZ_MOCK_MODE:-true}
+      CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
+      CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
+      CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
       CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:
       postgres:
@@ -61,7 +63,9 @@ services:
       MOYSKLAD_CLIENT_SECRET: ${MOYSKLAD_CLIENT_SECRET:-}
       MOYSKLAD_APP_UID: ${MOYSKLAD_APP_UID:-}
       MOYSKLAD_VENDOR_SECRET_KEY: ${MOYSKLAD_VENDOR_SECRET_KEY:-}
-      CZ_MOCK_MODE: ${CZ_MOCK_MODE:-true}
+      CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
+      CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
+      CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
     depends_on:
       postgres:
         condition: service_healthy

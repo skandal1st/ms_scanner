@@ -107,7 +107,8 @@ export interface Integration {
   has_cz: boolean
   cz_token_valid_until: string | null
   cz_cert_subject: string | null
-  cz_auth_method: 'mock' | 'cprob_plugin'
+  /** Метод авторизации ЧЗ на сервере (служебное поле API). */
+  cz_auth_method: string
   cz_box_mode_enabled: boolean
 }
 

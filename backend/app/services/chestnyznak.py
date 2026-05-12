@@ -21,6 +21,18 @@ class VerifyResult:
     error: Optional[str] = None
 
 
+def _random_gtin14_digits() -> str:
+    """Случайный 14-значный GTIN с корректной контрольной цифрой (mock unpack без плана)."""
+    body = "".join(str(random.randint(0, 9)) for _ in range(13))
+    total = 0
+    weight = 3
+    for ch in reversed(body):
+        total += int(ch) * weight
+        weight = 4 - weight
+    check = (10 - (total % 10)) % 10
+    return body + str(check)
+
+
 class ChestnyZnakService:
     def __init__(self, token: Optional[str] = None, mock: Optional[bool] = None):
         self.token = token
@@ -131,7 +143,8 @@ class ChestnyZnakService:
                 if pool:
                     gtin = pool[i % len(pool)]
                 else:
-                    gtin = "".join(str(random.randint(0, 9)) for _ in range(14))
+                    # 13 случайных цифр + корректная контрольная (на случай dev с CZ_MOCK_MODE=false)
+                    gtin = _random_gtin14_digits()
                 serial = "".join(
                     random.choice("ABCDEFGHJKMNPQRSTUVWXYZ23456789") for _ in range(13)
                 )

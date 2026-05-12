@@ -13,7 +13,7 @@ def _run(coro):
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
 def verify_code_task(self, scan_id: str, code: str, user_id: str):
-    """Проверить код маркировки (mock ЧЗ или формат GS1) и обновить статус скана."""
+    """Проверить код маркировки и обновить статус скана."""
     try:
         _run(_verify_code_async(scan_id, code, user_id))
     except Exception as exc:
@@ -68,8 +68,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
 
         # Проверка плана: если документ имеет план и для GTIN скана уже
         # отсканировано >= expected_qty валидных — текущий скан переводим
-        # в invalid с пометкой «Превышен план». Кладовщик слышит ошибку
-        # и видит причину, а склад не уезжает с лишним.
+        # в overflow (сверхплана: визуально ошибка, но в МС уходит с valid).
         if scan.status == ScanStatus.valid and scan.gtin:
             doc_q = await db.execute(
                 select(Document).where(Document.id == scan.document_id)

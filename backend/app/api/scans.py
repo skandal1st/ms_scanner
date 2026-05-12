@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from app.db.session import get_db
 from app.db.models import User, Scan, Document, ScanStatus, Integration
 from app.api.deps import get_current_user
+from cryptography.fernet import InvalidToken
+
 from app.core.config import settings
 from app.core.security import decrypt_token
 from app.services.chestnyznak import (
@@ -145,11 +147,17 @@ async def create_box_scans(
                 status_code=403,
                 detail="Распаковка коробов отключена. Включите режим в настройках и войдите через УКЭП.",
             )
-        cz_token = (
-            decrypt_token(integration.cz_token)
-            if integration.cz_token
-            else None
-        )
+        try:
+            cz_token = (
+                decrypt_token(integration.cz_token)
+                if integration.cz_token
+                else None
+            )
+        except InvalidToken:
+            raise HTTPException(
+                status_code=502,
+                detail="Токен Честного Знака повреждён. Выйдите и войдите снова по УКЭП.",
+            )
         expired = (
             integration.cz_token_expires_at is not None
             and integration.cz_token_expires_at <= datetime.now(timezone.utc)

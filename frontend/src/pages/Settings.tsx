@@ -25,7 +25,10 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   const patchIntegration = useMutation({
     mutationFn: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean }) =>
       integrationsApi.update(data).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['integration'] })
+      window.setTimeout(() => patchIntegration.reset(), 3500)
+    },
   })
 
   useEffect(() => {
@@ -135,24 +138,19 @@ interface CzSectionProps {
 }
 
 function CzSection(p: CzSectionProps) {
-  const isMock = p.integration?.cz_auth_method === 'mock'
   const validUntil = p.integration?.cz_token_valid_until
     ? new Date(p.integration.cz_token_valid_until)
     : null
   const isLoggedIn = !!p.integration?.has_cz
   const boxMode = !!p.integration?.cz_box_mode_enabled
 
-  const badge = isMock
-    ? (isLoggedIn
-        ? { cls: 'badge--ok', text: 'Mock-токен' }
-        : { cls: 'badge--warn', text: 'Mock режим' })
-    : !boxMode
-      ? { cls: 'badge--ok', text: 'УКЭП не обязателен' }
-      : isLoggedIn
-        ? { cls: 'badge--ok', text: 'УКЭП для коробов' }
-        : { cls: 'badge--error', text: 'Нужен вход УКЭП' }
+  const badge = !boxMode
+    ? { cls: 'badge--ok', text: 'УКЭП не требуется для сканов' }
+    : isLoggedIn
+      ? { cls: 'badge--ok', text: 'Вход для коробов выполнен' }
+      : { cls: 'badge--error', text: 'Нужен вход по УКЭП для коробов' }
 
-  const showUkepControls = isMock || boxMode
+  const showUkepControls = boxMode
 
   return (
     <section className="section">
@@ -195,41 +193,27 @@ function CzSection(p: CzSectionProps) {
         </div>
       )}
 
-      {!showUkepControls && (
+      {!showUkepControls && isLoggedIn && (
+        <div className="buttons mt-8">
+          <button
+            type="button"
+            className="button"
+            disabled={p.logoutPending}
+            onClick={p.onLogout}
+          >
+            {p.logoutPending ? '…' : 'Выйти из Честного Знака'}
+          </button>
+        </div>
+      )}
+
+      {!showUkepControls && !isLoggedIn && (
         <p className="hint mt-8">
           Включите «Режим сканирования коробов» выше, чтобы появились поля входа по УКЭП
           (КриптоПро Browser Plugin).
         </p>
       )}
 
-      {showUkepControls && isMock ? (
-        <>
-          <p className="hint mt-8">
-            Сервер в mock-режиме (<code>CZ_AUTH_METHOD=mock</code>) — реальный ЧЗ не вызывается.
-            Кнопка ниже выдаст фейковый токен на 1 час для теста UI.
-          </p>
-          <div className="buttons mt-8">
-            <button
-              type="button"
-              className="button button--success"
-              disabled={p.loginPending}
-              onClick={p.onLogin}
-            >
-              {p.loginPending ? 'Создаём mock-токен…' : 'Mock-вход (dev only)'}
-            </button>
-            {isLoggedIn && (
-              <button
-                type="button"
-                className="button"
-                disabled={p.logoutPending}
-                onClick={p.onLogout}
-              >
-                {p.logoutPending ? '…' : 'Выйти'}
-              </button>
-            )}
-          </div>
-        </>
-      ) : showUkepControls && p.pluginStatus === 'checking' ? (
+      {showUkepControls && p.pluginStatus === 'checking' ? (
         <p className="hint mt-8">Проверка КриптоПро Browser Plugin…</p>
       ) : showUkepControls && p.pluginStatus === 'absent' ? (
         <div className="alert alert--error mt-8">
