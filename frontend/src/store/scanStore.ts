@@ -9,10 +9,30 @@ interface Stats {
   overflow: number
 }
 
+/** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
+export interface ProgressRow {
+  gtin: string
+  product_name: string
+  expected: number
+  /** Сколько сканов в статусе valid (в рамках плана; для футера «в плане»). */
+  scanned: number
+  /** valid + overflow по этому GTIN — всё, что уйдёт в отгрузку по строке. */
+  addedTotal: number
+  /** Только свободная сборка: сколько ещё на проверке. */
+  pendingCount?: number
+}
+
 export interface PlanProgress {
-  byGtin: Record<string, { scanned: number; expected: number; product_name: string }>
-  total: { scanned: number; expected: number }
+  /** Есть план из МС (ожидаемые количества по GTIN). */
   hasPlan: boolean
+  /** Показывать блок сводки (план или свободная группировка по сканам). */
+  hasSummary: boolean
+  rows: ProgressRow[]
+  total: {
+    scanned: number
+    expected: number
+    addedTotal: number
+  }
 }
 
 interface ScanStore {
@@ -39,33 +59,89 @@ function calcStats(scans: Scan[]): Stats {
   )
 }
 
+function groupKey(scan: Scan): string {
+  return scan.gtin || scan.code.slice(0, 32) || 'unknown'
+}
+
 export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): PlanProgress {
-  const items = plan ?? []
-  if (items.length === 0) {
-    return { byGtin: {}, total: { scanned: 0, expected: 0 }, hasPlan: false }
-  }
-  const byGtin: PlanProgress['byGtin'] = {}
-  let totalExpected = 0
-  for (const p of items) {
-    if (!p.gtin) continue
-    byGtin[p.gtin] = {
-      scanned: 0,
-      expected: p.expected_qty,
-      product_name: p.product_name,
+  const planItems = (plan ?? []).filter((p) => p.gtin)
+
+  if (planItems.length > 0) {
+    const rows: ProgressRow[] = planItems.map((p) => {
+      const gtin = p.gtin as string
+      const addedTotal = scans.filter(
+        (s) => s.gtin === gtin && (s.status === 'valid' || s.status === 'overflow')
+      ).length
+      const scanned = scans.filter((s) => s.gtin === gtin && s.status === 'valid').length
+      return {
+        gtin,
+        product_name: p.product_name,
+        expected: p.expected_qty,
+        scanned,
+        addedTotal,
+      }
+    })
+    const total = {
+      scanned: rows.reduce((a, r) => a + r.scanned, 0),
+      expected: rows.reduce((a, r) => a + r.expected, 0),
+      addedTotal: rows.reduce((a, r) => a + r.addedTotal, 0),
     }
-    totalExpected += p.expected_qty
+    return {
+      hasPlan: true,
+      hasSummary: true,
+      rows,
+      total,
+    }
   }
-  let totalScanned = 0
+
+  // Свободная сборка: группируем по GTIN (или по фрагменту кода, если GTIN нет).
+  const groups = new Map<
+    string,
+    { gtin: string; productNames: string[]; list: Scan[] }
+  >()
   for (const s of scans) {
-    if (s.status !== 'valid' || !s.gtin) continue
-    const slot = byGtin[s.gtin]
-    if (!slot) continue
-    if (slot.scanned < slot.expected) {
-      slot.scanned += 1
-      totalScanned += 1
+    if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
+    const k = groupKey(s)
+    let g = groups.get(k)
+    if (!g) {
+      g = { gtin: s.gtin || k, productNames: [], list: [] }
+      groups.set(k, g)
     }
+    g.list.push(s)
+    if (s.product_name) g.productNames.push(s.product_name)
   }
-  return { byGtin, total: { scanned: totalScanned, expected: totalExpected }, hasPlan: true }
+
+  const rows: ProgressRow[] = Array.from(groups.values())
+    .map((g) => {
+      const addedTotal = g.list.filter((s) => s.status === 'valid' || s.status === 'overflow').length
+      const scanned = addedTotal
+      const pendingCount = g.list.filter((s) => s.status === 'pending').length
+      const displayName = g.productNames[0] || g.gtin || 'Без GTIN'
+      return {
+        gtin: g.gtin,
+        product_name: displayName,
+        expected: 0,
+        scanned,
+        addedTotal,
+        pendingCount: pendingCount > 0 ? pendingCount : undefined,
+      }
+    })
+    .sort((a, b) =>
+      (a.product_name || a.gtin).localeCompare(b.product_name || b.gtin, 'ru')
+    )
+
+  const total = {
+    scanned: rows.reduce((a, r) => a + r.scanned, 0),
+    expected: 0,
+    addedTotal: rows.reduce((a, r) => a + r.addedTotal, 0),
+  }
+
+  return {
+    hasPlan: false,
+    hasSummary: rows.length > 0,
+    rows,
+    total,
+  }
 }
 
 export const useScanStore = create<ScanStore>((set, get) => ({

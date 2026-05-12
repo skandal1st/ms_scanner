@@ -122,7 +122,9 @@ export function ShipmentPage() {
               ? stats.overflow > 0
                 ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
                 : `Отгрузить ${progress.total.scanned}/${progress.total.expected}`
-              : 'Отгрузить товары'}
+              : progress.hasSummary && progress.total.addedTotal > 0
+                ? `Отгрузить (${progress.total.addedTotal})`
+                : 'Отгрузить товары'}
         </button>
       </footer>
 

@@ -2,60 +2,85 @@ import { useScanStore, buildProgress } from '../store/scanStore'
 import type { CSSProperties } from 'react'
 
 export function ProgressTable() {
-  // Подписываемся на примитивные срезы стора, а сам прогресс считаем здесь.
-  // Если селектор вернёт новый объект на каждом вызове — useSyncExternalStore
-  // зациклится с "Maximum update depth exceeded" и выкинет белый экран.
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
   const overflow = useScanStore((s) => s.stats.overflow)
   const progress = buildProgress(plan, scans)
 
-  if (!progress.hasPlan) return null
+  if (!progress.hasSummary) return null
 
-  const items = Object.entries(progress.byGtin).map(([gtin, p]) => ({
-    gtin,
-    ...p,
-  }))
+  const title = progress.hasPlan ? 'Прогресс сборки' : 'По товарам'
 
   return (
     <div style={styles.wrap}>
       <div style={styles.head}>
-        <span style={styles.title}>Прогресс сборки</span>
-        <span style={styles.totals}>
-          {progress.total.scanned} / {progress.total.expected}
-        </span>
+        <span style={styles.title}>{title}</span>
+        {progress.hasPlan ? (
+          <span style={styles.totals}>
+            В плане: {progress.total.scanned} / {progress.total.expected}
+            {progress.total.addedTotal !== progress.total.scanned && (
+              <span style={{ marginLeft: 8, color: '#6b7280' }}>
+                · кодов: {progress.total.addedTotal}
+              </span>
+            )}
+          </span>
+        ) : (
+          <span style={styles.totals}>
+            Добавлено кодов: {progress.total.addedTotal}
+          </span>
+        )}
       </div>
       <div style={styles.list}>
-        {items.map((item) => {
-          const pct = item.expected > 0
-            ? Math.min(100, Math.round((item.scanned / item.expected) * 100))
-            : 0
-          const ratio = item.expected > 0 ? item.scanned / item.expected : 0
+        {progress.rows.map((item) => {
+          const overLine = item.expected > 0 && item.addedTotal > item.expected
+          const pct =
+            item.expected > 0
+              ? Math.min(100, Math.round((item.addedTotal / item.expected) * 100))
+              : item.addedTotal > 0
+                ? 100
+                : 0
+          const ratio = item.expected > 0 ? item.addedTotal / item.expected : item.addedTotal > 0 ? 1 : 0
           const color =
-            item.scanned === 0
-              ? '#9ca3af' // серый
-              : ratio >= 1
-                ? '#16a34a' // зелёный
-                : '#f59e0b' // жёлтый
+            item.addedTotal === 0 && !item.pendingCount
+              ? '#9ca3af'
+              : ratio >= 1 && item.expected > 0
+                ? '#16a34a'
+                : item.addedTotal > 0 || item.pendingCount
+                  ? '#f59e0b'
+                  : '#9ca3af'
+
+          const countLabel = progress.hasPlan
+            ? `Добавлено ${item.addedTotal}${item.expected > 0 ? ` из ${item.expected}` : ''}`
+            : `Добавлено: ${item.addedTotal}`
 
           return (
             <div key={item.gtin} style={styles.row}>
               <div style={styles.rowHead}>
                 <span style={styles.name}>{item.product_name || item.gtin}</span>
-                <span style={{ ...styles.count, color }}>
-                  {item.scanned} / {item.expected}
+                <span style={{ ...styles.count, color }} title={item.gtin}>
+                  {countLabel}
+                  {item.pendingCount ? (
+                    <span style={{ color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>
+                      · на проверке {item.pendingCount}
+                    </span>
+                  ) : null}
                 </span>
               </div>
               <div style={styles.barWrap}>
                 <div style={{ ...styles.bar, width: `${pct}%`, background: color }} />
               </div>
+              {overLine && (
+                <div style={styles.rowOver}>
+                  Вкл. сверх плана: {item.addedTotal - item.expected}
+                </div>
+              )}
             </div>
           )
         })}
       </div>
-      {overflow > 0 && (
+      {overflow > 0 && progress.hasPlan && (
         <div style={styles.overflowNote}>
-          Сверх плана: {overflow}{' '}
+          Всего сверх плана: {overflow}{' '}
           <span style={{ color: '#9ca3af' }}>— уйдут в отгрузку вместе с валидными</span>
         </div>
       )}
@@ -76,6 +101,8 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'space-between',
     alignItems: 'baseline',
     marginBottom: 10,
+    flexWrap: 'wrap',
+    gap: 8,
   },
   title: {
     fontSize: 13,
@@ -99,18 +126,21 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'baseline',
     fontSize: 12,
     marginBottom: 4,
+    gap: 8,
   },
   name: {
     color: '#1f2937',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    paddingRight: 8,
+    minWidth: 0,
+    flex: 1,
   },
   count: {
     fontWeight: 500,
     fontVariantNumeric: 'tabular-nums',
     whiteSpace: 'nowrap',
+    flexShrink: 0,
   },
   barWrap: {
     height: 6,
@@ -121,6 +151,11 @@ const styles: Record<string, CSSProperties> = {
   bar: {
     height: '100%',
     transition: 'width 0.2s ease, background 0.2s ease',
+  },
+  rowOver: {
+    fontSize: 11,
+    color: '#b45309',
+    marginTop: 4,
   },
   overflowNote: {
     marginTop: 10,

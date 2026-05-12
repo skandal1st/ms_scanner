@@ -3,6 +3,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
+import { ProgressTable } from '../components/ProgressTable'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document } from '../api/client'
@@ -62,6 +63,7 @@ export function AcceptancePage() {
         </div>
 
         <div className="acc-right">
+          <ProgressTable />
           <div className="acc-right__head">
             <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
             <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>

@@ -11,6 +11,32 @@ def _run(coro):
     return asyncio.get_event_loop().run_until_complete(coro)
 
 
+async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
+    """Подставить название товара из МойСклад по GTIN (если токен есть и имя ещё пустое)."""
+    from sqlalchemy import select
+    from app.db.models import Integration
+    from app.services.moysklad import MoySkladService
+    from app.core.security import decrypt_token
+
+    int_result = await db.execute(select(Integration).where(Integration.user_id == user_id))
+    integration = int_result.scalar_one_or_none()
+    if not integration or not integration.moysklad_token:
+        return
+    try:
+        token = decrypt_token(integration.moysklad_token)
+    except Exception as exc:
+        logger.warning("verify_code.ms_decrypt_failed", scan_id=str(scan.id), error=str(exc))
+        return
+    ms = MoySkladService(token)
+    try:
+        product = await ms.find_product_by_gtin(scan.gtin)
+    except Exception as exc:
+        logger.warning("verify_code.ms_product_lookup_failed", scan_id=str(scan.id), error=str(exc))
+        return
+    if product and product.get("name"):
+        scan.product_name = product["name"]
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
 def verify_code_task(self, scan_id: str, code: str, user_id: str):
     """Проверить код маркировки и обновить статус скана."""
@@ -100,6 +126,14 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                     scan.error_message = (
                         f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
                     )
+        if (
+            not settings.CZ_MOCK_MODE
+            and scan.status in (ScanStatus.valid, ScanStatus.overflow)
+            and scan.gtin
+            and not scan.product_name
+        ):
+            await _enrich_scan_product_name_from_ms(db, user_id, scan)
+
         await db.commit()
 
         logger.info(
