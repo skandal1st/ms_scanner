@@ -75,10 +75,11 @@ export function useScanner(documentId: string | null) {
   // Если WS недоступен — опрашиваем список сканов, пока есть pending
   useEffect(() => {
     if (!documentId || !hasPending) return
+    const docId = documentId
 
     async function poll() {
       try {
-        const { data } = await scansApi.list(documentId)
+        const { data } = await scansApi.list(docId)
         useScanStore.getState().setScans(data)
       } catch {
         /* сеть / 401 обработает axios */
