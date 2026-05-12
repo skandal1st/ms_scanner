@@ -127,8 +127,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                         f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
                     )
         if (
-            not settings.CZ_MOCK_MODE
-            and scan.status in (ScanStatus.valid, ScanStatus.overflow)
+            scan.status in (ScanStatus.valid, ScanStatus.overflow)
             and scan.gtin
             and not scan.product_name
         ):

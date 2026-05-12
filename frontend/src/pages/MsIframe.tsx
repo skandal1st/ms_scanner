@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
+import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 interface LaunchPayload {
   launch_token: string
@@ -44,6 +45,7 @@ export function MsIframePage() {
         // только в рамках текущего iframe-окна, в новой вкладке сессия отдельная.
         localStorage.setItem('access_token', payload.access_token)
         localStorage.setItem('refresh_token', payload.refresh_token)
+        persistUserIdFromAccessToken(payload.access_token)
         setState({ kind: 'ready', payload })
       })
       .catch((err) => {

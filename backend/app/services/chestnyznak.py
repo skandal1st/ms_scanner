@@ -61,7 +61,7 @@ class ChestnyZnakService:
                 gtin=gtin,
                 serial=serial,
                 status="IN_CIRCULATION",
-                product_name=_mock_product_name(gtin),
+                product_name=None,
             )
         elif roll < 0.95:
             return VerifyResult(
@@ -318,11 +318,3 @@ def verify_code_local_gs1(code: str) -> VerifyResult:
         product_name=None,
     )
 
-
-def _mock_product_name(gtin: Optional[str]) -> str:
-    names = ["Молоко 3.2% 1л", "Вода минеральная 0.5л", "Сок апельсиновый 1л",
-             "Кефир 2.5% 900г", "Йогурт клубничный 150г"]
-    if not gtin:
-        return random.choice(names)
-    idx = int(gtin[-1]) % len(names) if gtin else 0
-    return names[idx]

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { scansApi, isSscc } from '../api/client'
 import { useScanStore } from '../store/scanStore'
+import { decodeJwtSub } from '../lib/jwt'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
 
@@ -17,13 +18,31 @@ function playBeep(type: 'ok' | 'error') {
   osc.stop(audioCtx.currentTime + (type === 'ok' ? 0.15 : 0.4))
 }
 
+function resolveWsUserId(): string | null {
+  const cached = localStorage.getItem('user_id')
+  if (cached) return cached
+  const token = localStorage.getItem('access_token')
+  if (!token) return null
+  const sub = decodeJwtSub(token)
+  if (sub) {
+    localStorage.setItem('user_id', sub)
+    return sub
+  }
+  return null
+}
+
 export function useScanner(documentId: string | null) {
   const { addScan, updateScan } = useScanStore()
   const wsRef = useRef<WebSocket | null>(null)
 
-  // WebSocket — получаем обновления статусов от Celery
+  const hasPending = useScanStore((s) => {
+    if (!documentId) return false
+    return s.scans.some((x) => x.document_id === documentId && x.status === 'pending')
+  })
+
+  // WebSocket — обновления статусов от Celery
   useEffect(() => {
-    const userId = localStorage.getItem('user_id')
+    const userId = resolveWsUserId()
     if (!userId) return
 
     const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/${userId}`
@@ -43,7 +62,6 @@ export function useScanner(documentId: string | null) {
       }
     }
 
-    // Keepalive ping
     const ping = setInterval(() => {
       if (ws.readyState === WebSocket.OPEN) ws.send('ping')
     }, 30000)
@@ -54,6 +72,24 @@ export function useScanner(documentId: string | null) {
     }
   }, [updateScan])
 
+  // Если WS недоступен — опрашиваем список сканов, пока есть pending
+  useEffect(() => {
+    if (!documentId || !hasPending) return
+
+    async function poll() {
+      try {
+        const { data } = await scansApi.list(documentId)
+        useScanStore.getState().setScans(data)
+      } catch {
+        /* сеть / 401 обработает axios */
+      }
+    }
+
+    void poll()
+    const interval = window.setInterval(() => void poll(), 1500)
+    return () => clearInterval(interval)
+  }, [documentId, hasPending])
+
   const submitCode = useCallback(
     async (code: string) => {
       if (!documentId || !code.trim()) return
@@ -61,7 +97,6 @@ export function useScanner(documentId: string | null) {
 
       try {
         if (isSscc(trimmed)) {
-          // Короб → бэкенд распакует через ЧЗ и вернёт массив сканов
           const { data: scans } = await scansApi.createBox(documentId, trimmed)
           let anyDuplicate = false
           for (const s of scans) {

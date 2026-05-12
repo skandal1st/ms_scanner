@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '../api/client'
+import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 export function LoginPage() {
   const [email, setEmail] = useState('')
@@ -20,6 +21,8 @@ export function LoginPage() {
         : await authApi.register(email, password)
 
       localStorage.setItem('access_token', data.access_token)
+      if (data.refresh_token) localStorage.setItem('refresh_token', data.refresh_token)
+      persistUserIdFromAccessToken(data.access_token)
       navigate('/')
     } catch (err: any) {
       setError(err.response?.data?.detail ?? 'Ошибка. Попробуйте снова.')

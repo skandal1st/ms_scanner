@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 export function LaunchPage() {
   const navigate = useNavigate()
@@ -37,6 +38,7 @@ export function LaunchPage() {
         }
         localStorage.setItem('access_token', data.access_token)
         localStorage.setItem('refresh_token', data.refresh_token)
+        persistUserIdFromAccessToken(data.access_token)
         navigate(target, { replace: true })
       })
       .catch((err) => {
