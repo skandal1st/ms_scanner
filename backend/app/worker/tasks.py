@@ -4,6 +4,7 @@ from typing import Optional
 
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
+from app.services.chestnyznak import normalize_gtin_key
 
 
 def _run(coro):
@@ -87,7 +88,7 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
     for p in doc.plan:
         if not isinstance(p, dict):
             continue
-        if p.get("gtin") != scan.gtin:
+        if normalize_gtin_key(p.get("gtin")) != normalize_gtin_key(scan.gtin):
             continue
         name = (p.get("product_name") or "").strip()
         if name:
@@ -111,7 +112,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
     from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1, canonicalize_marking_scan_code
     from app.core.security import decrypt_token
     from app.core.config import settings
-    from sqlalchemy import select, func
+    from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
         scan_result = await db.execute(select(Scan).where(Scan.id == scan_id))
@@ -201,6 +202,10 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
         scan.serial = verify_result.serial
         scan.product_name = verify_result.product_name or scan.product_name
         scan.verified_at = datetime.now(timezone.utc)
+        if scan.gtin:
+            gk = normalize_gtin_key(scan.gtin)
+            if gk:
+                scan.gtin = gk
 
         # Проверка плана: если документ имеет план и для GTIN скана уже
         # отсканировано >= expected_qty валидных — текущий скан переводим
@@ -211,24 +216,29 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
             )
             doc = doc_q.scalar_one_or_none()
             plan_items = (doc.plan or []) if doc else []
+            scan_key = normalize_gtin_key(scan.gtin)
             expected = next(
                 (
                     int(p.get("expected_qty") or 0)
                     for p in plan_items
-                    if isinstance(p, dict) and p.get("gtin") == scan.gtin
+                    if isinstance(p, dict)
+                    and normalize_gtin_key(p.get("gtin")) == scan_key
                 ),
                 None,
             )
             if expected is not None and expected > 0:
-                count_q = await db.execute(
-                    select(func.count(Scan.id)).where(
+                prev_q = await db.execute(
+                    select(Scan.gtin).where(
                         Scan.document_id == scan.document_id,
-                        Scan.gtin == scan.gtin,
                         Scan.status == ScanStatus.valid,
                         Scan.id != scan.id,
                     )
                 )
-                already = count_q.scalar() or 0
+                already = sum(
+                    1
+                    for (g,) in prev_q.all()
+                    if g and normalize_gtin_key(g) == scan_key
+                )
                 if already + 1 > expected:
                     # overflow — визуально красный, но при подтверждении
                     # документа всё равно уйдёт в МС (вместе с valid).
@@ -345,17 +355,21 @@ async def _process_document_async(document_id: str, user_id: str):
             # product_id: сначала план документа (позиции этой отгрузки/приёмки в МС),
             # иначе поиск в каталоге по штрихкоду — иначе КМ без баркода в карточке
             # не попадёт в update_document (там отбрасываются строки без product_id).
-            unique_gtins = {s.gtin for s in valid_scans if s.gtin}
+            unique_gtins = {
+                normalize_gtin_key(s.gtin) for s in valid_scans if s.gtin
+            }
+            unique_gtins.discard(None)
             gtin_to_product_id: dict[str, str] = {}
             for p in doc.plan or []:
                 if not isinstance(p, dict):
                     continue
                 g, pid = p.get("gtin"), p.get("product_id")
-                if g and pid and isinstance(g, str) and isinstance(pid, str):
-                    gtin_to_product_id.setdefault(g, pid)
+                ng = normalize_gtin_key(g)
+                if ng and pid and isinstance(pid, str):
+                    gtin_to_product_id.setdefault(ng, pid)
 
             for gtin in unique_gtins:
-                if gtin in gtin_to_product_id:
+                if not gtin or gtin in gtin_to_product_id:
                     continue
                 product = await ms.find_product_by_gtin(gtin)
                 if product:
@@ -373,7 +387,11 @@ async def _process_document_async(document_id: str, user_id: str):
                     "gtin": s.gtin,
                     "product_id": (
                         s.moysklad_product_id
-                        or (gtin_to_product_id.get(s.gtin) if s.gtin else None)
+                        or (
+                            gtin_to_product_id.get(normalize_gtin_key(s.gtin))
+                            if s.gtin
+                            else None
+                        )
                     ),
                 }
                 for s in valid_scans

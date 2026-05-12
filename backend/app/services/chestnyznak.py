@@ -344,6 +344,26 @@ def _digits_gtin14_from_value(v: Any) -> Optional[str]:
     return None
 
 
+def normalize_gtin_key(v: Any) -> Optional[str]:
+    """
+    Единый GTIN-14 для сравнения плана МС и поля scan.gtin.
+    Устраняет расхождение «тот же товар, разные строки» (13 vs 14 цифр,
+    ведущий ноль, хвост из лишних цифр из ответа ЧЗ).
+    """
+    if v is None:
+        return None
+    d = "".join(c for c in str(v).strip() if c.isdigit())
+    if not d:
+        return None
+    if len(d) > 14:
+        return d[-14:]
+    if len(d) == 14:
+        return d
+    if len(d) == 13:
+        return d.zfill(14)
+    return d.zfill(14)
+
+
 def _gtin_from_cz_facade_payload(data: dict) -> Optional[str]:
     for key in ("gtin", "identifiedGtin", "gtin14", "gtin13"):
         g = _digits_gtin14_from_value(data.get(key))

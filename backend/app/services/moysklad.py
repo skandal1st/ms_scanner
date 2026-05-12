@@ -2,6 +2,7 @@ import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.chestnyznak import normalize_gtin_key
 
 
 # Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
@@ -102,8 +103,12 @@ class MoySkladService:
             for bc in barcodes:
                 if isinstance(bc, dict):
                     raw = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
-                    if raw:
-                        gtin = raw.zfill(14) if raw.isdigit() and len(raw) <= 14 else raw
+                    if raw is not None and str(raw).strip() != "":
+                        raw_str = str(raw).strip()
+                        if raw_str.isdigit() and len(raw_str) <= 14:
+                            gtin = normalize_gtin_key(raw_str.zfill(14))
+                        else:
+                            gtin = normalize_gtin_key(raw_str)
                         break
             qty = pos.get("quantity") or 0
             try:

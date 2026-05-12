@@ -64,6 +64,17 @@ function calcStats(scans: Scan[]): Stats {
   )
 }
 
+/** Единый GTIN-14 для сравнения плана и scan.gtin (как на бэкенде normalize_gtin_key). */
+export function normalizeGtinKey(g: string | number | null | undefined): string | null {
+  if (g == null || g === '') return null
+  const d = String(g).replace(/\D/g, '')
+  if (!d) return null
+  if (d.length > 14) return d.slice(-14)
+  if (d.length === 14) return d
+  if (d.length === 13) return d.padStart(14, '0')
+  return d.padStart(14, '0')
+}
+
 function groupKey(scan: Scan): string {
   return scan.gtin || scan.code.slice(0, 32) || 'unknown'
 }
@@ -74,10 +85,15 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
   if (planItems.length > 0) {
     const rows: ProgressRow[] = planItems.map((p) => {
       const gtin = p.gtin as string
-      const addedTotal = scans.filter(
-        (s) => s.gtin === gtin && (s.status === 'valid' || s.status === 'overflow')
-      ).length
-      const scanned = scans.filter((s) => s.gtin === gtin && s.status === 'valid').length
+      const planKey = normalizeGtinKey(gtin)
+      const addedTotal = scans.filter((s) => {
+        const sk = normalizeGtinKey(s.gtin)
+        return sk != null && sk === planKey && (s.status === 'valid' || s.status === 'overflow')
+      }).length
+      const scanned = scans.filter((s) => {
+        const sk = normalizeGtinKey(s.gtin)
+        return sk != null && sk === planKey && s.status === 'valid'
+      }).length
       return {
         gtin,
         product_id: (p.product_id as string) || null,
