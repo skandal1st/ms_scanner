@@ -25,13 +25,13 @@ class DocumentStatus(str, PyEnum):
 class DocumentKind(str, PyEnum):
     """
     Тип МС-документа, к которому привязан наш Document.
-    supply        — Поступление (приёмка от поставщика, ввод в оборот в ЧЗ).
+    supply        — Поступление (приёмка): коды пишутся в МС (trackingCodes).
     demand        — Отгрузка покупателю.
     loss          — Списание.
     move          — Перемещение.
     salesreturn   — Возврат покупателя.
-    Для всех отгрузочных типов вывод из оборота в ЧЗ не делается —
-    только сохранение кодов в positions[].things в МС.
+    Проверка КМ по умолчанию без API ЧЗ; API ЧЗ + УКЭП — только для SSCC-коробов
+    при включённом режиме в настройках.
     """
     supply = "supply"
     demand = "demand"
@@ -75,6 +75,7 @@ class Integration(Base):
     cz_cert_thumbprint = Column(String(64), nullable=True)
     cz_cert_subject = Column(String(500), nullable=True)
     cz_auth_method = Column(String(16), nullable=False, default="mock", server_default="mock")
+    cz_box_mode_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")

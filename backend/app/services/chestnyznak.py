@@ -255,6 +255,57 @@ def _extract_serial(code: str) -> Optional[str]:
     return None
 
 
+def _gs1_check_digit_ok(gtin14: str) -> bool:
+    """Проверка контрольной цифры GTIN-14 (модуль 10 GS1)."""
+    if len(gtin14) != 14 or not gtin14.isdigit():
+        return False
+    body, check = gtin14[:13], int(gtin14[13])
+    total = 0
+    weight = 3
+    for ch in reversed(body):
+        total += int(ch) * weight
+        weight = 4 - weight
+    calc = (10 - (total % 10)) % 10
+    return calc == check
+
+
+def verify_code_local_gs1(code: str) -> VerifyResult:
+    """Проверка структуры КМ без API Честного Знака (формат GS1 + контрольная сумма GTIN)."""
+    gtin = extract_gtin(code)
+    serial = _extract_serial(code)
+    if not gtin or len(gtin) != 14 or not gtin.isdigit():
+        return VerifyResult(
+            valid=False,
+            gtin=gtin,
+            serial=serial,
+            status="BAD_FORMAT",
+            error="Некорректный формат: ожидается AI 01 и GTIN из 14 цифр",
+        )
+    if not _gs1_check_digit_ok(gtin):
+        return VerifyResult(
+            valid=False,
+            gtin=gtin,
+            serial=serial,
+            status="BAD_GTIN",
+            error="Неверная контрольная сумма GTIN",
+        )
+    if not serial or not serial.strip():
+        return VerifyResult(
+            valid=False,
+            gtin=gtin,
+            serial=serial,
+            status="NO_SERIAL",
+            error="Не удалось извлечь серийный номер (AI 21)",
+        )
+    return VerifyResult(
+        valid=True,
+        gtin=gtin,
+        serial=serial.strip(),
+        status="IN_CIRCULATION",
+        product_name=None,
+    )
+
+
 def _mock_product_name(gtin: Optional[str]) -> str:
     names = ["Молоко 3.2% 1л", "Вода минеральная 0.5л", "Сок апельсиновый 1л",
              "Кефир 2.5% 900г", "Йогурт клубничный 150г"]

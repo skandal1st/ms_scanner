@@ -24,11 +24,13 @@ class IntegrationResponse(BaseModel):
     cz_token_valid_until: Optional[datetime] = None
     cz_cert_subject: Optional[str] = None
     cz_auth_method: str = "mock"
+    cz_box_mode_enabled: bool = False
 
 
 class UpdateIntegrationRequest(BaseModel):
     moysklad_token: Optional[str] = None
     cz_token: Optional[str] = None
+    cz_box_mode_enabled: Optional[bool] = None
 
 
 class CzChallengeResponse(BaseModel):
@@ -55,6 +57,7 @@ def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
             moysklad_account_name=None,
             has_cz=False,
             cz_auth_method=settings.CZ_AUTH_METHOD,
+            cz_box_mode_enabled=False,
         )
     has_cz = bool(integration.cz_token) and (
         integration.cz_token_expires_at is None
@@ -67,6 +70,7 @@ def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
         cz_token_valid_until=integration.cz_token_expires_at,
         cz_cert_subject=integration.cz_cert_subject,
         cz_auth_method=integration.cz_auth_method or settings.CZ_AUTH_METHOD,
+        cz_box_mode_enabled=bool(integration.cz_box_mode_enabled),
     )
 
 
@@ -102,6 +106,8 @@ async def update_integration(
         integration.moysklad_token = encrypt_token(body.moysklad_token) if body.moysklad_token else None
     if body.cz_token is not None:
         integration.cz_token = encrypt_token(body.cz_token) if body.cz_token else None
+    if body.cz_box_mode_enabled is not None:
+        integration.cz_box_mode_enabled = body.cz_box_mode_enabled
 
     await db.commit()
     await db.refresh(integration)

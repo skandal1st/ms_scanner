@@ -19,14 +19,12 @@ interface ScanStore {
   document: Document | null
   scans: Scan[]
   stats: Stats
-  czTokenExpired: boolean
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
   addScan: (scan: Scan) => void
   updateScan: (id: string, update: Partial<Scan>) => void
   removeScan: (id: string) => void
-  setCzTokenExpired: (v: boolean) => void
   reset: () => void
   getProgress: () => PlanProgress
 }
@@ -74,7 +72,6 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
   stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
-  czTokenExpired: false,
 
   setDocument: (doc) => set({ document: doc }),
 
@@ -98,14 +95,11 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       return { scans, stats: calcStats(scans) }
     }),
 
-  setCzTokenExpired: (v) => set({ czTokenExpired: v }),
-
   reset: () =>
     set({
       document: null,
       scans: [],
       stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
-      czTokenExpired: false,
     }),
 
   getProgress: () => {

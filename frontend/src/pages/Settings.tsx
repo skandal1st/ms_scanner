@@ -9,7 +9,7 @@ interface SettingsPageProps {
   embedded?: boolean
 }
 
-export function SettingsPage({ embedded = false }: SettingsPageProps = {}) {
+export function SettingsPage({ embedded = false }: SettingsPageProps) {
   const [msToken, setMsToken] = useState('')
   const [pluginStatus, setPluginStatus] = useState<PluginStatus | 'checking'>('checking')
   const [certThumb, setCertThumb] = useState<string | null>(null)
@@ -22,8 +22,8 @@ export function SettingsPage({ embedded = false }: SettingsPageProps = {}) {
     queryFn: () => integrationsApi.get().then((r) => r.data),
   })
 
-  const updateMutation = useMutation({
-    mutationFn: (data: { moysklad_token?: string }) =>
+  const patchIntegration = useMutation({
+    mutationFn: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean }) =>
       integrationsApi.update(data).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
   })
@@ -88,8 +88,8 @@ export function SettingsPage({ embedded = false }: SettingsPageProps = {}) {
                 <button
                   type="button"
                   className="button button--success"
-                  disabled={!msToken.trim() || updateMutation.isPending}
-                  onClick={() => updateMutation.mutate({ moysklad_token: msToken })}
+                  disabled={!msToken.trim() || patchIntegration.isPending}
+                  onClick={() => patchIntegration.mutate({ moysklad_token: msToken })}
                 >
                   Сохранить
                 </button>
@@ -108,9 +108,11 @@ export function SettingsPage({ embedded = false }: SettingsPageProps = {}) {
           loginPending={czLoginMutation.isPending}
           logoutPending={czLogoutMutation.isPending}
           error={czError}
+          boxModePending={patchIntegration.isPending}
+          onBoxModeToggle={(v) => patchIntegration.mutate({ cz_box_mode_enabled: v })}
         />
 
-        {updateMutation.isSuccess && (
+        {patchIntegration.isSuccess && (
           <div className="alert alert--ok mt-12">Настройки сохранены</div>
         )}
       </div>
@@ -128,6 +130,8 @@ interface CzSectionProps {
   loginPending: boolean
   logoutPending: boolean
   error: string | null
+  boxModePending: boolean
+  onBoxModeToggle: (enabled: boolean) => void
 }
 
 function CzSection(p: CzSectionProps) {
@@ -136,12 +140,19 @@ function CzSection(p: CzSectionProps) {
     ? new Date(p.integration.cz_token_valid_until)
     : null
   const isLoggedIn = !!p.integration?.has_cz
+  const boxMode = !!p.integration?.cz_box_mode_enabled
 
-  const badge = isLoggedIn
-    ? { cls: 'badge--ok',    text: 'Авторизован' }
-    : isMock
-      ? { cls: 'badge--warn',  text: 'Mock режим' }
-      : { cls: 'badge--error', text: 'Требуется вход через УКЭП' }
+  const badge = isMock
+    ? (isLoggedIn
+        ? { cls: 'badge--ok', text: 'Mock-токен' }
+        : { cls: 'badge--warn', text: 'Mock режим' })
+    : !boxMode
+      ? { cls: 'badge--ok', text: 'УКЭП не обязателен' }
+      : isLoggedIn
+        ? { cls: 'badge--ok', text: 'УКЭП для коробов' }
+        : { cls: 'badge--error', text: 'Нужен вход УКЭП' }
+
+  const showUkepControls = isMock || boxMode
 
   return (
     <section className="section">
@@ -150,8 +161,25 @@ function CzSection(p: CzSectionProps) {
         <span className={`badge ${badge.cls}`}>{badge.text}</span>
       </div>
 
+      <p className="hint">
+        Сканирование единичных кодов маркировки и запись в документ МойСклад работают без входа
+        в Честный Знак: проверяется формат GS1, а валидация CIS выполняется на стороне МойСклад.
+      </p>
+
+      <label className="field-row mt-8" style={{ alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={boxMode}
+          disabled={p.boxModePending}
+          onChange={(e) => p.onBoxModeToggle(e.target.checked)}
+        />
+        <span>
+          Режим сканирования коробов (SSCC): распаковка через API Честного Знака после входа по УКЭП.
+        </span>
+      </label>
+
       {isLoggedIn && (
-        <div className="settings-status">
+        <div className="settings-status mt-8">
           {p.integration?.cz_cert_subject && (
             <div className="settings-status__row">
               <span className="settings-status__label">Сертификат:</span>
@@ -167,12 +195,18 @@ function CzSection(p: CzSectionProps) {
         </div>
       )}
 
-      {isMock ? (
+      {!showUkepControls && (
+        <p className="hint mt-8">
+          Включите «Режим сканирования коробов» выше, чтобы появились поля входа по УКЭП
+          (КриптоПро Browser Plugin).
+        </p>
+      )}
+
+      {showUkepControls && isMock ? (
         <>
-          <p className="hint">
-            Сервер запущен в mock-режиме (<code>CZ_AUTH_METHOD=mock</code>) — реальный
-            ЧЗ не вызывается. Кнопка ниже выдаст фейковый токен на 1 час, чтобы можно
-            было протестировать UI.
+          <p className="hint mt-8">
+            Сервер в mock-режиме (<code>CZ_AUTH_METHOD=mock</code>) — реальный ЧЗ не вызывается.
+            Кнопка ниже выдаст фейковый токен на 1 час для теста UI.
           </p>
           <div className="buttons mt-8">
             <button
@@ -195,19 +229,19 @@ function CzSection(p: CzSectionProps) {
             )}
           </div>
         </>
-      ) : p.pluginStatus === 'checking' ? (
-        <p className="hint">Проверка КриптоПро Browser Plugin…</p>
-      ) : p.pluginStatus === 'absent' ? (
-        <div className="alert alert--error">
+      ) : showUkepControls && p.pluginStatus === 'checking' ? (
+        <p className="hint mt-8">Проверка КриптоПро Browser Plugin…</p>
+      ) : showUkepControls && p.pluginStatus === 'absent' ? (
+        <div className="alert alert--error mt-8">
           КриптоПро Browser Plugin не обнаружен.{' '}
           <a href="https://www.cryptopro.ru/products/cades/plugin" target="_blank" rel="noreferrer">
             Установить
           </a>
           {' '}и перезагрузить страницу.
         </div>
-      ) : (
+      ) : showUkepControls ? (
         <>
-          <p className="hint">
+          <p className="hint mt-8">
             Выберите сертификат УКЭП, которым вы зарегистрированы в Честном Знаке.
             Подпись не покидает ваш компьютер — мы получаем только готовый CAdES-BES blob.
           </p>
@@ -243,7 +277,7 @@ function CzSection(p: CzSectionProps) {
             )}
           </div>
         </>
-      )}
+      ) : null}
 
       {p.error && <div className="alert alert--error mt-8">{p.error}</div>}
     </section>

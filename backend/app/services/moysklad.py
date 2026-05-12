@@ -4,10 +4,9 @@ from app.core.config import settings
 from app.core.logging import logger
 
 
-# Для каких МС-документов в позиции нужно записывать коды маркировки
-# (поле trackingCodes). Для приёмки маркировка идёт в ЧЗ (accept_batch),
-# в МС достаточно факта поступления без trackingCodes.
-WRITE_TRACKING_CODES_KINDS = {"demand", "loss", "salesreturn"}
+# Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
+# МойСклад сам валидирует CIS; отдельный ввод в оборот через API ЧЗ в приложении не делаем.
+WRITE_TRACKING_CODES_KINDS = {"supply", "demand", "loss", "salesreturn"}
 
 # Все типы МС-документов, поддерживаемые приложением.
 # move (Перемещение) исключён: XSD-схема дескриптора не разрешает update
@@ -129,15 +128,11 @@ class MoySkladService:
         """
         Обновить позиции МС-документа на основе сканов.
         Сканы группируются по product_id: один товар = одна позиция с quantity
-        и (для отгрузочных типов) trackingCodes — список CIS маркировки.
+        и (если не mock сервера) trackingCodes — список CIS маркировки.
 
-        Важно: МС валидирует каждый CIS через реальный ЧЗ. Mock-коды от
-        нашего unpack_box не пройдут (МС вернёт 412 «неверный формат кода
-        маркировки»). Поэтому в mock-режиме (`CZ_MOCK_MODE=true`) шлём
-        позиции БЕЗ trackingCodes — это позволяет прогнать end-to-end pipe
-        (МС видит обновлённый документ с количеством), не упираясь в
-        реальную проверку кодов. Прод-режим (CZ_MOCK_MODE=false) пишет
-        настоящие коды от сканера — там валидность гарантирована ЧЗ.
+        В mock-режиме (`CZ_MOCK_MODE=true`) trackingCodes не шлём: МС валидирует
+        CIS через ЧЗ, фейковые коды из dev не пройдут. В проде пишем коды для
+        supply и отгрузочных типов — валидность обеспечивает МойСклад.
         """
         self._validate_kind(kind)
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE

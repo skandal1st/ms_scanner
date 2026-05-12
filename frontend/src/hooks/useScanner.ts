@@ -18,7 +18,7 @@ function playBeep(type: 'ok' | 'error') {
 }
 
 export function useScanner(documentId: string | null) {
-  const { addScan, updateScan, setCzTokenExpired } = useScanStore()
+  const { addScan, updateScan } = useScanStore()
   const wsRef = useRef<WebSocket | null>(null)
 
   // WebSocket — получаем обновления статусов от Celery
@@ -40,9 +40,6 @@ export function useScanner(documentId: string | null) {
         })
         if (data.status === 'valid') playBeep('ok')
         else if (data.status === 'invalid' || data.status === 'overflow') playBeep('error')
-      } else if (data.type === 'cz_token_expired') {
-        setCzTokenExpired(true)
-        playBeep('error')
       }
     }
 
@@ -55,7 +52,7 @@ export function useScanner(documentId: string | null) {
       clearInterval(ping)
       ws.close()
     }
-  }, [updateScan, setCzTokenExpired])
+  }, [updateScan])
 
   const submitCode = useCallback(
     async (code: string) => {
@@ -79,8 +76,11 @@ export function useScanner(documentId: string | null) {
           }
           addScan(scan)
         }
-      } catch (err) {
+      } catch (err: unknown) {
         playBeep('error')
+        const ax = err as { response?: { data?: { detail?: unknown } } }
+        const d = ax?.response?.data?.detail
+        if (typeof d === 'string' && d) window.alert(d)
         console.error('Scan error:', err)
       }
     },

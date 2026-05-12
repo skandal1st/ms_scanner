@@ -5,11 +5,13 @@ from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus
+from app.db.models import User, Scan, Document, ScanStatus, Integration
 from app.api.deps import get_current_user
+from app.core.config import settings
+from app.core.security import decrypt_token
 from app.services.chestnyznak import (
     ChestnyZnakService,
     is_sscc,
@@ -92,7 +94,7 @@ async def _create_scan_record(
 
     await db.refresh(scan)
 
-    # Очередь Celery для проверки в ЧЗ
+    # Очередь Celery: проверка формата кода / mock ЧЗ
     from app.worker.tasks import verify_code_task
     verify_code_task.delay(str(scan.id), code, str(current_user_id))
     return scan, False
@@ -122,13 +124,44 @@ async def create_box_scans(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Принять SSCC-код короба: распаковать через ЧЗ на индивидуальные KM и
-    создать по скану на каждый. Возвращает массив созданных сканов
-    (включая дубли — они со статусом duplicate).
+    Принять SSCC-код короба: распаковать на индивидуальные KM и создать по скану на каждый.
+
+    В проде (CZ_MOCK_MODE=false) требуется включённый режим коробов в настройках и
+    действующий вход в Честный Знак по УКЭП; в dev/mock — без ограничений.
+    Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
     doc = await _ensure_document_owner(body.document_id, current_user, db)
     if not is_sscc(body.sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
+
+    int_result = await db.execute(
+        select(Integration).where(Integration.user_id == current_user.id)
+    )
+    integration = int_result.scalar_one_or_none()
+
+    if not settings.CZ_MOCK_MODE:
+        if not integration or not integration.cz_box_mode_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail="Распаковка коробов отключена. Включите режим в настройках и войдите через УКЭП.",
+            )
+        cz_token = (
+            decrypt_token(integration.cz_token)
+            if integration.cz_token
+            else None
+        )
+        expired = (
+            integration.cz_token_expires_at is not None
+            and integration.cz_token_expires_at <= datetime.now(timezone.utc)
+        )
+        if not cz_token or expired:
+            raise HTTPException(
+                status_code=403,
+                detail="Нужен действующий вход в Честный Знак (УКЭП) для распаковки коробов.",
+            )
+        cz = ChestnyZnakService(token=cz_token, mock=False)
+    else:
+        cz = ChestnyZnakService(token=None)
 
     plan_gtins = [
         item.get("gtin")
@@ -136,8 +169,13 @@ async def create_box_scans(
         if isinstance(item, dict) and item.get("gtin")
     ]
 
-    cz = ChestnyZnakService(token=None)  # mock не требует токена
-    member_codes = await cz.unpack_box(body.sscc, plan_gtins)
+    try:
+        member_codes = await cz.unpack_box(body.sscc, plan_gtins)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail="Распаковка SSCC через API Честного Знака на сервере пока не настроена.",
+        )
 
     scans: List[Scan] = []
     for code in member_codes:

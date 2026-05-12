@@ -6,12 +6,6 @@ from app.worker.celery_app import celery_app
 from app.core.logging import logger
 
 
-# Типы документов, которые требуют ввода в оборот в ЧЗ при подтверждении.
-# Для всех остальных (demand/loss/move/salesreturn) ЧЗ-API не вызывается —
-# только обновление МС-документа с записью кодов в positions[].trackingCodes.
-CZ_INTRODUCE_KINDS = {"supply"}
-
-
 def _run(coro):
     """Запустить корутину из синхронного Celery воркера."""
     return asyncio.get_event_loop().run_until_complete(coro)
@@ -19,7 +13,7 @@ def _run(coro):
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
 def verify_code_task(self, scan_id: str, code: str, user_id: str):
-    """Проверить код маркировки в ЧЗ и обновить статус скана."""
+    """Проверить код маркировки (mock ЧЗ или формат GS1) и обновить статус скана."""
     try:
         _run(_verify_code_async(scan_id, code, user_id))
     except Exception as exc:
@@ -30,54 +24,36 @@ def verify_code_task(self, scan_id: str, code: str, user_id: str):
 async def _verify_code_async(scan_id: str, code: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus, Document, Integration
-    from app.services.chestnyznak import ChestnyZnakService
+    from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1
     from app.core.security import decrypt_token
     from app.core.config import settings
     from sqlalchemy import select, func
 
     async with AsyncSessionLocal() as db:
-        # Получаем токен ЧЗ пользователя
-        result = await db.execute(
-            select(Integration).where(Integration.user_id == user_id)
-        )
-        integration = result.scalar_one_or_none()
-        cz_token = None
-        token_expired = False
-        if integration and integration.cz_token:
-            if (
-                integration.cz_token_expires_at is not None
-                and integration.cz_token_expires_at <= datetime.now(timezone.utc)
-            ):
-                token_expired = True
-            else:
-                cz_token = decrypt_token(integration.cz_token)
-
-        # Получаем скан заранее — он нужен и для happy-path, и для expiry-ветки
         scan_result = await db.execute(select(Scan).where(Scan.id == scan_id))
         scan = scan_result.scalar_one_or_none()
         if not scan:
             logger.error("verify_code.scan_not_found", scan_id=scan_id)
             return
 
-        # Если токен ЧЗ протух или отсутствует при не-mock методе — не ходим в ЧЗ.
-        # Авто-обновить мы не можем: для нового токена нужна свежая подпись УКЭП
-        # из браузера клиента. Просим фронт через WS показать «Войти заново».
-        auth_method = (integration.cz_auth_method if integration else settings.CZ_AUTH_METHOD)
-        needs_login = auth_method != "mock" and (token_expired or not cz_token)
-        if needs_login:
-            scan.status = ScanStatus.invalid
-            scan.error_message = "Требуется обновить вход в Честный Знак"
-            scan.verified_at = datetime.now(timezone.utc)
-            await db.commit()
-            logger.warning(
-                "verify_code.cz_token_expired", scan_id=scan_id, user_id=user_id,
+        # Проверка КМ: в mock-режиме сервера — имитация ЧЗ; иначе только формат GS1
+        # (без УКЭП и без API ЧЗ). МойСклад проверит CIS при записи в документ.
+        if settings.CZ_MOCK_MODE:
+            int_q = await db.execute(
+                select(Integration).where(Integration.user_id == user_id)
             )
-            await _push_ws_update(user_id, scan_id, scan.status, None, scan.error_message)
-            await _push_cz_token_expired(user_id)
-            return
-
-        cz = ChestnyZnakService(token=cz_token)
-        verify_result = await cz.verify_code(code)
+            integration = int_q.scalar_one_or_none()
+            cz_token = None
+            if integration and integration.cz_token:
+                if (
+                    integration.cz_token_expires_at is None
+                    or integration.cz_token_expires_at > datetime.now(timezone.utc)
+                ):
+                    cz_token = decrypt_token(integration.cz_token)
+            cz = ChestnyZnakService(token=cz_token)
+            verify_result = await cz.verify_code(code)
+        else:
+            verify_result = verify_code_local_gs1(code)
 
         if verify_result.valid:
             scan.status = ScanStatus.valid
@@ -156,28 +132,11 @@ async def _push_ws_update(user_id: str, scan_id: str, status: str,
     await r.aclose()
 
 
-async def _push_cz_token_expired(user_id: str):
-    import redis.asyncio as aioredis
-    import json
-    from app.core.config import settings
-
-    r = aioredis.from_url(settings.REDIS_URL)
-    try:
-        await r.publish(
-            f"ws:{user_id}",
-            json.dumps({"type": "cz_token_expired"}),
-        )
-    finally:
-        await r.aclose()
-
-
 @celery_app.task(name="process_document")
 def process_document_task(document_id: str, user_id: str):
     """
-    Завершить документ. Поведение зависит от document.kind:
-    - supply: ввод в оборот в ЧЗ + обновление МС.
-    - demand/loss/move/salesreturn: только обновление МС с trackingCodes
-      (поиск product_id по GTIN на лету).
+    Завершить документ: обновление МС с trackingCodes (supply и отгрузочные типы),
+    поиск product_id по GTIN на лету. API Честного Знака не вызывается.
     """
     try:
         _run(_process_document_async(document_id, user_id))
@@ -195,7 +154,6 @@ def accept_document_task(document_id: str, user_id: str):
 async def _process_document_async(document_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus, Scan, ScanStatus, Integration
-    from app.services.chestnyznak import ChestnyZnakService
     from app.services.moysklad import MoySkladService
     from app.core.security import decrypt_token
     from sqlalchemy import select
@@ -233,14 +191,7 @@ async def _process_document_async(document_id: str, user_id: str):
         )
         integration = int_result.scalar_one_or_none()
 
-        # Шаг 1 — ЧЗ ввод в оборот (только для приёмки)
-        if kind in CZ_INTRODUCE_KINDS and valid_scans:
-            cz_token = decrypt_token(integration.cz_token) if integration and integration.cz_token else None
-            cz = ChestnyZnakService(token=cz_token)
-            codes = [s.code for s in valid_scans]
-            await cz.accept_batch(codes, document_id)
-
-        # Шаг 2 — обновление МС-документа
+        # Обновление МС-документа (trackingCodes для supply и отгрузочных типов)
         if doc.moysklad_id and integration and integration.moysklad_token and valid_scans:
             ms_token = decrypt_token(integration.moysklad_token)
             ms = MoySkladService(ms_token)
@@ -269,7 +220,7 @@ async def _process_document_async(document_id: str, user_id: str):
             ]
             await ms.update_document(kind, doc.moysklad_id, scans_data)
 
-        # Шаг 3 — финальный статус документа
+        # Финальный статус документа
         doc.status = DocumentStatus.accepted
         await db.commit()
 

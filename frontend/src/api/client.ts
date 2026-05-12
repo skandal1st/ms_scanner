@@ -108,11 +108,12 @@ export interface Integration {
   cz_token_valid_until: string | null
   cz_cert_subject: string | null
   cz_auth_method: 'mock' | 'cprob_plugin'
+  cz_box_mode_enabled: boolean
 }
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
-  update: (data: { moysklad_token?: string; cz_token?: string }) =>
+  update: (data: { moysklad_token?: string; cz_token?: string; cz_box_mode_enabled?: boolean }) =>
     api.put<Integration>('/integrations/', data),
 }
 
