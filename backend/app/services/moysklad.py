@@ -223,6 +223,18 @@ class MoySkladService:
                         return row
         return None
 
+    async def get_product_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
+        """Карточка товара по UUID — имя для ручной привязки КМ к позиции."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/product/{product_id}",
+                headers=self.headers,
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+
     # --- Алиасы для backward-совместимости старого приёмочного кода ---
 
     async def get_supplies(self, limit: int = 50) -> List[Dict[str, Any]]:

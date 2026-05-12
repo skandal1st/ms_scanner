@@ -69,9 +69,16 @@ function ScanRow({
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
-          {scan.product_name
-            ? scan.product_name
-            : <span className="text-muted">—</span>}
+          {scan.product_name ? (
+            scan.product_name
+          ) : (
+            <span className="text-muted">—</span>
+          )}
+          {scan.moysklad_product_id ? (
+            <div className="text-muted" style={{ fontSize: 10, marginTop: 2 }}>
+              → товар МС {scan.moysklad_product_id.slice(0, 8)}…
+            </div>
+          ) : null}
         </td>
         <td>
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>

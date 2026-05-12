@@ -12,6 +12,8 @@ interface Stats {
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
 export interface ProgressRow {
   gtin: string
+  /** UUID товара в МС из плана (для ручного выбора строки). */
+  product_id: string | null
   product_name: string
   expected: number
   /** Сколько сканов в статусе valid (в рамках плана; для футера «в плане»). */
@@ -39,6 +41,9 @@ interface ScanStore {
   document: Document | null
   scans: Scan[]
   stats: Stats
+  /** Явный товар МС для следующих сканов (UUID); null = только авто по GTIN/плану. */
+  targetProductId: string | null
+  setTargetProductId: (id: string | null) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -75,6 +80,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       const scanned = scans.filter((s) => s.gtin === gtin && s.status === 'valid').length
       return {
         gtin,
+        product_id: (p.product_id as string) || null,
         product_name: p.product_name,
         expected: p.expected_qty,
         scanned,
@@ -119,6 +125,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       const displayName = g.productNames[0] || g.gtin || 'Без GTIN'
       return {
         gtin: g.gtin,
+        product_id: null,
         product_name: displayName,
         expected: 0,
         scanned,
@@ -148,8 +155,11 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
   stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
+  targetProductId: null,
 
-  setDocument: (doc) => set({ document: doc }),
+  setTargetProductId: (id) => set({ targetProductId: id }),
+
+  setDocument: (doc) => set({ document: doc, targetProductId: null }),
 
   setScans: (scans) => set({ scans, stats: calcStats(scans) }),
 
@@ -176,6 +186,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       document: null,
       scans: [],
       stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
+      targetProductId: null,
     }),
 
   getProgress: () => {

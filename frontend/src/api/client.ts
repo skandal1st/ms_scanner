@@ -89,13 +89,21 @@ export interface Scan {
   gtin: string | null
   status: ScanStatus
   product_name: string | null
+  /** Явная привязка к товару МС (UUID), если кладовщик выбрал строку вручную. */
+  moysklad_product_id?: string | null
   error_message: string | null
   scanned_at: string
 }
 
 export const scansApi = {
-  create: (document_id: string, code: string) =>
-    api.post<Scan>('/scans/', { document_id, code }),
+  create: (document_id: string, code: string, moysklad_product_id?: string | null) =>
+    api.post<Scan>('/scans/', {
+      document_id,
+      code,
+      ...(moysklad_product_id ? { moysklad_product_id } : {}),
+    }),
+  patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
+    api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   createBox: (document_id: string, sscc: string) =>
     api.post<Scan[]>('/scans/box', { document_id, sscc }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),

@@ -28,10 +28,11 @@ class ScanResponse(BaseModel):
     id: UUID
     document_id: UUID
     code: str
-    gtin: Optional[str]
+    gtin: Optional[str] = None
     status: ScanStatus
-    product_name: Optional[str]
-    error_message: Optional[str]
+    product_name: Optional[str] = None
+    moysklad_product_id: Optional[str] = None
+    error_message: Optional[str] = None
     scanned_at: datetime
 
     model_config = {"from_attributes": True}
@@ -40,6 +41,11 @@ class ScanResponse(BaseModel):
 class CreateScanRequest(BaseModel):
     document_id: UUID
     code: str
+    moysklad_product_id: Optional[str] = None
+
+
+class PatchScanBody(BaseModel):
+    moysklad_product_id: Optional[str] = None
 
 
 class CreateBoxRequest(BaseModel):
@@ -62,8 +68,26 @@ async def _ensure_document_owner(
     return doc
 
 
+def _normalize_moysklad_product_id(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    if len(s) > 64:
+        raise HTTPException(
+            status_code=400,
+            detail="Идентификатор товара в МойСклад слишком длинный",
+        )
+    return s
+
+
 async def _create_scan_record(
-    db: AsyncSession, document_id: UUID, code: str, current_user_id: UUID
+    db: AsyncSession,
+    document_id: UUID,
+    code: str,
+    current_user_id: UUID,
+    moysklad_product_id: Optional[str] = None,
 ) -> tuple[Scan, bool]:
     """
     Создаёт скан или возвращает существующий со статусом duplicate.
@@ -71,11 +95,24 @@ async def _create_scan_record(
     """
     code = canonicalize_marking_scan_code(code.strip())
     gtin = extract_gtin(code)
+
+    doc_row = await db.execute(select(Document).where(Document.id == document_id))
+    doc_obj = doc_row.scalar_one()
+
+    initial_name = None
+    if moysklad_product_id and doc_obj.plan:
+        for p in doc_obj.plan:
+            if isinstance(p, dict) and p.get("product_id") == moysklad_product_id:
+                initial_name = (p.get("product_name") or "").strip() or None
+                break
+
     scan = Scan(
         document_id=document_id,
         code=code,
         gtin=gtin,
+        moysklad_product_id=moysklad_product_id,
         status=ScanStatus.pending,
+        product_name=initial_name,
     )
     db.add(scan)
     try:
@@ -117,7 +154,13 @@ async def create_scan(
             400,
             "Это код короба (SSCC). Используйте /scans/box.",
         )
-    scan, _ = await _create_scan_record(db, body.document_id, body.code, current_user.id)
+    scan, _ = await _create_scan_record(
+        db,
+        body.document_id,
+        body.code,
+        current_user.id,
+        _normalize_moysklad_product_id(body.moysklad_product_id),
+    )
     return ScanResponse.model_validate(scan)
 
 
@@ -195,6 +238,46 @@ async def create_box_scans(
         scans.append(scan)
 
     return [ScanResponse.model_validate(s) for s in scans]
+
+
+@router.patch("/item/{scan_id}", response_model=ScanResponse)
+async def patch_scan_product(
+    scan_id: UUID,
+    body: PatchScanBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Задать или снять явную привязку скана к товару МС (UUID)."""
+    result = await db.execute(
+        select(Scan)
+        .join(Document)
+        .where(
+            Scan.id == scan_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    scan = result.scalar_one_or_none()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    data = body.model_dump(exclude_unset=True)
+    if "moysklad_product_id" not in data:
+        return ScanResponse.model_validate(scan)
+
+    scan.moysklad_product_id = _normalize_moysklad_product_id(body.moysklad_product_id)
+
+    doc_row = await db.execute(select(Document).where(Document.id == scan.document_id))
+    doc_obj = doc_row.scalar_one()
+    scan.product_name = None
+    if scan.moysklad_product_id and doc_obj.plan:
+        for p in doc_obj.plan:
+            if isinstance(p, dict) and p.get("product_id") == scan.moysklad_product_id:
+                scan.product_name = (p.get("product_name") or "").strip() or None
+                break
+
+    await db.commit()
+    await db.refresh(scan)
+    return ScanResponse.model_validate(scan)
 
 
 @router.get("/{document_id}", response_model=List[ScanResponse])

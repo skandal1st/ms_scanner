@@ -4,6 +4,7 @@ import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
+import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document } from '../api/client'
@@ -58,6 +59,7 @@ export function AcceptancePage() {
       <div className="acc-body">
         <div className="acc-left">
           <DocumentSelector kind="supply" onSelect={handleSelectDoc} selected={document} />
+          <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
         </div>

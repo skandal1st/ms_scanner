@@ -37,6 +37,34 @@ async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
         scan.product_name = product["name"]
 
 
+async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> None:
+    """Имя товара по явному UUID (если не нашли в плане)."""
+    if not scan.moysklad_product_id or scan.product_name:
+        return
+    from sqlalchemy import select
+    from app.db.models import Integration
+    from app.services.moysklad import MoySkladService
+    from app.core.security import decrypt_token
+
+    int_result = await db.execute(select(Integration).where(Integration.user_id == user_id))
+    integration = int_result.scalar_one_or_none()
+    if not integration or not integration.moysklad_token:
+        return
+    try:
+        token = decrypt_token(integration.moysklad_token)
+    except Exception as exc:
+        logger.warning("verify_code.ms_decrypt_failed", scan_id=str(scan.id), error=str(exc))
+        return
+    ms = MoySkladService(token)
+    try:
+        row = await ms.get_product_by_id(scan.moysklad_product_id)
+    except Exception as exc:
+        logger.warning("verify_code.ms_product_by_id_failed", scan_id=str(scan.id), error=str(exc))
+        return
+    if row and row.get("name"):
+        scan.product_name = row["name"]
+
+
 async def _enrich_scan_product_name_from_plan(db, scan) -> None:
     """Название из плана документа (позиции МС) — приоритетнее глобального поиска по GTIN."""
     from sqlalchemy import select
@@ -46,6 +74,16 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
     doc = doc_q.scalar_one_or_none()
     if not doc or not doc.plan:
         return
+    if scan.moysklad_product_id:
+        for p in doc.plan:
+            if not isinstance(p, dict):
+                continue
+            if p.get("product_id") != scan.moysklad_product_id:
+                continue
+            name = (p.get("product_name") or "").strip()
+            if name:
+                scan.product_name = name
+                return
     for p in doc.plan:
         if not isinstance(p, dict):
             continue
@@ -105,6 +143,53 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
             verify_result = await cz.verify_code(code)
         else:
             verify_result = verify_code_local_gs1(code)
+            # USB-сканер даёт сырой GS1; официальное приложение ЧЗ ходит в API.
+            # При невалидном локальном разборе — запрос в ЧЗ по полной CIS (нужен токен УКЭП).
+            if not verify_result.valid:
+                int_q = await db.execute(
+                    select(Integration).where(Integration.user_id == user_id)
+                )
+                integration = int_q.scalar_one_or_none()
+                cz_token = None
+                if integration and integration.cz_token:
+                    if (
+                        integration.cz_token_expires_at is None
+                        or integration.cz_token_expires_at > datetime.now(timezone.utc)
+                    ):
+                        try:
+                            cz_token = decrypt_token(integration.cz_token)
+                        except Exception as exc:
+                            logger.warning(
+                                "verify_code.cz_decrypt_failed",
+                                scan_id=scan_id,
+                                error=str(exc),
+                            )
+                if cz_token:
+                    from app.services.chestnyznak import CZApiError, VerifyResult
+
+                    try:
+                        cz = ChestnyZnakService(token=cz_token, mock=False)
+                        alt = await cz._real_verify(
+                            code, verify_result.gtin, verify_result.serial
+                        )
+                        if alt.valid:
+                            verify_result = alt
+                            logger.info("verify_code.chz_facade_ok", scan_id=scan_id)
+                        elif alt.gtin or alt.product_name:
+                            verify_result = VerifyResult(
+                                valid=False,
+                                gtin=alt.gtin or verify_result.gtin,
+                                serial=alt.serial or verify_result.serial,
+                                status=alt.status,
+                                error=alt.error or verify_result.error,
+                                product_name=alt.product_name,
+                            )
+                    except CZApiError as exc:
+                        logger.warning(
+                            "verify_code.chz_facade_failed",
+                            scan_id=scan_id,
+                            error=str(exc),
+                        )
 
         if verify_result.valid:
             scan.status = ScanStatus.valid
@@ -114,7 +199,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
 
         scan.gtin = verify_result.gtin or scan.gtin
         scan.serial = verify_result.serial
-        scan.product_name = verify_result.product_name
+        scan.product_name = verify_result.product_name or scan.product_name
         scan.verified_at = datetime.now(timezone.utc)
 
         # Проверка плана: если документ имеет план и для GTIN скана уже
@@ -151,7 +236,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                     scan.error_message = (
                         f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
                     )
-        if scan.status in (ScanStatus.valid, ScanStatus.overflow) and scan.gtin:
+        if scan.status in (ScanStatus.valid, ScanStatus.overflow) and (scan.gtin or scan.moysklad_product_id):
             await _enrich_scan_product_name_from_plan(db, scan)
         if (
             scan.status in (ScanStatus.valid, ScanStatus.overflow)
@@ -159,6 +244,8 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
             and not scan.product_name
         ):
             await _enrich_scan_product_name_from_ms(db, user_id, scan)
+        if scan.status in (ScanStatus.valid, ScanStatus.overflow) and not scan.product_name:
+            await _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan)
 
         await db.commit()
 
@@ -255,10 +342,21 @@ async def _process_document_async(document_id: str, user_id: str):
             ms_token = decrypt_token(integration.moysklad_token)
             ms = MoySkladService(ms_token)
 
-            # product_id ищем на лету по уникальным GTIN'ам — в Scan он не хранится
+            # product_id: сначала план документа (позиции этой отгрузки/приёмки в МС),
+            # иначе поиск в каталоге по штрихкоду — иначе КМ без баркода в карточке
+            # не попадёт в update_document (там отбрасываются строки без product_id).
             unique_gtins = {s.gtin for s in valid_scans if s.gtin}
             gtin_to_product_id: dict[str, str] = {}
+            for p in doc.plan or []:
+                if not isinstance(p, dict):
+                    continue
+                g, pid = p.get("gtin"), p.get("product_id")
+                if g and pid and isinstance(g, str) and isinstance(pid, str):
+                    gtin_to_product_id.setdefault(g, pid)
+
             for gtin in unique_gtins:
+                if gtin in gtin_to_product_id:
+                    continue
                 product = await ms.find_product_by_gtin(gtin)
                 if product:
                     gtin_to_product_id[gtin] = product["id"]
@@ -273,7 +371,10 @@ async def _process_document_async(document_id: str, user_id: str):
                 {
                     "code": s.code,
                     "gtin": s.gtin,
-                    "product_id": gtin_to_product_id.get(s.gtin) if s.gtin else None,
+                    "product_id": (
+                        s.moysklad_product_id
+                        or (gtin_to_product_id.get(s.gtin) if s.gtin else None)
+                    ),
                 }
                 for s in valid_scans
             ]

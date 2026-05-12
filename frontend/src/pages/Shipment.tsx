@@ -4,6 +4,7 @@ import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
+import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document, DocumentKind } from '../api/client'
@@ -85,6 +86,7 @@ export function ShipmentPage() {
             ))}
           </ul>
           <DocumentSelector kind={kind} onSelect={handleSelectDoc} selected={document} />
+          <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
         </div>

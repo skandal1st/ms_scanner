@@ -127,6 +127,8 @@ class Scan(Base):
     code = Column(Text, nullable=False)
     gtin = Column(String(14), nullable=True)
     serial = Column(String(50), nullable=True)
+    # Явный товар МС (UUID), если кладовщик выбрал строку вручную — приоритет при process.
+    moysklad_product_id = Column(String(64), nullable=True)
     status = Column(Enum(ScanStatus), default=ScanStatus.pending, nullable=False)
     product_name = Column(String(500), nullable=True)
     error_message = Column(Text, nullable=True)

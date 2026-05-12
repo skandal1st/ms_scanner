@@ -4,7 +4,9 @@ import random
 import time
 import uuid as uuid_lib
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
+from urllib.parse import quote
+
 import httpx
 
 from app.core.config import settings
@@ -119,11 +121,12 @@ class ChestnyZnakService:
             )
 
     async def _real_verify(self, code: str, gtin: Optional[str], serial: Optional[str]) -> VerifyResult:
-        """Реальный запрос в ЧЗ API."""
+        """Реальный запрос в ЧЗ API GET .../identificationcodes/{cis} (cis в path — URL-encode)."""
         from app.services.cz_logger import log_cz_request
 
         start = time.time()
-        url = f"{self.base_url}/api/v3/facade/identificationcodes/{code}"
+        encoded = quote(code, safe="")
+        url = f"{self.base_url}/api/v3/facade/identificationcodes/{encoded}"
         headers = {"Authorization": f"Bearer {self.token}"}
 
         try:
@@ -147,13 +150,21 @@ class ChestnyZnakService:
                 data = resp.json()
 
                 cis_status = data.get("status", "")
-                valid = cis_status == "INTRODUCED"
+                valid = str(cis_status).upper() == "INTRODUCED"
+                api_gtin = _gtin_from_cz_facade_payload(data)
+                api_serial = _serial_from_cz_facade_payload(data, serial)
+                api_name = _product_name_from_cz_facade_payload(data)
+                out_gtin = api_gtin or gtin
+                out_serial = api_serial if api_serial else serial
+                if out_serial is not None:
+                    out_serial = str(out_serial).strip() or None
                 return VerifyResult(
                     valid=valid,
-                    gtin=gtin,
-                    serial=serial,
+                    gtin=out_gtin,
+                    serial=out_serial,
                     status="IN_CIRCULATION" if valid else cis_status,
                     error=None if valid else f"Статус: {cis_status}",
+                    product_name=api_name,
                 )
 
         except httpx.TimeoutException:
@@ -303,11 +314,59 @@ _extract_gtin = extract_gtin
 
 
 def _extract_serial_canonical(code: str) -> Optional[str]:
-    if code.startswith("01") and len(code) >= 16:
-        rest = code[16:]
-        if rest.startswith("21"):
-            serial = rest[2:].split("\x1d")[0]
-            return serial[:20]
+    """Серия AI 21 после GTIN; часто перед 21 идёт GS (\\x1d). Длина серии у КМ может быть >20."""
+    if not (code.startswith("01") and len(code) >= 16):
+        return None
+    rest = code[16:]
+    while rest.startswith("\x1d"):
+        rest = rest[1:]
+    if not rest.startswith("21"):
+        return None
+    raw = rest[2:]
+    if "\x1d" in raw:
+        raw = raw.split("\x1d", 1)[0]
+    serial = raw.strip()
+    if len(serial) > 200:
+        serial = serial[:200]
+    return serial or None
+
+
+def _digits_gtin14_from_value(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    d = "".join(c for c in str(v) if c.isdigit())
+    if len(d) == 13:
+        return d.zfill(14)
+    if len(d) == 14:
+        return d
+    if len(d) > 14:
+        return d[-14:]
+    return None
+
+
+def _gtin_from_cz_facade_payload(data: dict) -> Optional[str]:
+    for key in ("gtin", "identifiedGtin", "gtin14", "gtin13"):
+        g = _digits_gtin14_from_value(data.get(key))
+        if g:
+            return g
+    return None
+
+
+def _serial_from_cz_facade_payload(data: dict, fallback: Optional[str]) -> Optional[str]:
+    for key in ("serialNumber", "serial", "sn"):
+        v = data.get(key)
+        if v is not None and str(v).strip():
+            s = str(v).strip()
+            return s[:200] if len(s) > 200 else s
+    return fallback
+
+
+def _product_name_from_cz_facade_payload(data: dict) -> Optional[str]:
+    for key in ("productName", "goodName", "productGroupName", "brand", "producerName"):
+        v = data.get(key)
+        if v is not None and str(v).strip():
+            s = str(v).strip()
+            return s[:500] if len(s) > 500 else s
     return None
 
 

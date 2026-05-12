@@ -106,7 +106,12 @@ export function useScanner(documentId: string | null) {
           }
           playBeep(anyDuplicate ? 'error' : 'ok')
         } else {
-          const { data: scan } = await scansApi.create(documentId, trimmed)
+          const targetPid = useScanStore.getState().targetProductId
+          const { data: scan } = await scansApi.create(
+            documentId,
+            trimmed,
+            targetPid || undefined
+          )
           if (scan.status === 'duplicate') {
             playBeep('error')
           }

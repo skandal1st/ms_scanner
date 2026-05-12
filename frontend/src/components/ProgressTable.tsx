@@ -5,11 +5,15 @@ export function ProgressTable() {
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
   const overflow = useScanStore((s) => s.stats.overflow)
+  const targetProductId = useScanStore((s) => s.targetProductId)
+  const setTargetProductId = useScanStore((s) => s.setTargetProductId)
   const progress = buildProgress(plan, scans)
 
   if (!progress.hasSummary) return null
 
   const title = progress.hasPlan ? 'Прогресс сборки' : 'По товарам'
+  const canPickProduct =
+    progress.hasPlan && progress.rows.some((r) => r.product_id)
 
   return (
     <div style={styles.wrap}>
@@ -30,6 +34,24 @@ export function ProgressTable() {
           </span>
         )}
       </div>
+      {canPickProduct && (
+        <div style={styles.targetBar}>
+          <span style={styles.targetLabel}>Сканировать в товар:</span>
+          <button
+            type="button"
+            className="button"
+            style={{
+              ...styles.targetBtn,
+              ...(!targetProductId
+                ? { background: '#eff6ff', borderColor: '#93c5fd', color: '#1e40af' }
+                : {}),
+            }}
+            onClick={() => setTargetProductId(null)}
+          >
+            Авто (по GTIN / плану)
+          </button>
+        </div>
+      )}
       <div style={styles.list}>
         {progress.rows.map((item) => {
           const overLine = item.expected > 0 && item.addedTotal > item.expected
@@ -53,8 +75,32 @@ export function ProgressTable() {
             ? `Добавлено ${item.addedTotal}${item.expected > 0 ? ` из ${item.expected}` : ''}`
             : `Добавлено: ${item.addedTotal}`
 
+          const isTarget = Boolean(item.product_id && targetProductId === item.product_id)
+          const rowStyle: CSSProperties = {
+            ...styles.row,
+            cursor: item.product_id ? 'pointer' : 'default',
+            outline: isTarget ? '2px solid #2563eb' : undefined,
+            outlineOffset: 2,
+            borderRadius: 6,
+            padding: item.product_id ? '2px 4px' : undefined,
+            margin: item.product_id ? '-2px -4px' : undefined,
+          }
+
           return (
-            <div key={item.gtin} style={styles.row}>
+            <div
+              key={item.gtin}
+              style={rowStyle}
+              role={item.product_id ? 'button' : undefined}
+              tabIndex={item.product_id ? 0 : undefined}
+              onClick={() => item.product_id && setTargetProductId(item.product_id)}
+              onKeyDown={(e) => {
+                if (!item.product_id) return
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setTargetProductId(item.product_id)
+                }
+              }}
+            >
               <div style={styles.rowHead}>
                 <span style={styles.name}>{item.product_name || item.gtin}</span>
                 <span style={{ ...styles.count, color }} title={item.gtin}>
@@ -113,6 +159,23 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     color: '#6b7280',
     fontVariantNumeric: 'tabular-nums',
+  },
+  targetBar: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+    paddingBottom: 10,
+    borderBottom: '1px solid #f1f5f9',
+  },
+  targetLabel: {
+    fontSize: 12,
+    color: '#64748b',
+  },
+  targetBtn: {
+    fontSize: 12,
+    padding: '4px 10px',
   },
   list: {
     display: 'flex',
