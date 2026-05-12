@@ -37,6 +37,26 @@ async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
         scan.product_name = product["name"]
 
 
+async def _enrich_scan_product_name_from_plan(db, scan) -> None:
+    """Название из плана документа (позиции МС) — приоритетнее глобального поиска по GTIN."""
+    from sqlalchemy import select
+    from app.db.models import Document
+
+    doc_q = await db.execute(select(Document).where(Document.id == scan.document_id))
+    doc = doc_q.scalar_one_or_none()
+    if not doc or not doc.plan:
+        return
+    for p in doc.plan:
+        if not isinstance(p, dict):
+            continue
+        if p.get("gtin") != scan.gtin:
+            continue
+        name = (p.get("product_name") or "").strip()
+        if name:
+            scan.product_name = name
+            return
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
 def verify_code_task(self, scan_id: str, code: str, user_id: str):
     """Проверить код маркировки и обновить статус скана."""
@@ -50,7 +70,7 @@ def verify_code_task(self, scan_id: str, code: str, user_id: str):
 async def _verify_code_async(scan_id: str, code: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus, Document, Integration
-    from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1
+    from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1, canonicalize_marking_scan_code
     from app.core.security import decrypt_token
     from app.core.config import settings
     from sqlalchemy import select, func
@@ -62,6 +82,11 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
             logger.error("verify_code.scan_not_found", scan_id=scan_id)
             return
 
+        canon = canonicalize_marking_scan_code(scan.code)
+        if canon != scan.code:
+            scan.code = canon
+
+        code = canon
         # Проверка КМ: в mock-режиме сервера — имитация ЧЗ; иначе только формат GS1
         # (без УКЭП и без API ЧЗ). МойСклад проверит CIS при записи в документ.
         if settings.CZ_MOCK_MODE:
@@ -126,6 +151,8 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                     scan.error_message = (
                         f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
                     )
+        if scan.status in (ScanStatus.valid, ScanStatus.overflow) and scan.gtin:
+            await _enrich_scan_product_name_from_plan(db, scan)
         if (
             scan.status in (ScanStatus.valid, ScanStatus.overflow)
             and scan.gtin

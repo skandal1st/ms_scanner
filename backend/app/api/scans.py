@@ -16,6 +16,7 @@ from app.core.config import settings
 from app.core.security import decrypt_token
 from app.services.chestnyznak import (
     ChestnyZnakService,
+    canonicalize_marking_scan_code,
     is_sscc,
     extract_gtin,
 )
@@ -68,6 +69,7 @@ async def _create_scan_record(
     Создаёт скан или возвращает существующий со статусом duplicate.
     Возвращает (scan, is_duplicate).
     """
+    code = canonicalize_marking_scan_code(code.strip())
     gtin = extract_gtin(code)
     scan = Scan(
         document_id=document_id,
