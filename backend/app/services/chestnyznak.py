@@ -107,21 +107,36 @@ def cis_string_for_moysklad_api(stored: str) -> str:
     """
     Значение поля cis при PUT trackingCodes в МойСклад.
 
-    МС часто ожидает разделитель FNC1 (ASCII 29) между AI 01 (GTIN) и AI 21 (серия),
-    тогда как сканер или камера отдают слитную строку вида ``01<14 цифр>21<серия>`` без ``\\x1d``.
-    ``Scan.code`` в БД остаётся сырым — правка только на границе вызова API МойСклад.
+    - FNC1 (ASCII 29) между AI 01 (GTIN) и 21, если сканер отдал слитно ``01…21…``.
+    - Удаление «битых» управляющих символов (кроме FNC1) — иначе в JSON/МС попадает
+      мусор и в ошибке 17102 видны артефакты вроде ``%c1``.
+    - Латиница в серийной части после ``\\x1d21`` в верхний регистр (криптохвост КМ, base32).
+    ``Scan.code`` в БД не меняется — только значение cis в запросе к МС.
     """
     if not stored:
         return stored
-    s = stored
-    if not (s.startswith("01") and len(s) >= 18 and s[2:16].isdigit()):
-        return stored
-    tail = s[16:]
-    if tail.startswith(_FNC1):
-        return stored
-    if tail.startswith("21"):
-        return s[:16] + _FNC1 + tail
-    return stored
+    parts: list[str] = []
+    for ch in stored.strip():
+        o = ord(ch)
+        if o == 0x1D:
+            parts.append(ch)
+        elif 0x20 <= o <= 0x7E:
+            parts.append(ch)
+    s = "".join(parts)
+
+    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
+        tail = s[16:]
+        if tail.startswith("21") and not tail.startswith(_FNC1):
+            s = s[:16] + _FNC1 + tail
+
+    marker = _FNC1 + "21"
+    pos = s.find(marker)
+    if pos != -1:
+        head = s[: pos + len(marker)]
+        serial = s[pos + len(marker) :]
+        serial_u = "".join(c.upper() if "a" <= c <= "z" else c for c in serial)
+        return head + serial_u
+    return s
 
 
 class ChestnyZnakService:

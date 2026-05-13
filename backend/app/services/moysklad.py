@@ -191,6 +191,10 @@ class MoySkladService:
         Сканы группируются по product_id: один товар = одна позиция с quantity
         и (если не mock сервера) trackingCodes — список CIS маркировки.
 
+        При HTTP 412 (неверный CIS) **не** бросает исключение: возвращает
+        ``{"__moysklad_412__": True, "body": "<текст ответа>"}`` — воркер
+        может исключить проблемный скан и повторить PUT.
+
         В mock-режиме (`CZ_MOCK_MODE=true`) trackingCodes не шлём: МС валидирует
         CIS через ЧЗ, фейковые коды из dev не пройдут. В проде пишем коды для
         supply и отгрузочных типов — валидность обеспечивает МойСклад.
@@ -311,6 +315,9 @@ class MoySkladService:
                     body=resp.text[:1000],
                     sent_codes=write_codes,
                 )
+                # 412 обрабатывает воркер (исключение из Celery доходит до пользователя).
+                if resp.status_code == 412:
+                    return {"__moysklad_412__": True, "body": resp.text}
                 resp.raise_for_status()
             logger.info(
                 "moysklad.update_document.ok",

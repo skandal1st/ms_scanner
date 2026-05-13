@@ -14,6 +14,8 @@ def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
     b = (ms_snippet or "").strip()
     if a == b:
         return True
+    if cis_string_for_moysklad_api(a) == cis_string_for_moysklad_api(b):
+        return True
     if cis_string_for_moysklad_api(a) == b or a == cis_string_for_moysklad_api(b):
         return True
     loose_a = "".join(c for c in a if c not in "\x1d\x1e")
@@ -340,7 +342,6 @@ async def _process_document_async(document_id: str, user_id: str):
     from app.services.moysklad import MoySkladService
     from app.core.security import decrypt_token
     from sqlalchemy import select
-    import httpx
 
     async with AsyncSessionLocal() as db:
         # Получаем сам документ — нужен kind для разветвления
@@ -435,14 +436,9 @@ async def _process_document_async(document_id: str, user_id: str):
                         scans=len(scans_data),
                     )
                     break
-                try:
-                    await ms.update_document(kind, doc.moysklad_id, scans_data)
-                    break
-                except httpx.HTTPStatusError as exc:
-                    body = exc.response.text if exc.response is not None else ""
-                    if exc.response is None or exc.response.status_code != 412:
-                        raise
-                    # МС часто возвращает один «плохой» код; исключаем его и повторяем отправку.
+                result = await ms.update_document(kind, doc.moysklad_id, scans_data)
+                if isinstance(result, dict) and result.get("__moysklad_412__") is True:
+                    body = result.get("body") or ""
                     m = re.search(
                         r"неверный формат кода маркировки\s+([^\s\",}]+)",
                         body,
@@ -450,7 +446,14 @@ async def _process_document_async(document_id: str, user_id: str):
                     )
                     bad_code = m.group(1) if m else None
                     if not bad_code:
-                        raise
+                        logger.error(
+                            "process_document.moysklad_412_unparsed",
+                            document_id=document_id,
+                            body=body[:800],
+                        )
+                        raise RuntimeError(
+                            "МойСклад отклонил сохранение документа (412): не удалось извлечь код из ответа."
+                        )
                     bad_scan = next(
                         (s for s in remaining_scans if _cis_matches_ms_error_message(s.code, bad_code)),
                         None,
@@ -460,9 +463,13 @@ async def _process_document_async(document_id: str, user_id: str):
                             "process_document.bad_code_unmatched",
                             document_id=document_id,
                             bad_code=bad_code,
-                            scan_codes=[(str(s.id), s.code[:80] if s.code else "") for s in remaining_scans],
+                            scan_codes=[
+                                (str(s.id), (s.code or "")[:120]) for s in remaining_scans
+                            ],
                         )
-                        raise
+                        raise RuntimeError(
+                            "МойСклад 412: неверный формат кода маркировки; не удалось сопоставить со сканами."
+                        )
 
                     bad_scan.status = ScanStatus.invalid
                     bad_scan.error_message = (
@@ -490,6 +497,9 @@ async def _process_document_async(document_id: str, user_id: str):
                             document_id=document_id,
                             kind=kind,
                         )
+                    continue
+
+                break
             valid_scans = remaining_scans
 
         # Финальный статус документа
