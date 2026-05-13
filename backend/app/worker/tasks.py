@@ -1,4 +1,5 @@
 import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -331,6 +332,7 @@ async def _process_document_async(document_id: str, user_id: str):
     from app.services.moysklad import MoySkladService
     from app.core.security import decrypt_token
     from sqlalchemy import select
+    import httpx
 
     async with AsyncSessionLocal() as db:
         # Получаем сам документ — нужен kind для разветвления
@@ -399,22 +401,79 @@ async def _process_document_async(document_id: str, user_id: str):
                         document_id=document_id,
                     )
 
-            scans_data = [
-                {
-                    "code": s.code,
-                    "gtin": s.gtin,
-                    "product_id": (
-                        s.moysklad_product_id
-                        or (
-                            gtin_to_product_id.get(normalize_gtin_key(s.gtin))
-                            if s.gtin
-                            else None
+            remaining_scans = list(valid_scans)
+            while remaining_scans:
+                scans_data = [
+                    {
+                        "code": s.code,
+                        "gtin": s.gtin,
+                        "product_id": (
+                            s.moysklad_product_id
+                            or (
+                                gtin_to_product_id.get(normalize_gtin_key(s.gtin))
+                                if s.gtin
+                                else None
+                            )
+                        ),
+                    }
+                    for s in remaining_scans
+                ]
+                # В update_document попадут только строки с product_id.
+                if not any(s.get("product_id") for s in scans_data):
+                    logger.warning(
+                        "process_document.no_product_ids",
+                        document_id=document_id,
+                        kind=kind,
+                        scans=len(scans_data),
+                    )
+                    break
+                try:
+                    await ms.update_document(kind, doc.moysklad_id, scans_data)
+                    break
+                except httpx.HTTPStatusError as exc:
+                    body = exc.response.text if exc.response is not None else ""
+                    if exc.response is None or exc.response.status_code != 412:
+                        raise
+                    # МС часто возвращает один «плохой» код; исключаем его и повторяем отправку.
+                    m = re.search(
+                        r"неверный формат кода маркировки\s+([^\s\",}]+)",
+                        body,
+                        flags=re.IGNORECASE,
+                    )
+                    bad_code = m.group(1) if m else None
+                    if not bad_code:
+                        raise
+                    bad_scan = next((s for s in remaining_scans if s.code == bad_code), None)
+                    if not bad_scan:
+                        raise
+
+                    bad_scan.status = ScanStatus.invalid
+                    bad_scan.error_message = (
+                        "Код отклонён МойСклад: неверный формат кода маркировки"
+                    )
+                    await db.commit()
+                    await _push_ws_update(
+                        str(user_id),
+                        str(bad_scan.id),
+                        bad_scan.status,
+                        bad_scan.product_name,
+                        bad_scan.error_message,
+                        gtin=bad_scan.gtin,
+                        moysklad_product_id=bad_scan.moysklad_product_id,
+                    )
+                    logger.warning(
+                        "process_document.bad_code_filtered",
+                        document_id=document_id,
+                        code=bad_code,
+                    )
+                    remaining_scans = [s for s in remaining_scans if s.id != bad_scan.id]
+                    if not remaining_scans:
+                        logger.warning(
+                            "process_document.no_scans_after_filter",
+                            document_id=document_id,
+                            kind=kind,
                         )
-                    ),
-                }
-                for s in valid_scans
-            ]
-            await ms.update_document(kind, doc.moysklad_id, scans_data)
+            valid_scans = remaining_scans
 
         # Финальный статус документа
         doc.status = DocumentStatus.accepted
