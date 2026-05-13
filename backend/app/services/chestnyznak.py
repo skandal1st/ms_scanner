@@ -111,6 +111,8 @@ def cis_string_for_moysklad_api(stored: str) -> str:
     - Удаление «битых» управляющих символов (кроме FNC1) — иначе в JSON/МС попадает
       мусор и в ошибке 17102 видны артефакты вроде ``%c1``.
     - Латиница в серийной части после ``\\x1d21`` в верхний регистр (криптохвост КМ, base32).
+    - Последовательность ``%c1`` / ``%C1`` в серийной части **удаляется** (мусор от сканера/камеры;
+      подстановка FNC1 сюда даёт лишний разделитель — МС отклоняет CIS).
     ``Scan.code`` в БД не меняется — только значение cis в запросе к МС.
     """
     if not stored:
@@ -134,6 +136,7 @@ def cis_string_for_moysklad_api(stored: str) -> str:
     if pos != -1:
         head = s[: pos + len(marker)]
         serial = s[pos + len(marker) :]
+        serial = re.sub(r"(?i)%c1", "", serial)
         serial_u = "".join(c.upper() if "a" <= c <= "z" else c for c in serial)
         return head + serial_u
     return s

@@ -14,13 +14,23 @@ def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
     b = (ms_snippet or "").strip()
     if a == b:
         return True
-    if cis_string_for_moysklad_api(a) == cis_string_for_moysklad_api(b):
+    ca = cis_string_for_moysklad_api(a)
+    cb = cis_string_for_moysklad_api(b)
+    if ca == cb:
         return True
-    if cis_string_for_moysklad_api(a) == b or a == cis_string_for_moysklad_api(b):
+    if ca == b or a == cb:
+        return True
+    # МС в тексте ошибки иногда оставляет %C1 там, где в запросе был другой байт / FNC1
+    b_alt = re.sub(r"(?i)%c1", "\x1d", b)
+    if ca == cis_string_for_moysklad_api(b_alt) or ca == b_alt:
         return True
     loose_a = "".join(c for c in a if c not in "\x1d\x1e")
     loose_b = "".join(c for c in b if c not in "\x1d\x1e")
-    return loose_a == loose_b
+    if loose_a == loose_b:
+        return True
+    loose_b2 = re.sub(r"(?i)%c1", "", loose_b)
+    loose_a2 = re.sub(r"(?i)%c1", "", loose_a)
+    return loose_a2 == loose_b2
 
 
 def _run(coro):
