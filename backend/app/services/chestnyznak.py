@@ -118,7 +118,8 @@ def cis_string_for_moysklad_api(stored: str) -> str:
 
     - Управляющие символы кроме GS вырезаем; GS сразу после 14 цифр GTIN перед ``21``
       убираем (сканер мог отдать ``01…\\x1d21…``).
-    - Латиница в серийной части после ``21`` — в верхний регистр (криптохвост, base32).
+    - Регистр серийной части после ``21`` **не меняем**: МС/проверка КМ могут требовать
+      точное совпадение с криптохвостом (ошибка 17102 после принудительного upper).
     - ``%c1`` / ``%C1`` в серийной части удаляем (мусор от сканера/камеры).
     ``Scan.code`` в БД не меняется — только значение cis в запросе к МС.
     """
@@ -133,9 +134,6 @@ def cis_string_for_moysklad_api(stored: str) -> str:
             parts.append(ch)
     s = "".join(parts)
 
-    def _upper_latin(txt: str) -> str:
-        return "".join(c.upper() if "a" <= c <= "z" else c for c in txt)
-
     # 01 + 14 цифр + (опц. FNC1) + 21 + серия [+ опц. FNC1 и другие AI]
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
         tail = s[16:]
@@ -144,11 +142,6 @@ def cis_string_for_moysklad_api(stored: str) -> str:
         if tail.startswith("21"):
             serial = tail[2:]
             serial = re.sub(r"(?i)%c1", "", serial)
-            if _FNC1 in serial:
-                first, sep, rest = serial.partition(_FNC1)
-                serial = _upper_latin(first) + sep + rest
-            else:
-                serial = _upper_latin(serial)
             return "01" + s[2:16] + "21" + serial
 
     marker = _FNC1 + "21"
@@ -157,8 +150,7 @@ def cis_string_for_moysklad_api(stored: str) -> str:
         head = s[: pos + len(marker)]
         serial = s[pos + len(marker) :]
         serial = re.sub(r"(?i)%c1", "", serial)
-        serial_u = _upper_latin(serial)
-        return head + serial_u
+        return head + serial
     return s
 
 

@@ -16,7 +16,7 @@ def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
         return True
     ca = cis_string_for_moysklad_api(a)
     cb = cis_string_for_moysklad_api(b)
-    if ca == cb:
+    if ca == cb or ca.lower() == cb.lower():
         return True
     if ca == b or a == cb:
         return True
@@ -30,7 +30,7 @@ def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
         return True
     loose_b2 = re.sub(r"(?i)%c1", "", loose_b)
     loose_a2 = re.sub(r"(?i)%c1", "", loose_a)
-    return loose_a2 == loose_b2
+    return loose_a2 == loose_b2 or loose_a2.lower() == loose_b2.lower()
 
 
 def _run(coro):
