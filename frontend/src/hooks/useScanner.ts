@@ -56,6 +56,12 @@ export function useScanner(documentId: string | null) {
           status: data.status,
           product_name: data.product_name,
           error_message: data.error_message,
+          ...(data.gtin != null && data.gtin !== ''
+            ? { gtin: data.gtin as string }
+            : {}),
+          ...(data.moysklad_product_id != null && data.moysklad_product_id !== ''
+            ? { moysklad_product_id: data.moysklad_product_id as string }
+            : {}),
         })
         if (data.status === 'valid') playBeep('ok')
         else if (data.status === 'invalid' || data.status === 'overflow') playBeep('error')

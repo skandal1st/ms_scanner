@@ -75,28 +75,54 @@ export function normalizeGtinKey(g: string | number | null | undefined): string 
   return d.padStart(14, '0')
 }
 
+/** GTIN для прогресса: поле скана или разбор GS1 из кода (как extract_gtin на бэкенде). */
+export function effectiveGtinKey(scan: Scan): string | null {
+  const k = normalizeGtinKey(scan.gtin)
+  if (k) return k
+  const c = scan.code.trim()
+  if (c.startsWith('01') && c.length >= 16) {
+    const chunk = c.slice(2, 16)
+    if (/^\d{14}$/.test(chunk)) return normalizeGtinKey(chunk)
+  }
+  return null
+}
+
+function scanMatchesPlanRow(
+  scan: Scan,
+  planKey: string | null,
+  planProductId: string | null | undefined,
+): boolean {
+  const byPid =
+    Boolean(planProductId && scan.moysklad_product_id) &&
+    scan.moysklad_product_id === planProductId
+  const byGtin = Boolean(planKey && effectiveGtinKey(scan) === planKey)
+  return byPid || byGtin
+}
+
 function groupKey(scan: Scan): string {
   return scan.gtin || scan.code.slice(0, 32) || 'unknown'
 }
 
 export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): PlanProgress {
-  const planItems = (plan ?? []).filter((p) => p.gtin)
+  const planItems = (plan ?? []).filter((p) => p.gtin || p.product_id)
 
   if (planItems.length > 0) {
     const rows: ProgressRow[] = planItems.map((p) => {
-      const gtin = p.gtin as string
-      const planKey = normalizeGtinKey(gtin)
-      const addedTotal = scans.filter((s) => {
-        const sk = normalizeGtinKey(s.gtin)
-        return sk != null && sk === planKey && (s.status === 'valid' || s.status === 'overflow')
-      }).length
-      const scanned = scans.filter((s) => {
-        const sk = normalizeGtinKey(s.gtin)
-        return sk != null && sk === planKey && s.status === 'valid'
-      }).length
+      const gtin = (p.gtin as string) || ''
+      const planKey = p.gtin ? normalizeGtinKey(p.gtin) : null
+      const planProductId = (p.product_id as string) || null
+      const addedTotal = scans.filter(
+        (s) =>
+          (s.status === 'valid' || s.status === 'overflow') &&
+          scanMatchesPlanRow(s, planKey, planProductId),
+      ).length
+      const scanned = scans.filter(
+        (s) =>
+          s.status === 'valid' && scanMatchesPlanRow(s, planKey, planProductId),
+      ).length
       return {
-        gtin,
-        product_id: (p.product_id as string) || null,
+        gtin: gtin || planProductId || '—',
+        product_id: planProductId,
         product_name: p.product_name,
         expected: p.expected_qty,
         scanned,

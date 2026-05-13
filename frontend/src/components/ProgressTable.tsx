@@ -88,7 +88,7 @@ export function ProgressTable() {
 
           return (
             <div
-              key={item.gtin}
+              key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}
               style={rowStyle}
               role={item.product_id ? 'button' : undefined}
               tabIndex={item.product_id ? 0 : undefined}

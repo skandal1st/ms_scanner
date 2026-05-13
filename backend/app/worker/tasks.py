@@ -267,11 +267,27 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
         )
 
         # Пуш через Redis pub/sub → WebSocket менеджер
-        await _push_ws_update(user_id, scan_id, scan.status, scan.product_name, scan.error_message)
+        await _push_ws_update(
+            user_id,
+            scan_id,
+            scan.status,
+            scan.product_name,
+            scan.error_message,
+            gtin=scan.gtin,
+            moysklad_product_id=scan.moysklad_product_id,
+        )
 
 
-async def _push_ws_update(user_id: str, scan_id: str, status: str,
-                          product_name: Optional[str], error: Optional[str]):
+async def _push_ws_update(
+    user_id: str,
+    scan_id: str,
+    status: str,
+    product_name: Optional[str],
+    error: Optional[str],
+    *,
+    gtin: Optional[str] = None,
+    moysklad_product_id: Optional[str] = None,
+):
     import redis.asyncio as aioredis
     import json
     from app.core.config import settings
@@ -283,6 +299,8 @@ async def _push_ws_update(user_id: str, scan_id: str, status: str,
         "status": status,
         "product_name": product_name,
         "error_message": error,
+        "gtin": gtin,
+        "moysklad_product_id": moysklad_product_id,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()
