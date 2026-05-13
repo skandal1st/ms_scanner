@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Полная исходная постановка — `Мой склад и ЧЗ Тех.задание.md`. Прод — `https://skandata.ru/` (VPS Ubuntu 24.04). Тесты ещё не подключены, pytest-конфигурации нет.
 
+**Коды маркировки в JSON API МойСклад** (сущность `trackingCodes`, поля `cis` / `cis_1162`, параметр `codetype` при GET: `gs1`, `tag_1162`, `all`) — выдержка в корне репозитория: `Markirovka.md`.
+
 ## Commands
 
 Dev: всё в Docker Compose, локальные Python/Node не нужны.
@@ -38,7 +40,7 @@ ssh root@185.197.75.195 'cd /root/ms_scanner && git pull --ff-only origin main \
 
 Все типы документов идут через один endpoint `POST /documents/{id}/process` и одну Celery-задачу `process_document_task`. Внутри ветка по `kind`:
 - `supply` (приёмка) → `cz.accept_batch()` + `MoySkladService.update_document("supply", ...)`. Маркировка вводится в оборот через ЧЗ; в МС-документе `trackingCodes` не пишутся.
-- `demand | loss | salesreturn` (отгрузка) → только `MoySkladService.update_document(kind, ...)`. ЧЗ-API не вызывается, CIS-коды записываются в `positions[].trackingCodes`. См. `WRITE_TRACKING_CODES_KINDS` в `backend/app/services/moysklad.py`.
+- `demand | loss | salesreturn` (отгрузка) → только `MoySkladService.update_document(kind, ...)`. ЧЗ-API не вызывается; КМ в МС: при существующих позициях — `POST .../positions/{id}/trackingCodes`, иначе вложенно в `PUT` документа. См. `WRITE_TRACKING_CODES_KINDS` в `backend/app/services/moysklad.py` и `Markirovka.md` в корне репозитория.
 
 `/documents/{id}/accept` оставлен как backward-совместимый alias на `/process`.
 

@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin_key
 
+# Сущность КМ в Remap 1.2: см. Markirovka.md (cis при создании, cis_1162 только в ответе, codetype при GET).
 
 # Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
 # МойСклад сам валидирует CIS; отдельный ввод в оборот через API ЧЗ в приложении не делаем.
@@ -189,15 +190,17 @@ class MoySkladService:
         """
         Обновить позиции МС-документа на основе сканов.
         Сканы группируются по product_id: один товар = одна позиция с quantity
-        и (если не mock сервера) trackingCodes — список CIS маркировки.
+        и (если не mock сервера) CIS маркировки.
 
-        При HTTP 412 (неверный CIS) **не** бросает исключение: возвращает
-        ``{"__moysklad_412__": True, "body": "<текст ответа>"}`` — воркер
-        может исключить проблемный скан и повторить PUT.
+        Если позиции уже есть в МС (типичный случай), КМ отправляются отдельным
+        ``POST /entity/{kind}/{id}/positions/{positionId}/trackingCodes`` по
+        документации МС; в ``PUT`` документа поле ``trackingCodes`` у позиций
+        не передаётся (избегаем 412 из-за иного пути валидации).
 
-        В mock-режиме (`CZ_MOCK_MODE=true`) trackingCodes не шлём: МС валидирует
-        CIS через ЧЗ, фейковые коды из dev не пройдут. В проде пишем коды для
-        supply и отгрузочных типов — валидность обеспечивает МойСклад.
+        При HTTP 412 (неверный CIS) на ``PUT`` или ``POST`` trackingCodes **не**
+        бросает исключение: возвращает ``{"__moysklad_412__": True, "body": "..."}``.
+
+        В mock-режиме (`CZ_MOCK_MODE=true`) КМ в МС не шлём.
         """
         self._validate_kind(kind)
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
@@ -220,6 +223,8 @@ class MoySkladService:
 
         pending: Dict[str, List[Dict]] = {pid: list(g) for pid, g in groups.items()}
         tc_lines = sum(len(v) for v in groups.values())
+        # (position_uuid, [{cis, type}, ...]) — POST на сабресурс trackingCodes
+        post_tracking_batches: list[tuple[str, list[dict[str, str]]]] = []
 
         try:
             ms_rows = await self._load_positions_rows(kind, doc_id)
@@ -239,6 +244,9 @@ class MoySkladService:
             for row in ms_rows:
                 pid = self._product_id_from_position(row)
                 payload = self._position_put_payload(row)
+                if write_codes:
+                    payload.pop("trackingCodes", None)
+                    payload.pop("trackingCodes_1162", None)
                 remaining = pending.get(pid) if pid else None
                 if remaining:
                     row_cap_raw = row.get("quantity")
@@ -253,8 +261,7 @@ class MoySkladService:
                     if take:
                         payload["quantity"] = len(take)
                         if write_codes:
-                            # cis: нормализация под формат МС (без FNC1 между 01 и 21, регистр серии).
-                            payload["trackingCodes"] = [
+                            tc_batch = [
                                 {
                                     "cis": cis_string_for_moysklad_api(s["code"]),
                                     "type": "trackingcode",
@@ -262,7 +269,11 @@ class MoySkladService:
                                 for s in take
                                 if s.get("code")
                             ]
-                        # mock-режим: КМ в МС не шлём — не затираем уже введённые вручную
+                            pos_row_id = row.get("id")
+                            if pos_row_id and tc_batch:
+                                post_tracking_batches.append(
+                                    (str(pos_row_id), tc_batch)
+                                )
                 positions.append(payload)
 
             leftover = {k: v for k, v in pending.items() if v}
@@ -319,6 +330,42 @@ class MoySkladService:
                 if resp.status_code == 412:
                     return {"__moysklad_412__": True, "body": resp.text}
                 resp.raise_for_status()
+
+            if write_codes and ms_rows and post_tracking_batches:
+                for pos_id, batch in post_tracking_batches:
+                    tc_url = (
+                        f"{self.base_url}/entity/{kind}/{doc_id}"
+                        f"/positions/{pos_id}/trackingCodes"
+                    )
+                    tc_resp = await client.post(
+                        tc_url,
+                        headers=self.headers,
+                        json=batch,
+                    )
+                    if tc_resp.status_code >= 400:
+                        logger.error(
+                            "moysklad.post_tracking_codes.failed",
+                            kind=kind,
+                            doc_id=doc_id,
+                            position_id=pos_id,
+                            status=tc_resp.status_code,
+                            body=tc_resp.text[:1000],
+                            batch_size=len(batch),
+                        )
+                        if tc_resp.status_code == 412:
+                            return {
+                                "__moysklad_412__": True,
+                                "body": tc_resp.text,
+                            }
+                        tc_resp.raise_for_status()
+                    logger.info(
+                        "moysklad.post_tracking_codes.ok",
+                        kind=kind,
+                        doc_id=doc_id,
+                        position_id=pos_id,
+                        count=len(batch),
+                    )
+
             logger.info(
                 "moysklad.update_document.ok",
                 kind=kind,
@@ -327,6 +374,7 @@ class MoySkladService:
                 scans_grouped=tc_lines,
                 sent_tracking_codes=write_codes,
                 merged_from_ms=bool(ms_rows),
+                tracking_via_post=bool(post_tracking_batches),
             )
             return resp.json()
 
