@@ -13,6 +13,7 @@ from app.api.deps import get_current_user
 from cryptography.fernet import InvalidToken
 
 from app.core.config import settings
+from app.core.logging import logger
 from app.core.security import decrypt_token
 from app.services.chestnyznak import ChestnyZnakService, extract_gtin, is_sscc
 
@@ -126,12 +127,25 @@ async def _create_scan_record(
         existing.error_message = "Дубль: код уже сканировался в этом документе"
         await db.commit()
         await db.refresh(existing)
+        logger.info(
+            "scan.duplicate",
+            document_id=str(document_id),
+            scan_id=str(existing.id),
+            gtin=extract_gtin(code),
+        )
         return existing, True
 
     await db.refresh(scan)
 
     # Очередь Celery: проверка формата кода / mock ЧЗ
     from app.worker.tasks import verify_code_task
+    logger.info(
+        "scan.created",
+        document_id=str(document_id),
+        scan_id=str(scan.id),
+        gtin=scan.gtin,
+        user_id=str(current_user_id),
+    )
     verify_code_task.delay(str(scan.id), code, str(current_user_id))
     return scan, False
 

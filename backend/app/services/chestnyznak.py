@@ -36,7 +36,8 @@ def _random_gtin14_digits() -> str:
     return body + str(check)
 
 
-# FNC1 / GS separator in GS1 DataMatrix element strings.
+# GS (Group Separator) между полями переменной длины в строке элемента GS1 DataMatrix.
+# По стандарту ASCII это код **29** (0x1D), не 232 — в части инструкций «ASCII 232» ошибочно.
 _FNC1 = "\x1d"
 
 
@@ -107,12 +108,18 @@ def cis_string_for_moysklad_api(stored: str) -> str:
     """
     Значение поля cis при PUT trackingCodes в МойСклад.
 
-    - FNC1 (ASCII 29) между AI 01 (GTIN) и 21, если сканер отдал слитно ``01…21…``.
-    - Удаление «битых» управляющих символов (кроме FNC1) — иначе в JSON/МС попадает
-      мусор и в ошибке 17102 видны артефакты вроде ``%c1``.
-    - Латиница в серийной части после ``\\x1d21`` в верхний регистр (криптохвост КМ, base32).
-    - Последовательность ``%c1`` / ``%C1`` в серийной части **удаляется** (мусор от сканера/камеры;
-      подстановка FNC1 сюда даёт лишний разделитель — МС отклоняет CIS).
+    Нормативно КМ — это цепочка (GTIN, серия, криптохвост и др. AI) с разделителями **GS**
+    (ASCII **29**, ``\\x1d``) в потоке со сканера / Data Matrix. ``Scan.code`` хранит сырой
+    ввод (со GS или без — как отдал сканер).
+
+    Remap API МойСклад для ``trackingCodes[].cis`` фактически ожидает **склейку без GS
+    между завершённым блоком AI 01 (14 цифр) и литералами ``21``**; лишний ``\\x1d`` там
+    даёт 412 / код 17102. Поэтому здесь — нормализация под МС, а не «пересборка КМ с нуля».
+
+    - Управляющие символы кроме GS вырезаем; GS сразу после 14 цифр GTIN перед ``21``
+      убираем (сканер мог отдать ``01…\\x1d21…``).
+    - Латиница в серийной части после ``21`` — в верхний регистр (криптохвост, base32).
+    - ``%c1`` / ``%C1`` в серийной части удаляем (мусор от сканера/камеры).
     ``Scan.code`` в БД не меняется — только значение cis в запросе к МС.
     """
     if not stored:
@@ -126,10 +133,23 @@ def cis_string_for_moysklad_api(stored: str) -> str:
             parts.append(ch)
     s = "".join(parts)
 
+    def _upper_latin(txt: str) -> str:
+        return "".join(c.upper() if "a" <= c <= "z" else c for c in txt)
+
+    # 01 + 14 цифр + (опц. FNC1) + 21 + серия [+ опц. FNC1 и другие AI]
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
         tail = s[16:]
-        if tail.startswith("21") and not tail.startswith(_FNC1):
-            s = s[:16] + _FNC1 + tail
+        while tail.startswith(_FNC1):
+            tail = tail[1:]
+        if tail.startswith("21"):
+            serial = tail[2:]
+            serial = re.sub(r"(?i)%c1", "", serial)
+            if _FNC1 in serial:
+                first, sep, rest = serial.partition(_FNC1)
+                serial = _upper_latin(first) + sep + rest
+            else:
+                serial = _upper_latin(serial)
+            return "01" + s[2:16] + "21" + serial
 
     marker = _FNC1 + "21"
     pos = s.find(marker)
@@ -137,7 +157,7 @@ def cis_string_for_moysklad_api(stored: str) -> str:
         head = s[: pos + len(marker)]
         serial = s[pos + len(marker) :]
         serial = re.sub(r"(?i)%c1", "", serial)
-        serial_u = "".join(c.upper() if "a" <= c <= "z" else c for c in serial)
+        serial_u = _upper_latin(serial)
         return head + serial_u
     return s
 

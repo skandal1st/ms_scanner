@@ -253,7 +253,7 @@ class MoySkladService:
                     if take:
                         payload["quantity"] = len(take)
                         if write_codes:
-                            # cis: сырое Scan.code + при необходимости FNC1 между 01 и 21 для API МС.
+                            # cis: нормализация под формат МС (без FNC1 между 01 и 21, регистр серии).
                             payload["trackingCodes"] = [
                                 {
                                     "cis": cis_string_for_moysklad_api(s["code"]),
