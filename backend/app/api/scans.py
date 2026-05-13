@@ -14,12 +14,7 @@ from cryptography.fernet import InvalidToken
 
 from app.core.config import settings
 from app.core.security import decrypt_token
-from app.services.chestnyznak import (
-    ChestnyZnakService,
-    canonicalize_marking_scan_code,
-    is_sscc,
-    extract_gtin,
-)
+from app.services.chestnyznak import ChestnyZnakService, extract_gtin, is_sscc
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -93,7 +88,7 @@ async def _create_scan_record(
     Создаёт скан или возвращает существующий со статусом duplicate.
     Возвращает (scan, is_duplicate).
     """
-    code = canonicalize_marking_scan_code(code.strip())
+    code = code.strip()
     gtin = extract_gtin(code)
 
     doc_row = await db.execute(select(Document).where(Document.id == document_id))

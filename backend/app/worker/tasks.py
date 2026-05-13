@@ -98,19 +98,19 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
-def verify_code_task(self, scan_id: str, code: str, user_id: str):
+def verify_code_task(self, scan_id: str, _code: str, user_id: str):
     """Проверить код маркировки и обновить статус скана."""
     try:
-        _run(_verify_code_async(scan_id, code, user_id))
+        _run(_verify_code_async(scan_id, user_id))
     except Exception as exc:
         logger.error("verify_code.error", scan_id=scan_id, error=str(exc))
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
-async def _verify_code_async(scan_id: str, code: str, user_id: str):
+async def _verify_code_async(scan_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus, Document, Integration
-    from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1, canonicalize_marking_scan_code
+    from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1
     from app.core.security import decrypt_token
     from app.core.config import settings
     from sqlalchemy import select
@@ -122,11 +122,6 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
             logger.error("verify_code.scan_not_found", scan_id=scan_id)
             return
 
-        canon = canonicalize_marking_scan_code(scan.code)
-        if canon != scan.code:
-            scan.code = canon
-
-        code = canon
         # Проверка КМ: в mock-режиме сервера — имитация ЧЗ; иначе только формат GS1
         # (без УКЭП и без API ЧЗ). МойСклад проверит CIS при записи в документ.
         if settings.CZ_MOCK_MODE:
@@ -142,9 +137,9 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                 ):
                     cz_token = decrypt_token(integration.cz_token)
             cz = ChestnyZnakService(token=cz_token)
-            verify_result = await cz.verify_code(code)
+            verify_result = await cz.verify_code(scan.code)
         else:
-            verify_result = verify_code_local_gs1(code)
+            verify_result = verify_code_local_gs1(scan.code)
             # USB-сканер даёт сырой GS1; официальное приложение ЧЗ ходит в API.
             # При невалидном локальном разборе — запрос в ЧЗ по полной CIS (нужен токен УКЭП).
             if not verify_result.valid:
@@ -172,7 +167,7 @@ async def _verify_code_async(scan_id: str, code: str, user_id: str):
                     try:
                         cz = ChestnyZnakService(token=cz_token, mock=False)
                         alt = await cz._real_verify(
-                            code, verify_result.gtin, verify_result.serial
+                            scan.code, verify_result.gtin, verify_result.serial
                         )
                         if alt.valid:
                             verify_result = alt
@@ -443,6 +438,7 @@ async def _process_document_async(document_id: str, user_id: str):
                     bad_code = m.group(1) if m else None
                     if not bad_code:
                         raise
+                    # МС может вернуть код в ином виде, чем сырой Scan.code — тогда exact-match не сработает.
                     bad_scan = next((s for s in remaining_scans if s.code == bad_code), None)
                     if not bad_scan:
                         raise

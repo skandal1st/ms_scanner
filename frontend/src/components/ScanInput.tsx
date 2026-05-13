@@ -1,6 +1,7 @@
-import { useRef, useEffect, useState, KeyboardEvent } from 'react'
+import { useRef, useEffect, useState, useCallback, KeyboardEvent } from 'react'
 import { useScanner } from '../hooks/useScanner'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { CameraScanModal } from './CameraScanModal'
 
 interface Props {
   documentId: string | null
@@ -9,17 +10,19 @@ interface Props {
 export function ScanInput({ documentId }: Props) {
   const [value, setValue] = useState('')
   const [lastCode, setLastCode] = useState('')
+  const [cameraOpen, setCameraOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { submitCode } = useScanner(documentId)
 
   useEffect(() => {
+    if (cameraOpen) return
     const el = inputRef.current
     if (!el) return
     el.focus()
     const onBlur = () => setTimeout(() => el.focus(), 0)
     el.addEventListener('blur', onBlur)
     return () => el.removeEventListener('blur', onBlur)
-  }, [])
+  }, [cameraOpen])
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -34,21 +37,39 @@ export function ScanInput({ documentId }: Props) {
     }
   }
 
+  const handleCameraCode = useCallback(
+    async (code: string) => {
+      setLastCode(code)
+      await submitCode(code)
+    },
+    [submitCode],
+  )
+
   return (
     <div className="scan-input">
       <label className="field-label" htmlFor="scan-field">Сканирование</label>
-      <input
-        id="scan-field"
-        ref={inputRef}
-        value={value}
-        onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
-        onKeyDown={handleKeyDown}
-        placeholder="Сканируйте или введите код…"
-        disabled={!documentId}
-        className="scan-input__field"
-        autoComplete="off"
-        spellCheck={false}
-      />
+      <div className="scan-input__row">
+        <input
+          id="scan-field"
+          ref={inputRef}
+          value={value}
+          onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
+          onKeyDown={handleKeyDown}
+          placeholder="Сканируйте или введите код…"
+          disabled={!documentId}
+          className="scan-input__field"
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button
+          type="button"
+          className="button scan-input__camera"
+          disabled={!documentId}
+          onClick={() => setCameraOpen(true)}
+        >
+          Камера
+        </button>
+      </div>
       {lastCode && (
         <div className="scan-input__last">
           <span>Последний:</span>
@@ -58,6 +79,11 @@ export function ScanInput({ documentId }: Props) {
       {!documentId && (
         <p className="hint">Выберите документ для начала сканирования</p>
       )}
+      <CameraScanModal
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onCode={handleCameraCode}
+      />
     </div>
   )
 }

@@ -75,7 +75,7 @@ export function normalizeGtinKey(g: string | number | null | undefined): string 
   return d.padStart(14, '0')
 }
 
-/** GTIN для прогресса: поле скана или разбор GS1 из кода (как extract_gtin на бэкенде). */
+/** GTIN для прогресса: поле скана или лёгкий разбор сырой CIS без пересборки строки (фоллбек для UI). */
 export function effectiveGtinKey(scan: Scan): string | null {
   const k = normalizeGtinKey(scan.gtin)
   if (k) return k
@@ -84,6 +84,8 @@ export function effectiveGtinKey(scan: Scan): string | null {
     const chunk = c.slice(2, 16)
     if (/^\d{14}$/.test(chunk)) return normalizeGtinKey(chunk)
   }
+  const lead = c.slice(0, 14)
+  if (/^\d{14}$/.test(lead)) return normalizeGtinKey(lead)
   return null
 }
 

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import random
+import re
 import time
 import uuid as uuid_lib
 from dataclasses import dataclass
@@ -35,41 +36,71 @@ def _random_gtin14_digits() -> str:
     return body + str(check)
 
 
-# Должен совпадать с frontend/src/lib/scannerLayout.ts (USB-сканер + русская раскладка).
-_RU_SCAN_LAYOUT: dict[str, str] = {
-    "й": "q", "ц": "w", "у": "e", "к": "r", "е": "t", "н": "y", "г": "u", "ш": "i", "щ": "o", "з": "p", "х": "[", "ъ": "]",
-    "ф": "a", "ы": "s", "в": "d", "а": "f", "п": "g", "р": "h", "о": "j", "л": "k", "д": "l", "ж": ";", "э": "'",
-    "я": "z", "ч": "x", "с": "c", "м": "v", "и": "b", "т": "n", "ь": "m", "б": ",", "ю": ".", "ё": "`",
-    "Й": "Q", "Ц": "W", "У": "E", "К": "R", "Е": "T", "Н": "Y", "Г": "U", "Ш": "I", "Щ": "O", "З": "P", "Х": "{", "Ъ": "}",
-    "Ф": "A", "Ы": "S", "В": "D", "А": "F", "П": "G", "Р": "H", "О": "J", "Л": "K", "Д": "L", "Ж": ":", "Э": '"',
-    "Я": "Z", "Ч": "X", "С": "C", "М": "V", "И": "B", "Т": "N", "Ь": "M", "Б": "<", "Ю": ">", "Ё": "~",
-}
+# FNC1 / GS separator in GS1 DataMatrix element strings.
+_FNC1 = "\x1d"
 
 
-def _normalize_ru_scan_layout(s: str) -> str:
-    return "".join(_RU_SCAN_LAYOUT.get(ch, ch) for ch in s)
+def _tail_serial_after_ai21(rest: str) -> Optional[str]:
+    """Серийный номер после AI 21 (с опциональными FNC1 перед 21)."""
+    r = rest
+    while r.startswith(_FNC1):
+        r = r[1:]
+    if not r.startswith("21"):
+        return None
+    raw = r[2:]
+    if _FNC1 in raw:
+        raw = raw.split(_FNC1, 1)[0]
+    serial = raw.strip()
+    if len(serial) > 200:
+        serial = serial[:200]
+    return serial or None
 
 
-def canonicalize_marking_scan_code(code: str) -> str:
+def _implicit_serial_after_gtin(rest: str) -> Optional[str]:
+    """Серия без явного AI 21 (первый символ после GTIN — не цифра и не FNC1)."""
+    if not rest or rest[0].isdigit() or rest.startswith(_FNC1):
+        return None
+    raw = rest
+    if _FNC1 in raw:
+        raw = raw.split(_FNC1, 1)[0]
+    serial = raw.strip()
+    if len(serial) > 200:
+        serial = serial[:200]
+    return serial or None
+
+
+def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     """
-    Нормализация строки КМ из сканера: ЙЦУКЕН→латиница, при необходимости AI 01 и 21.
-    Совпадает по смыслу с normalizeScannerInput на фронте + типичные потери префиксов.
+    Извлечь GTIN (14 цифр) и серию из сырой GS1-строки скана.
+    Не пересобирает CIS — только чтение для полей scan.gtin / serial и проверок.
     """
-    s = _normalize_ru_scan_layout(code.strip())
-    if s.startswith("01") and len(s) >= 16 and s[2:16].isdigit():
-        return s
-    if len(s) < 14 or not s[:14].isdigit():
-        return s
-    gtin14, rest = s[:14], s[14:]
-    if rest.startswith("21"):
-        return "01" + s
-    if rest.startswith("\x1d"):
-        tail = rest.lstrip("\x1d")
-        if tail.startswith("21"):
-            return "01" + gtin14 + rest
-    if rest and not rest[0].isdigit() and not rest.startswith("\x1d"):
-        return "01" + gtin14 + "21" + rest
-    return s
+    if not code:
+        return (None, None)
+
+    if code.startswith("01") and len(code) >= 16 and code[2:16].isdigit():
+        gtin = code[2:16]
+        tail = code[16:]
+        serial = _tail_serial_after_ai21(tail) or _implicit_serial_after_gtin(tail)
+        return (gtin, serial)
+
+    m = re.search(r"(?:^|\x1d)01(\d{14})", code)
+    if m:
+        gtin = m.group(1)
+        tail = code[m.end() :]
+        serial = _tail_serial_after_ai21(tail) or _implicit_serial_after_gtin(tail)
+        return (gtin, serial)
+
+    if len(code) >= 14 and code[:14].isdigit():
+        gtin = code[:14]
+        rest = code[14:]
+        serial = _tail_serial_after_ai21(rest)
+        if serial:
+            return (gtin, serial)
+        if rest and not rest[0].isdigit() and not rest.startswith(_FNC1):
+            serial = _implicit_serial_after_gtin(rest)
+            return (gtin, serial)
+
+    return (None, None)
 
 
 class ChestnyZnakService:
@@ -79,15 +110,13 @@ class ChestnyZnakService:
         self.base_url = settings.CZ_API_BASE_URL
 
     async def verify_code(self, code: str) -> VerifyResult:
-        """Проверить код маркировки."""
-        c = canonicalize_marking_scan_code(code)
-        gtin = _extract_gtin_canonical(c)
-        serial = _extract_serial_canonical(c)
+        """Проверить код маркировки (CIS в запросах — сырая строка, без пересборки)."""
+        gtin, serial = parse_gs1_km_gtin_serial(code)
 
         if self.mock:
-            return await self._mock_verify(c, gtin, serial)
+            return await self._mock_verify(code, gtin, serial)
 
-        return await self._real_verify(c, gtin, serial)
+        return await self._real_verify(code, gtin, serial)
 
     async def _mock_verify(self, code: str, gtin: Optional[str], serial: Optional[str]) -> VerifyResult:
         """Имитация ответа ЧЗ с реалистичной задержкой."""
@@ -291,44 +320,16 @@ class CZApiError(Exception):
     pass
 
 
-def _extract_gtin_canonical(code: str) -> Optional[str]:
-    """GTIN из уже нормализованной GS1-строки (после canonicalize_marking_scan_code)."""
-    if code.startswith("01") and len(code) >= 16 and code[2:16].isdigit():
-        return code[2:16]
-    return None
-
-
 def extract_gtin(code: str) -> Optional[str]:
-    """GS1: AI 01 + 14 цифр GTIN (с учётом раскладки и типичных потерь префиксов)."""
-    return _extract_gtin_canonical(canonicalize_marking_scan_code(code))
+    """GTIN для плана/матчинга: извлечение из сырой CIS без пересборки строки."""
+    g, _ = parse_gs1_km_gtin_serial(code)
+    return g
 
 
 def is_sscc(code: str) -> bool:
-    """SSCC-короб — AI 00 + 18 цифр (всего 20 знаков, цифры)."""
-    c = _normalize_ru_scan_layout(code.strip())
+    """SSCC-короб — AI 00 + 18 цифр (20 знаков). Раскладка — только на клиенте (normalizeScannerInput)."""
+    c = code.strip()
     return c.startswith("00") and len(c) == 20 and c.isdigit()
-
-
-# Алиас для существующих внутренних использований
-_extract_gtin = extract_gtin
-
-
-def _extract_serial_canonical(code: str) -> Optional[str]:
-    """Серия AI 21 после GTIN; часто перед 21 идёт GS (\\x1d). Длина серии у КМ может быть >20."""
-    if not (code.startswith("01") and len(code) >= 16):
-        return None
-    rest = code[16:]
-    while rest.startswith("\x1d"):
-        rest = rest[1:]
-    if not rest.startswith("21"):
-        return None
-    raw = rest[2:]
-    if "\x1d" in raw:
-        raw = raw.split("\x1d", 1)[0]
-    serial = raw.strip()
-    if len(serial) > 200:
-        serial = serial[:200]
-    return serial or None
 
 
 def _digits_gtin14_from_value(v: Any) -> Optional[str]:
@@ -390,10 +391,6 @@ def _product_name_from_cz_facade_payload(data: dict) -> Optional[str]:
     return None
 
 
-def _extract_serial(code: str) -> Optional[str]:
-    return _extract_serial_canonical(canonicalize_marking_scan_code(code))
-
-
 def _gs1_check_digit_ok(gtin14: str) -> bool:
     """Проверка контрольной цифры GTIN-14 (модуль 10 GS1)."""
     if len(gtin14) != 14 or not gtin14.isdigit():
@@ -410,9 +407,7 @@ def _gs1_check_digit_ok(gtin14: str) -> bool:
 
 def verify_code_local_gs1(code: str) -> VerifyResult:
     """Проверка структуры КМ без API Честного Знака (формат GS1 + контрольная сумма GTIN)."""
-    c = canonicalize_marking_scan_code(code)
-    gtin = _extract_gtin_canonical(c)
-    serial = _extract_serial_canonical(c)
+    gtin, serial = parse_gs1_km_gtin_serial(code)
     if not gtin or len(gtin) != 14 or not gtin.isdigit():
         return VerifyResult(
             valid=False,

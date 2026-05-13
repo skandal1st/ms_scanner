@@ -249,6 +249,7 @@ class MoySkladService:
                     if take:
                         payload["quantity"] = len(take)
                         if write_codes:
+                            # cis = сырое значение из Scan.code (без серверной пересборки GS1).
                             payload["trackingCodes"] = [
                                 {"cis": s["code"], "type": "trackingcode"}
                                 for s in take
@@ -280,6 +281,7 @@ class MoySkladService:
                     "quantity": len(group),
                 }
                 if write_codes:
+                    # cis = сырое значение из Scan.code (без серверной пересборки GS1).
                     position["trackingCodes"] = [
                         {"cis": s["code"], "type": "trackingcode"}
                         for s in group
