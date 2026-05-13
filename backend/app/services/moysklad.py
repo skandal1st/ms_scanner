@@ -76,17 +76,10 @@ class MoySkladService:
         с позициями — избегаем N+1 запросов.
         """
         self._validate_kind(kind)
-        async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.get(
-                f"{self.base_url}/entity/{kind}/{doc_id}/positions",
-                headers=self.headers,
-                params={"expand": "assortment", "limit": 1000},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        rows = await self._load_positions_rows(kind, doc_id)
 
         plan: List[Dict[str, Any]] = []
-        for pos in data.get("rows", []):
+        for pos in rows:
             asrt = pos.get("assortment") or {}
             product_id = asrt.get("id")
             if not product_id:
@@ -127,6 +120,69 @@ class MoySkladService:
             )
         return plan
 
+    async def _load_positions_rows(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
+        self._validate_kind(kind)
+        async with httpx.AsyncClient(timeout=25) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/{kind}/{doc_id}/positions",
+                headers=self.headers,
+                params={"expand": "assortment", "limit": 1000},
+            )
+            resp.raise_for_status()
+            return list(resp.json().get("rows", []))
+
+    @staticmethod
+    def _product_id_from_position(pos: Dict[str, Any]) -> Optional[str]:
+        asrt = pos.get("assortment") or {}
+        return asrt.get("id")
+
+    def _position_put_payload(self, ms_row: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Тело позиции для PUT документа: без «тяжёлого» expand assortment,
+        с сохранением цены/НДС/id — иначе МС может не отразить КМ во вкладке маркировки.
+        """
+        payload: Dict[str, Any] = {}
+        for key in (
+            "id",
+            "meta",
+            "quantity",
+            "price",
+            "discount",
+            "vat",
+            "vatEnabled",
+            "things",
+            "pack",
+            "slots",
+            "slot",
+        ):
+            if key in ms_row:
+                payload[key] = ms_row[key]
+
+        asrt = ms_row.get("assortment") or {}
+        meta = asrt.get("meta")
+        if isinstance(meta, dict) and meta.get("href"):
+            payload["assortment"] = {"meta": meta}
+        elif asrt.get("id"):
+            et = (
+                meta.get("type")
+                if isinstance(meta, dict) and meta.get("type")
+                else "product"
+            )
+            payload["assortment"] = {
+                "meta": {
+                    "href": f"{self.base_url}/entity/{et}/{asrt['id']}",
+                    "type": et,
+                    "mediaType": "application/json",
+                }
+            }
+
+        if ms_row.get("trackingCodes") is not None:
+            payload["trackingCodes"] = ms_row["trackingCodes"]
+        if ms_row.get("trackingCodes_1162") is not None:
+            payload["trackingCodes_1162"] = ms_row["trackingCodes_1162"]
+
+        return payload
+
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict]
     ) -> Dict[str, Any]:
@@ -158,28 +214,80 @@ class MoySkladService:
             )
             return {}
 
-        positions: List[Dict[str, Any]] = []
-        for product_id, group in groups.items():
-            position: Dict[str, Any] = {
-                "assortment": {
-                    "meta": {
-                        "href": f"{self.base_url}/entity/product/{product_id}",
-                        "type": "product",
-                        "mediaType": "application/json",
-                    }
-                },
-                "quantity": len(group),
-            }
-            if write_codes:
-                # МС требует поле `type` у каждого trackingCode.
-                # Допустимые: trackingcode | transportpack | consumerpack.
-                position["trackingCodes"] = [
-                    {"cis": s["code"], "type": "trackingcode"}
-                    for s in group if s.get("code")
-                ]
-            positions.append(position)
+        pending: Dict[str, List[Dict]] = {pid: list(g) for pid, g in groups.items()}
+        tc_lines = sum(len(v) for v in groups.values())
 
-        async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            ms_rows = await self._load_positions_rows(kind, doc_id)
+        except Exception as exc:
+            logger.warning(
+                "moysklad.update_document.fetch_positions_failed",
+                kind=kind,
+                doc_id=doc_id,
+                error=str(exc),
+            )
+            ms_rows = []
+
+        positions: List[Dict[str, Any]]
+
+        if ms_rows:
+            positions = []
+            for row in ms_rows:
+                pid = self._product_id_from_position(row)
+                payload = self._position_put_payload(row)
+                remaining = pending.get(pid) if pid else None
+                if remaining:
+                    row_cap_raw = row.get("quantity")
+                    try:
+                        row_cap = int(row_cap_raw) if row_cap_raw is not None else 0
+                    except (TypeError, ValueError):
+                        row_cap = 0
+                    if row_cap < 1:
+                        row_cap = len(remaining)
+                    take = remaining[:row_cap]
+                    del remaining[: len(take)]
+                    if take:
+                        payload["quantity"] = len(take)
+                        if write_codes:
+                            payload["trackingCodes"] = [
+                                {"cis": s["code"], "type": "trackingcode"}
+                                for s in take
+                                if s.get("code")
+                            ]
+                        # mock-режим: КМ в МС не шлём — не затираем уже введённые вручную
+                positions.append(payload)
+
+            leftover = {k: v for k, v in pending.items() if v}
+            if leftover:
+                logger.warning(
+                    "moysklad.update_document.scans_not_placed",
+                    kind=kind,
+                    doc_id=doc_id,
+                    products=list(leftover.keys()),
+                )
+        else:
+            # Нет позиций из МС — старый путь (новый/пустой документ)
+            positions = []
+            for product_id, group in groups.items():
+                position: Dict[str, Any] = {
+                    "assortment": {
+                        "meta": {
+                            "href": f"{self.base_url}/entity/product/{product_id}",
+                            "type": "product",
+                            "mediaType": "application/json",
+                        }
+                    },
+                    "quantity": len(group),
+                }
+                if write_codes:
+                    position["trackingCodes"] = [
+                        {"cis": s["code"], "type": "trackingcode"}
+                        for s in group
+                        if s.get("code")
+                    ]
+                positions.append(position)
+
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.put(
                 f"{self.base_url}/entity/{kind}/{doc_id}",
                 headers=self.headers,
@@ -197,6 +305,15 @@ class MoySkladService:
                     sent_codes=write_codes,
                 )
                 resp.raise_for_status()
+            logger.info(
+                "moysklad.update_document.ok",
+                kind=kind,
+                doc_id=doc_id,
+                positions_sent=len(positions),
+                scans_grouped=tc_lines,
+                sent_tracking_codes=write_codes,
+                merged_from_ms=bool(ms_rows),
+            )
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:
