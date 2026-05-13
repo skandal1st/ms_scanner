@@ -70,10 +70,34 @@ def _implicit_serial_after_gtin(rest: str) -> Optional[str]:
     return serial or None
 
 
+def _looks_like_bare_gtin_serial_tail(s: str) -> bool:
+    """
+    Строка вида «14 цифр GTIN + хвост» без литералов AI ``01``/``21`` в начале
+    (некоторые сканеры/режимы для табака отдают так).
+    """
+    t = (s or "").strip()
+    if len(t) < 15:
+        return False
+    if not t[:14].isdigit():
+        return False
+    if t.startswith("01") and len(t) >= 16 and t[2:16].isdigit():
+        return False
+    return bool(t[14:])
+
+
+def _normalize_bare_gtin_serial_to_gs1_element_string(s: str) -> str:
+    """Склейка ``01``+GTIN14+``21``+хвост для единого разбора и МС."""
+    t = (s or "").strip()
+    if not _looks_like_bare_gtin_serial_tail(t):
+        return t
+    return "01" + t[:14] + "21" + t[14:]
+
+
 def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     """
     Извлечь GTIN (14 цифр) и серию из сырой GS1-строки скана.
-    Не пересобирает CIS — только чтение для полей scan.gtin / serial и проверок.
+    Поддерживается «голый» формат ``<14цифр GTIN><хвост>`` без ``01``/``21`` в начале.
+    Не пересобирает CIS в общем случае — только чтение для полей scan.gtin / serial и проверок.
     """
     if not code:
         return (None, None)
@@ -91,7 +115,10 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
         serial = _tail_serial_after_ai21(tail) or _implicit_serial_after_gtin(tail)
         return (gtin, serial)
 
-    if len(code) >= 14 and code[:14].isdigit():
+    # 14 цифр подряд с начала + хвост, но не стандартный ``01``+14цифр в позиции 0
+    if len(code) >= 15 and code[:14].isdigit() and not (
+        code.startswith("01") and len(code) >= 16 and code[2:16].isdigit()
+    ):
         gtin = code[:14]
         rest = code[14:]
         serial = _tail_serial_after_ai21(rest)
@@ -99,7 +126,9 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
             return (gtin, serial)
         if rest and not rest[0].isdigit() and not rest.startswith(_FNC1):
             serial = _implicit_serial_after_gtin(rest)
-            return (gtin, serial)
+            if serial:
+                return (gtin, serial)
+        return (gtin, rest)
 
     return (None, None)
 
@@ -162,9 +191,8 @@ def cis_string_for_moysklad_api(
     Нормативно КМ — цепочка (GTIN, серия, криптохвост и др. AI) с разделителями **GS**
     (ASCII **29**, ``\\x1d``). ``Scan.code`` хранит сырой ввод.
 
-    Нормализация:
-    - Управляющие символы кроме GS вырезаем; GS сразу после 14 цифр GTIN перед ``21``
-      убираем (сканер мог отдать ``01…\\x1d21…``).
+    - Строка **«14 цифр GTIN + хвост»** без префиксов ``01``/``21`` приводится к виду
+      ``01``+GTIN+``21``+хвост (частый вывод сканера по табаку).
     - Регистр после ``21`` не меняем.
     - ``%c1`` / ``%C1`` в серийной части удаляем.
 
@@ -184,6 +212,7 @@ def cis_string_for_moysklad_api(
         elif 0x20 <= o <= 0x7E:
             parts.append(ch)
     s = "".join(parts)
+    s = _normalize_bare_gtin_serial_to_gs1_element_string(s)
 
     out = s
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
@@ -270,7 +299,8 @@ class ChestnyZnakService:
         from app.services.cz_logger import log_cz_request
 
         start = time.time()
-        encoded = quote(code, safe="")
+        cis_for_request = _normalize_bare_gtin_serial_to_gs1_element_string(code)
+        encoded = quote(cis_for_request, safe="")
         url = f"{self.base_url}/api/v3/facade/identificationcodes/{encoded}"
         headers = {"Authorization": f"Bearer {self.token}"}
 
