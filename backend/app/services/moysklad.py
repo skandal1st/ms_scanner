@@ -137,6 +137,18 @@ class MoySkladService:
         asrt = pos.get("assortment") or {}
         return asrt.get("id")
 
+    @staticmethod
+    def _moysklad_tracking_type_from_position(pos: Dict[str, Any]) -> Optional[str]:
+        """Значение trackingType товара из позиции МС (expand=assortment)."""
+        asrt = pos.get("assortment") or {}
+        raw = asrt.get("trackingType") or asrt.get("tracking_type")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            s = raw.strip()
+            return s or None
+        return str(raw).strip() or None
+
     def _position_put_payload(self, ms_row: Dict[str, Any]) -> Dict[str, Any]:
         """
         Тело позиции для PUT документа: без «тяжёлого» expand assortment,
@@ -261,9 +273,12 @@ class MoySkladService:
                     if take:
                         payload["quantity"] = len(take)
                         if write_codes:
+                            ms_tt = self._moysklad_tracking_type_from_position(row)
                             tc_batch = [
                                 {
-                                    "cis": cis_string_for_moysklad_api(s["code"]),
+                                    "cis": cis_string_for_moysklad_api(
+                                        s["code"], ms_tt
+                                    ),
                                     "type": "trackingcode",
                                 }
                                 for s in take

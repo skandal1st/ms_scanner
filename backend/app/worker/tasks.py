@@ -5,28 +5,40 @@ from typing import Optional
 
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
-from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin_key
+from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key
 
 
 def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
-    """Совпадение Scan.code с фрагментом из ошибки МС (412): учёт FNC1 и нормализации cis."""
+    """Совпадение Scan.code с фрагментом из ошибки МС (412): КИ 24 символа, FNC1, регистр."""
     a = (scan_code or "").strip()
     b = (ms_snippet or "").strip()
     if a == b:
         return True
-    ca = cis_string_for_moysklad_api(a)
-    cb = cis_string_for_moysklad_api(b)
-    if ca == cb or ca.lower() == cb.lower():
+
+    def _cross(forms_x: list[str], forms_y: list[str]) -> bool:
+        for ca in forms_x:
+            for cb in forms_y:
+                if ca == cb or ca.lower() == cb.lower():
+                    return True
+        return False
+
+    forms_a = cis_compare_forms_for_ms(a)
+    forms_b = cis_compare_forms_for_ms(b)
+    if _cross(forms_a, forms_b):
         return True
-    if ca == b or a == cb:
-        return True
-    # МС в тексте ошибки иногда оставляет %C1 там, где в запросе был другой байт / FNC1
+    for ca in forms_a:
+        if ca == b:
+            return True
+    for cb in forms_b:
+        if a == cb:
+            return True
     b_alt = re.sub(r"(?i)%c1", "\x1d", b)
-    if ca == cis_string_for_moysklad_api(b_alt) or ca == b_alt:
+    if _cross(forms_a, cis_compare_forms_for_ms(b_alt)):
         return True
+
     loose_a = "".join(c for c in a if c not in "\x1d\x1e")
     loose_b = "".join(c for c in b if c not in "\x1d\x1e")
-    if loose_a == loose_b:
+    if loose_a == loose_b or loose_a.lower() == loose_b.lower():
         return True
     loose_b2 = re.sub(r"(?i)%c1", "", loose_b)
     loose_a2 = re.sub(r"(?i)%c1", "", loose_a)

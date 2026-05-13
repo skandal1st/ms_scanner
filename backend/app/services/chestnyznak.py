@@ -104,24 +104,67 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     return (None, None)
 
 
-def cis_string_for_moysklad_api(stored: str) -> str:
+# Тип маркировки товара в МС (assortment.trackingType): длина серийной части
+# после ``21`` в **коде идентификации** для поля ``cis`` (не полный Data Matrix).
+# Иначе МС возвращает 17102. Источники: markirovka.ru (напитки), правила/обзоры КМ табака (7+93…).
+MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE: dict[str, int] = {
+    "SOFT_DRINKS": 6,
+    "WATER": 6,
+    "TOBACCO": 7,
+}
+
+
+def cis_identification_document_code(normalized_cis: str, serial_symbol_len: int) -> str:
     """
-    Значение поля cis при PUT trackingCodes в МойСклад.
+    Укороченный код для документов/МС: ``01`` + 14 цифр GTIN + ``21`` + первые
+    ``serial_symbol_len`` символов серийной части (криптохвост не включаем).
+    """
+    s = (normalized_cis or "").strip()
+    need = 18 + serial_symbol_len
+    if len(s) <= need or not s.startswith("01"):
+        return s
+    if len(s) < 18 or not s[2:16].isdigit() or s[16:18] != "21":
+        return s
+    return s[:need]
 
-    Нормативно КМ — это цепочка (GTIN, серия, криптохвост и др. AI) с разделителями **GS**
-    (ASCII **29**, ``\\x1d``) в потоке со сканера / Data Matrix. ``Scan.code`` хранит сырой
-    ввод (со GS или без — как отдал сканер).
 
-    Remap API МойСклад для ``trackingCodes[].cis`` фактически ожидает **склейку без GS
-    между завершённым блоком AI 01 (14 цифр) и литералами ``21``**; лишний ``\\x1d`` там
-    даёт 412 / код 17102. Поэтому здесь — нормализация под МС, а не «пересборка КМ с нуля».
+def cis_compare_forms_for_ms(raw: str) -> list[str]:
+    """Варианты cis для сопоставления с текстом ошибки МС (полный КМ и укороченные КИ)."""
+    base = cis_string_for_moysklad_api(raw, moysklad_tracking_type=None)
+    out: list[str] = [base]
+    for serial_len in (6, 7):
+        short = cis_identification_document_code(base, serial_len)
+        if short != base:
+            out.append(short)
+    # уникальные, порядок: полный затем 6 затем 7
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
 
+
+def cis_string_for_moysklad_api(
+    stored: str, moysklad_tracking_type: Optional[str] = None
+) -> str:
+    """
+    Значение поля cis при записи КМ в МойСклад (PUT позиции или POST …/trackingCodes).
+
+    Нормативно КМ — цепочка (GTIN, серия, криптохвост и др. AI) с разделителями **GS**
+    (ASCII **29**, ``\\x1d``). ``Scan.code`` хранит сырой ввод.
+
+    Нормализация:
     - Управляющие символы кроме GS вырезаем; GS сразу после 14 цифр GTIN перед ``21``
       убираем (сканер мог отдать ``01…\\x1d21…``).
-    - Регистр серийной части после ``21`` **не меняем**: МС/проверка КМ могут требовать
-      точное совпадение с криптохвостом (ошибка 17102 после принудительного upper).
-    - ``%c1`` / ``%C1`` в серийной части удаляем (мусор от сканера/камеры).
-    ``Scan.code`` в БД не меняется — только значение cis в запросе к МС.
+    - Регистр после ``21`` не меняем.
+    - ``%c1`` / ``%C1`` в серийной части удаляем.
+
+    Если задан ``assortment.trackingType`` из МС, в ``cis`` может уходить **укороченный
+    код идентификации** (без хвоста Data Matrix): для **SOFT_DRINKS** / **WATER** —
+    24 символа (``21`` + 6 знаков серии); для **TOBACCO** — 25 символов (``21`` + 7).
+    Иначе — полная нормализованная строка.
     """
     if not stored:
         return stored
@@ -134,7 +177,7 @@ def cis_string_for_moysklad_api(stored: str) -> str:
             parts.append(ch)
     s = "".join(parts)
 
-    # 01 + 14 цифр + (опц. FNC1) + 21 + серия [+ опц. FNC1 и другие AI]
+    out = s
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
         tail = s[16:]
         while tail.startswith(_FNC1):
@@ -142,16 +185,30 @@ def cis_string_for_moysklad_api(stored: str) -> str:
         if tail.startswith("21"):
             serial = tail[2:]
             serial = re.sub(r"(?i)%c1", "", serial)
-            return "01" + s[2:16] + "21" + serial
+            out = "01" + s[2:16] + "21" + serial
+    else:
+        marker = _FNC1 + "21"
+        pos = s.find(marker)
+        if pos != -1:
+            head = s[: pos + len(marker)]
+            serial = s[pos + len(marker) :]
+            serial = re.sub(r"(?i)%c1", "", serial)
+            out = head + serial
 
-    marker = _FNC1 + "21"
-    pos = s.find(marker)
-    if pos != -1:
-        head = s[: pos + len(marker)]
-        serial = s[pos + len(marker) :]
-        serial = re.sub(r"(?i)%c1", "", serial)
-        return head + serial
-    return s
+    tt = (moysklad_tracking_type or "").strip().upper()
+    serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
+    if serial_len is not None:
+        short = cis_identification_document_code(out, serial_len)
+        if short != out:
+            logger.info(
+                "cis.moysklad_identification_short",
+                tracking_type=tt,
+                serial_len=serial_len,
+                len_before=len(out),
+                len_after=len(short),
+            )
+            return short
+    return out
 
 
 class ChestnyZnakService:

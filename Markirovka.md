@@ -86,6 +86,6 @@ Content-Type: application/json
 
 ## Связь с этим репозиторием
 
-- **Позиции уже есть в МС** (типичный сценарий): `MoySkladService.update_document` в `backend/app/services/moysklad.py` сначала делает `PUT` документа (количество и прочие поля позиций **без** вложенного `trackingCodes`), затем для каждой затронутой строки — **`POST .../positions/{positionId}/trackingCodes`** с телом-массивом `[{ "cis", "type": "trackingcode" }, ...]`. Значение `cis` нормализуется `cis_string_for_moysklad_api` в `backend/app/services/chestnyznak.py`.
+- **Позиции уже есть в МС** (типичный сценарий): `MoySkladService.update_document` в `backend/app/services/moysklad.py` сначала делает `PUT` документа (количество и прочие поля позиций **без** вложенного `trackingCodes`), затем для каждой затронутой строки — **`POST .../positions/{positionId}/trackingCodes`** с телом-массивом `[{ "cis", "type": "trackingcode" }, ...]`. Значение `cis` формирует `cis_string_for_moysklad_api` в `backend/app/services/chestnyznak.py`: по `assortment.trackingType` из МС для **SOFT_DRINKS** / **WATER** в `cis` уходит **24-символьный** код идентификации (`01`+14 цифр+`21`+6 символов серии), для **TOBACCO** — **25 символов** (`21`+7 символов серии); иначе — полная нормализованная строка КМ со сканера.
 - **Позиций ещё нет** (редкий путь): те же КМ передаются в `PUT` внутри `positions[].trackingCodes`, как раньше.
 - Поле **`cis_1162`** при создании через наш поток не задаётся (в документации МС — только для чтения в ответе).
