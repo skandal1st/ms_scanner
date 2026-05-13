@@ -103,6 +103,27 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     return (None, None)
 
 
+def cis_string_for_moysklad_api(stored: str) -> str:
+    """
+    Значение поля cis при PUT trackingCodes в МойСклад.
+
+    МС часто ожидает разделитель FNC1 (ASCII 29) между AI 01 (GTIN) и AI 21 (серия),
+    тогда как сканер или камера отдают слитную строку вида ``01<14 цифр>21<серия>`` без ``\\x1d``.
+    ``Scan.code`` в БД остаётся сырым — правка только на границе вызова API МойСклад.
+    """
+    if not stored:
+        return stored
+    s = stored
+    if not (s.startswith("01") and len(s) >= 18 and s[2:16].isdigit()):
+        return stored
+    tail = s[16:]
+    if tail.startswith(_FNC1):
+        return stored
+    if tail.startswith("21"):
+        return s[:16] + _FNC1 + tail
+    return stored
+
+
 class ChestnyZnakService:
     def __init__(self, token: Optional[str] = None, mock: Optional[bool] = None):
         self.token = token

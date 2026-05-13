@@ -5,7 +5,20 @@ from typing import Optional
 
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
-from app.services.chestnyznak import normalize_gtin_key
+from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin_key
+
+
+def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
+    """Совпадение Scan.code с фрагментом из ошибки МС (412): учёт FNC1 и нормализации cis."""
+    a = (scan_code or "").strip()
+    b = (ms_snippet or "").strip()
+    if a == b:
+        return True
+    if cis_string_for_moysklad_api(a) == b or a == cis_string_for_moysklad_api(b):
+        return True
+    loose_a = "".join(c for c in a if c not in "\x1d\x1e")
+    loose_b = "".join(c for c in b if c not in "\x1d\x1e")
+    return loose_a == loose_b
 
 
 def _run(coro):
@@ -438,9 +451,17 @@ async def _process_document_async(document_id: str, user_id: str):
                     bad_code = m.group(1) if m else None
                     if not bad_code:
                         raise
-                    # МС может вернуть код в ином виде, чем сырой Scan.code — тогда exact-match не сработает.
-                    bad_scan = next((s for s in remaining_scans if s.code == bad_code), None)
+                    bad_scan = next(
+                        (s for s in remaining_scans if _cis_matches_ms_error_message(s.code, bad_code)),
+                        None,
+                    )
                     if not bad_scan:
+                        logger.error(
+                            "process_document.bad_code_unmatched",
+                            document_id=document_id,
+                            bad_code=bad_code,
+                            scan_codes=[(str(s.id), s.code[:80] if s.code else "") for s in remaining_scans],
+                        )
                         raise
 
                     bad_scan.status = ScanStatus.invalid

@@ -2,7 +2,7 @@ import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import logger
-from app.services.chestnyznak import normalize_gtin_key
+from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin_key
 
 
 # Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
@@ -249,9 +249,12 @@ class MoySkladService:
                     if take:
                         payload["quantity"] = len(take)
                         if write_codes:
-                            # cis = сырое значение из Scan.code (без серверной пересборки GS1).
+                            # cis: сырое Scan.code + при необходимости FNC1 между 01 и 21 для API МС.
                             payload["trackingCodes"] = [
-                                {"cis": s["code"], "type": "trackingcode"}
+                                {
+                                    "cis": cis_string_for_moysklad_api(s["code"]),
+                                    "type": "trackingcode",
+                                }
                                 for s in take
                                 if s.get("code")
                             ]
@@ -281,9 +284,11 @@ class MoySkladService:
                     "quantity": len(group),
                 }
                 if write_codes:
-                    # cis = сырое значение из Scan.code (без серверной пересборки GS1).
                     position["trackingCodes"] = [
-                        {"cis": s["code"], "type": "trackingcode"}
+                        {
+                            "cis": cis_string_for_moysklad_api(s["code"]),
+                            "type": "trackingcode",
+                        }
                         for s in group
                         if s.get("code")
                     ]
