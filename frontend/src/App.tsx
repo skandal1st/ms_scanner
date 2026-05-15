@@ -26,17 +26,14 @@ function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <>
-      {children}
       <nav className="app-nav" aria-label="Навигация">
-        <NavLink to="/shipment" end className={({ isActive }) => (isActive ? 'active' : '')}>
-          Отгрузка
-        </NavLink>
         <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
           Настройки
         </NavLink>
         <span className="app-nav__sep" />
         <button type="button" onClick={handleLogout}>Выйти</button>
       </nav>
+      {children}
     </>
   )
 }

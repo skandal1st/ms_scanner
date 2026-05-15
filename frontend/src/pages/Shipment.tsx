@@ -7,20 +7,11 @@ import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
-import type { Document, DocumentKind } from '../api/client'
-
-type ShipmentKind = DocumentKind
-
-const KIND_OPTIONS: { kind: ShipmentKind; label: string }[] = [
-  { kind: 'demand', label: 'Отгрузка' },
-  { kind: 'loss', label: 'Списание' },
-  { kind: 'salesreturn', label: 'Возврат покупателя' },
-]
+import type { Document } from '../api/client'
 
 export function ShipmentPage() {
   const { document, setDocument, stats, scans, getProgress } = useScanStore()
   const progress = getProgress()
-  const [kind, setKind] = useState<ShipmentKind>('demand')
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
@@ -32,14 +23,6 @@ export function ShipmentPage() {
   const handleSelectDoc = (doc: Document) => {
     setPendingDoc(doc)
     setDocument(doc)
-  }
-
-  const handleKindChange = (next: ShipmentKind) => {
-    if (next === kind) return
-    setKind(next)
-    // При смене подтипа сбрасываем выбранный документ — он принадлежит другому типу
-    setPendingDoc(null)
-    setDocument(null)
   }
 
   const handleProcess = async () => {
@@ -74,18 +57,7 @@ export function ShipmentPage() {
 
       <div className="acc-body">
         <div className="acc-left">
-          <ul className="tabs__buttons" style={{ margin: '0 0 12px 0', flexWrap: 'wrap' }}>
-            {KIND_OPTIONS.map((opt) => (
-              <li
-                key={opt.kind}
-                className={`tabs__button ${kind === opt.kind ? 'b-active' : ''}`}
-                onClick={() => handleKindChange(opt.kind)}
-              >
-                {opt.label}
-              </li>
-            ))}
-          </ul>
-          <DocumentSelector kind={kind} onSelect={handleSelectDoc} selected={document} />
+          <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />

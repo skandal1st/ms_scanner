@@ -96,17 +96,14 @@ html, body, #root { height: 100%; }
 /* Прижата к левому нижнему углу, чтобы не перекрывать правые кнопки
    действия (Сохранить в Settings, Принять/Отгрузить в Приёмке/Отгрузке). */
 .app-nav {
-  position: fixed;
-  bottom: 16px;
-  left: 16px;
+  position: static;
   display: flex;
+  justify-content: flex-end;
   gap: 4px;
   background: var(--ms-bg);
-  border: 1px solid var(--ms-border);
-  border-radius: var(--ms-radius);
-  padding: 4px;
+  border-bottom: 1px solid var(--ms-border);
+  padding: 6px 16px;
   z-index: 50;
-  box-shadow: 0 1px 3px 0 #c8c8c8;
   align-items: center;
 }
 .app-nav a, .app-nav button {

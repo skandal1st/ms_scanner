@@ -10,8 +10,6 @@ interface Props {
 
 const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'отгрузку',
-  loss: 'списание',
-  salesreturn: 'возврат покупателя',
 }
 
 export function DocumentSelector({ kind, onSelect, selected }: Props) {

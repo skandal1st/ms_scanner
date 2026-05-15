@@ -374,7 +374,7 @@ async def _process_document_async(document_id: str, user_id: str):
             return
 
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
-        if kind not in {"demand", "loss", "salesreturn"}:
+        if kind != "demand":
             logger.warning(
                 "process_document.unsupported_kind",
                 document_id=document_id,

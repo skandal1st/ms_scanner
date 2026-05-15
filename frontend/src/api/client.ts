@@ -33,7 +33,7 @@ export const authApi = {
     api.post<{ access_token: string; refresh_token: string }>('/auth/register', { email, password }),
 }
 
-export type DocumentKind = 'demand' | 'loss' | 'salesreturn'
+export type DocumentKind = 'demand'
 
 export interface MsDocument {
   id: string

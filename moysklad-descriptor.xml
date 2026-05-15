@@ -17,14 +17,6 @@
                 <view/>
                 <update/>
             </demand>
-            <loss>
-                <view/>
-                <update/>
-            </loss>
-            <salesReturn>
-                <view/>
-                <update/>
-            </salesReturn>
             <good>
                 <view/>
             </good>
