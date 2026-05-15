@@ -101,8 +101,8 @@ class Document(Base):
     name = Column(String(500), nullable=False)
     kind = Column(
         Enum(DocumentKind),
-        default=DocumentKind.supply,
-        server_default=DocumentKind.supply.value,
+        default=DocumentKind.demand,
+        server_default=DocumentKind.demand.value,
         nullable=False,
     )
     status = Column(Enum(DocumentStatus), default=DocumentStatus.draft, nullable=False)

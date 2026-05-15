@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { scansApi, isSscc } from '../api/client'
+import { scansApi } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { decodeJwtSub } from '../lib/jwt'
 
@@ -103,26 +103,16 @@ export function useScanner(documentId: string | null) {
       const trimmed = code.trim()
 
       try {
-        if (isSscc(trimmed)) {
-          const { data: scans } = await scansApi.createBox(documentId, trimmed)
-          let anyDuplicate = false
-          for (const s of scans) {
-            addScan(s)
-            if (s.status === 'duplicate') anyDuplicate = true
-          }
-          playBeep(anyDuplicate ? 'error' : 'ok')
-        } else {
-          const targetPid = useScanStore.getState().targetProductId
-          const { data: scan } = await scansApi.create(
-            documentId,
-            trimmed,
-            targetPid || undefined
-          )
-          if (scan.status === 'duplicate') {
-            playBeep('error')
-          }
-          addScan(scan)
+        const targetPid = useScanStore.getState().targetProductId
+        const { data: scan } = await scansApi.create(
+          documentId,
+          trimmed,
+          targetPid || undefined
+        )
+        if (scan.status === 'duplicate') {
+          playBeep('error')
         }
+        addScan(scan)
       } catch (err: unknown) {
         playBeep('error')
         const ax = err as { response?: { data?: { detail?: unknown } } }

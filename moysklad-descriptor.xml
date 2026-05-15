@@ -13,11 +13,6 @@
         <resource>https://api.moysklad.ru/api/remap/1.2</resource>
         <scope>custom</scope>
         <permissions>
-            <supply>
-                <view/>
-                <create/>
-                <update/>
-            </supply>
             <demand>
                 <view/>
                 <update/>

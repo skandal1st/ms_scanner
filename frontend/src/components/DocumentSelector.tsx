@@ -9,7 +9,6 @@ interface Props {
 }
 
 const KIND_LABEL: Record<DocumentKind, string> = {
-  supply: 'поступление',
   demand: 'отгрузку',
   loss: 'списание',
   salesreturn: 'возврат покупателя',
@@ -25,6 +24,14 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
   const { data: documents } = useDocuments(kind)
   const createMutation = useCreateDocument()
 
+  const errorText = (err: any, fallback: string) => {
+    const detail = err?.response?.data?.detail
+    const status = err?.response?.status
+    if (typeof detail === 'string') return detail
+    if (status) return `Ошибка ${status}: ${fallback}`
+    return fallback
+  }
+
   const handleCreate = async () => {
     if (!newName.trim()) return
     setCreateError(null)
@@ -38,15 +45,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
       setSelectedMsId('')
       onSelect(doc)
     } catch (err: any) {
-      const detail = err?.response?.data?.detail
-      const status = err?.response?.status
-      setCreateError(
-        typeof detail === 'string'
-          ? detail
-          : status
-            ? `Ошибка ${status} при создании документа`
-            : 'Не удалось создать документ',
-      )
+      setCreateError(errorText(err, 'Не удалось создать документ'))
     }
   }
 
@@ -78,8 +77,6 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
       )}
 
       {mode === 'select' && (() => {
-        // Объединённый список: локальные привязки + МС-документы, ещё не привязанные.
-        // Клик по непривязанному МС-документу мгновенно создаёт локальный документ.
         const boundMsIds = new Set(
           (documents ?? []).map((d) => d.moysklad_id).filter(Boolean) as string[],
         )
@@ -96,22 +93,14 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
             })
             onSelect(doc)
           } catch (err: any) {
-            const detail = err?.response?.data?.detail
-            const status = err?.response?.status
-            setCreateError(
-              typeof detail === 'string'
-                ? detail
-                : status
-                  ? `Ошибка ${status} при создании документа`
-                  : 'Не удалось привязать документ',
-            )
+            setCreateError(errorText(err, 'Не удалось привязать документ'))
           }
         }
 
         if (isEmpty) {
           return (
             <p className="hint">
-              {msLoading ? 'Загружаю документы из МойСклад…' : 'Нет документов'}
+              {msLoading ? 'Загружаю документы из МойСклад...' : 'Нет документов'}
             </p>
           )
         }
@@ -174,7 +163,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
                 if (s) setNewName(s.name)
               }}
             >
-              <option value="">Привязать {KIND_LABEL[kind]} из МойСклад…</option>
+              <option value="">Привязать {KIND_LABEL[kind]} из МойСклад...</option>
               {msDocs.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
@@ -193,7 +182,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
             onClick={handleCreate}
             disabled={!newName.trim() || createMutation.isPending}
           >
-            {createMutation.isPending ? 'Создаю…' : 'Создать'}
+            {createMutation.isPending ? 'Создаю...' : 'Создать'}
           </button>
           {createError && (
             <div

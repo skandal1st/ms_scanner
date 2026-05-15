@@ -9,7 +9,7 @@ import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document, DocumentKind } from '../api/client'
 
-type ShipmentKind = Exclude<DocumentKind, 'supply'>
+type ShipmentKind = DocumentKind
 
 const KIND_OPTIONS: { kind: ShipmentKind; label: string }[] = [
   { kind: 'demand', label: 'Отгрузка' },

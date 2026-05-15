@@ -35,7 +35,7 @@ export function LoginPage() {
     <div className="login-page">
       <div className="login-card">
         <h1 className="login-card__title">МС-Сканер</h1>
-        <p className="login-card__sub">Приёмка маркированных товаров</p>
+        <p className="login-card__sub">Сборка отгрузок маркированной продукции</p>
 
         <ul className="tabs__buttons" role="tablist">
           <li

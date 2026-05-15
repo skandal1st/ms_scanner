@@ -8,12 +8,12 @@ from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin
 
 # Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
 # МойСклад сам валидирует CIS; отдельный ввод в оборот через API ЧЗ в приложении не делаем.
-WRITE_TRACKING_CODES_KINDS = {"supply", "demand", "loss", "salesreturn"}
+WRITE_TRACKING_CODES_KINDS = {"demand", "loss", "salesreturn"}
 
 # Все типы МС-документов, поддерживаемые приложением.
 # move (Перемещение) исключён: XSD-схема дескриптора не разрешает update
 # для move через scope=custom — мы не можем записать trackingCodes в позиции.
-SUPPORTED_KINDS = {"supply", "demand", "loss", "salesreturn"}
+SUPPORTED_KINDS = {"demand", "loss", "salesreturn"}
 
 
 class MoySkladService:
@@ -435,12 +435,3 @@ class MoySkladService:
             return resp.json()
 
     # --- Алиасы для backward-совместимости старого приёмочного кода ---
-
-    async def get_supplies(self, limit: int = 50) -> List[Dict[str, Any]]:
-        return await self.get_documents("supply", limit=limit)
-
-    async def get_supply(self, supply_id: str) -> Dict[str, Any]:
-        return await self.get_document("supply", supply_id)
-
-    async def update_supply(self, supply_id: str, scans: List[Dict]) -> Dict[str, Any]:
-        return await self.update_document("supply", supply_id, scans)

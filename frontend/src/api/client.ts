@@ -26,7 +26,6 @@ api.interceptors.response.use(
 
 export default api
 
-// --- Auth ---
 export const authApi = {
   login: (email: string, password: string) =>
     api.post<{ access_token: string; refresh_token: string }>('/auth/login', { email, password }),
@@ -34,10 +33,7 @@ export const authApi = {
     api.post<{ access_token: string; refresh_token: string }>('/auth/register', { email, password }),
 }
 
-// --- Documents ---
-// move исключён: XSD-схема дескриптора не разрешает update для перемещений
-// через scope=custom, а вся логика отгрузки = запись trackingCodes через PUT.
-export type DocumentKind = 'supply' | 'demand' | 'loss' | 'salesreturn'
+export type DocumentKind = 'demand' | 'loss' | 'salesreturn'
 
 export interface MsDocument {
   id: string
@@ -79,7 +75,6 @@ export function isSscc(code: string): boolean {
   return code.length === 20 && code.startsWith('00') && /^\d+$/.test(code)
 }
 
-// --- Scans ---
 export type ScanStatus = 'pending' | 'valid' | 'invalid' | 'duplicate' | 'overflow'
 
 export interface Scan {
@@ -89,7 +84,6 @@ export interface Scan {
   gtin: string | null
   status: ScanStatus
   product_name: string | null
-  /** Явная привязка к товару МС (UUID), если кладовщик выбрал строку вручную. */
   moysklad_product_id?: string | null
   error_message: string | null
   scanned_at: string
@@ -104,48 +98,17 @@ export const scansApi = {
     }),
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
-  createBox: (document_id: string, sscc: string) =>
-    api.post<Scan[]>('/scans/box', { document_id, sscc }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
 }
 
-// --- Integrations ---
 export interface Integration {
   has_moysklad: boolean
   moysklad_account_name: string | null
-  has_cz: boolean
-  cz_token_valid_until: string | null
-  cz_cert_subject: string | null
-  /** Метод авторизации ЧЗ на сервере (служебное поле API). */
-  cz_auth_method: string
-  cz_box_mode_enabled: boolean
 }
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
-  update: (data: { moysklad_token?: string; cz_token?: string; cz_box_mode_enabled?: boolean }) =>
+  update: (data: { moysklad_token?: string }) =>
     api.put<Integration>('/integrations/', data),
-}
-
-// --- ЧЗ авторизация через УКЭП (CryptoPro Browser Plugin) ---
-export interface CzChallenge {
-  uuid: string
-  data: string
-}
-
-export interface CzLoginResult {
-  cz_token_valid_until: string
-  cz_cert_subject: string | null
-}
-
-export const czAuthApi = {
-  challenge: () => api.post<CzChallenge>('/integrations/cz/challenge'),
-  login: (body: {
-    uuid: string
-    signed_data: string
-    cert_thumbprint?: string
-    cert_subject?: string
-  }) => api.post<CzLoginResult>('/integrations/cz/login', body),
-  logout: () => api.delete<Integration>('/integrations/cz'),
 }

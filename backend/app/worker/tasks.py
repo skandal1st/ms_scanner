@@ -374,6 +374,13 @@ async def _process_document_async(document_id: str, user_id: str):
             return
 
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
+        if kind not in {"demand", "loss", "salesreturn"}:
+            logger.warning(
+                "process_document.unsupported_kind",
+                document_id=document_id,
+                kind=kind,
+            )
+            return
 
         # Сканы для отправки: valid + overflow.
         # overflow — сверхплановые, визуально помечены красным, но идут в МС.

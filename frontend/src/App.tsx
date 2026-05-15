@@ -1,6 +1,5 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { AcceptancePage } from './pages/Acceptance'
 import { ShipmentPage } from './pages/Shipment'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
@@ -20,6 +19,8 @@ function RequireAuth({ children }: { children: JSX.Element }) {
 function Layout({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    localStorage.removeItem('user_id')
     window.location.href = '/login'
   }
 
@@ -27,10 +28,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <nav className="app-nav" aria-label="Навигация">
-        <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
-          Приёмка
-        </NavLink>
-        <NavLink to="/shipment" className={({ isActive }) => (isActive ? 'active' : '')}>
+        <NavLink to="/shipment" end className={({ isActive }) => (isActive ? 'active' : '')}>
           Отгрузка
         </NavLink>
         <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
@@ -51,16 +49,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/ms" element={<MsIframePage />} />
           <Route path="/launch" element={<LaunchPage />} />
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <Layout>
-                  <AcceptancePage />
-                </Layout>
-              </RequireAuth>
-            }
-          />
+          <Route path="/" element={<Navigate to="/shipment" replace />} />
           <Route
             path="/shipment"
             element={

@@ -37,7 +37,7 @@ class DocumentResponse(BaseModel):
 
 class CreateDocumentRequest(BaseModel):
     name: str
-    kind: DocumentKind = DocumentKind.supply
+    kind: DocumentKind = DocumentKind.demand
     moysklad_id: Optional[str] = None
 
 
@@ -95,6 +95,17 @@ async def _get_ms_service(
     return MoySkladService(token)
 
 
+def _ensure_supported_kind(kind: str) -> None:
+    if kind not in SUPPORTED_KINDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Поддерживаются только отгрузочные документы: "
+                f"{', '.join(sorted(SUPPORTED_KINDS))}"
+            ),
+        )
+
+
 @router.get("/moysklad/{kind}", response_model=List[MoySkladDocumentItem])
 async def list_moysklad_documents(
     kind: str,
@@ -102,10 +113,7 @@ async def list_moysklad_documents(
     db: AsyncSession = Depends(get_db),
 ):
     """Список МС-документов выбранного типа (supply/demand/loss/move/salesreturn)."""
-    if kind not in SUPPORTED_KINDS:
-        raise HTTPException(
-            status_code=400, detail=f"Неподдерживаемый тип документа: {kind}"
-        )
+    _ensure_supported_kind(kind)
     ms = await _get_ms_service(current_user, db)
     return await ms.get_documents(kind)
 
@@ -115,8 +123,8 @@ async def list_moysklad_supplies_alias(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Backward-совместимый алиас → /moysklad/supply."""
-    return await list_moysklad_documents("supply", current_user, db)
+    """Старый алиас приёмки больше не используется."""
+    raise HTTPException(status_code=410, detail="Приёмка отключена. Используйте отгрузочные документы.")
 
 
 @router.get("/", response_model=List[DocumentResponse])
@@ -127,6 +135,7 @@ async def list_documents(
 ):
     query = select(Document).where(Document.user_id == current_user.id)
     if kind is not None:
+        _ensure_supported_kind(kind.value)
         query = query.where(Document.kind == kind)
     query = query.order_by(Document.created_at.desc())
     result = await db.execute(query)
@@ -141,6 +150,7 @@ async def create_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    _ensure_supported_kind(body.kind.value)
     plan: list = []
     if body.moysklad_id:
         # Подгружаем план сборки из МС-документа: positions → expected_qty по товарам.
@@ -190,6 +200,7 @@ async def refresh_plan(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
+    _ensure_supported_kind(doc.kind.value)
     if not doc.moysklad_id:
         raise HTTPException(400, "Документ не привязан к МойСклад")
 
@@ -215,6 +226,7 @@ async def get_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    _ensure_supported_kind(doc.kind.value)
     return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
@@ -237,12 +249,13 @@ async def process_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    _ensure_supported_kind(doc.kind.value)
 
     from app.worker.tasks import process_document_task
-    process_document_task.delay(str(document_id), str(current_user.id))
-
     doc.status = DocumentStatus.processing
     await db.commit()
+
+    process_document_task.delay(str(document_id), str(current_user.id))
     return {"status": "processing", "document_id": str(document_id)}
 
 

@@ -40,32 +40,29 @@ export function MsIframePage() {
           throw new Error(data?.detail || `HTTP ${resp.status}`)
         }
         const payload = data as LaunchPayload
-        // JWT нужен, чтобы Settings внутри iframe мог обращаться к нашему API.
-        // Storage может быть partitioned (Chrome 3rd-party) — это ок, токен живёт
-        // только в рамках текущего iframe-окна, в новой вкладке сессия отдельная.
         localStorage.setItem('access_token', payload.access_token)
         localStorage.setItem('refresh_token', payload.refresh_token)
         persistUserIdFromAccessToken(payload.access_token)
         setState({ kind: 'ready', payload })
       })
       .catch((err) => {
-        const message = typeof err?.message === 'string' ? err.message : 'Ошибка авторизации через МойСклад'
+        const message = typeof err?.message === 'string'
+          ? err.message
+          : 'Ошибка авторизации через МойСклад'
         setState({ kind: 'error', message })
       })
   }, [])
 
-  const openInNewTab = (mode: 'acceptance' | 'shipment') => {
+  const openShipment = () => {
     if (state.kind !== 'ready') return
-    // Без noopener, чтобы window.close() сработал из новой вкладки
-    // после подтверждения. Origin совпадает (skandata.ru).
     const t = encodeURIComponent(state.payload.launch_token)
-    window.open(`/launch?t=${t}&mode=${mode}`, '_blank')
+    window.open(`/launch?t=${t}&mode=shipment`, '_blank')
   }
 
   if (state.kind === 'loading') {
     return (
       <div style={styles.centered}>
-        <div style={styles.muted}>Подключаемся к МойСклад…</div>
+        <div style={styles.muted}>Подключаемся к МойСклад...</div>
       </div>
     )
   }
@@ -93,11 +90,8 @@ export function MsIframePage() {
           )}
         </div>
         <div style={styles.ctaGroup}>
-          <button type="button" style={styles.cta} onClick={() => openInNewTab('acceptance')}>
-            📥 Начать приёмку
-          </button>
-          <button type="button" style={styles.ctaSecondary} onClick={() => openInNewTab('shipment')}>
-            📤 Начать отгрузку
+          <button type="button" style={styles.cta} onClick={openShipment}>
+            Начать отгрузку
           </button>
         </div>
       </header>
@@ -107,8 +101,7 @@ export function MsIframePage() {
       </main>
 
       <footer style={styles.footer}>
-        Сканирование откроется в новой вкладке — браузеру нужен полный фокус
-        на USB-сканере.
+        Сборка отгрузки откроется в новой вкладке, чтобы USB-сканер оставался в фокусе.
       </footer>
     </div>
   )
@@ -152,17 +145,6 @@ const styles: Record<string, CSSProperties> = {
   },
   cta: {
     background: '#16a34a',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 8,
-    padding: '10px 18px',
-    fontSize: 14,
-    fontWeight: 500,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  },
-  ctaSecondary: {
-    background: '#2563eb',
     color: '#fff',
     border: 'none',
     borderRadius: 8,

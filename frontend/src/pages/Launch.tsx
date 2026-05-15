@@ -9,13 +9,8 @@ export function LaunchPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
-    const mode = params.get('mode')
-    const target = mode === 'shipment' ? '/shipment' : '/'
+    const target = '/shipment'
 
-    // Если у нас уже есть JWT (страница перезагрузилась, либо повторный заход
-    // с тем же URL после успешного обмена) — не дёргаем /auth/launch повторно.
-    // launch_token одноразовый (GETDEL), повторный обмен вернёт 401 «Ссылка
-    // устарела», и пользователь увидит ошибку, хотя сессия живая.
     if (localStorage.getItem('access_token')) {
       navigate(target, { replace: true })
       return
@@ -42,8 +37,6 @@ export function LaunchPage() {
         navigate(target, { replace: true })
       })
       .catch((err) => {
-        // Если в процессе мы успели получить JWT (двойной useEffect в Strict
-        // Mode и т.п.) — лучше пустить пользователя, чем пугать ошибкой.
         if (localStorage.getItem('access_token')) {
           navigate(target, { replace: true })
           return
@@ -82,7 +75,7 @@ export function LaunchPage() {
           </div>
         </div>
       ) : (
-        <div style={{ color: '#6b7280' }}>Открываем приёмку…</div>
+        <div style={{ color: '#6b7280' }}>Открываем отгрузку...</div>
       )}
     </div>
   )

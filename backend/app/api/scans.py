@@ -187,6 +187,10 @@ async def create_box_scans(
     Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
     doc = await _ensure_document_owner(body.document_id, current_user, db)
+    raise HTTPException(
+        status_code=410,
+        detail="Сканирование коробов отключено. Сканируйте коды маркировки поштучно для отгрузки.",
+    )
     if not is_sscc(body.sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
