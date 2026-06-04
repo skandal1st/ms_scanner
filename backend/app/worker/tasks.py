@@ -51,7 +51,7 @@ def _run(coro):
 
 
 async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
-    """Подставить название товара из МойСклад по GTIN (если токен есть и имя ещё пустое)."""
+    """Подтянуть товар из МойСклад по GTIN: имя и UUID (если ещё не заполнены)."""
     from sqlalchemy import select
     from app.db.models import Integration
     from app.services.moysklad import MoySkladService
@@ -72,8 +72,12 @@ async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
     except Exception as exc:
         logger.warning("verify_code.ms_product_lookup_failed", scan_id=str(scan.id), error=str(exc))
         return
-    if product and product.get("name"):
+    if not product:
+        return
+    if product.get("name") and not scan.product_name:
         scan.product_name = product["name"]
+    if product.get("id") and not scan.moysklad_product_id:
+        scan.moysklad_product_id = product["id"]
 
 
 async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> None:
@@ -105,7 +109,7 @@ async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> 
 
 
 async def _enrich_scan_product_name_from_plan(db, scan) -> None:
-    """Название из плана документа (позиции МС) — приоритетнее глобального поиска по GTIN."""
+    """Имя и product_id из плана документа — приоритетнее глобального поиска по GTIN."""
     from sqlalchemy import select
     from app.db.models import Document
 
@@ -120,18 +124,21 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
             if p.get("product_id") != scan.moysklad_product_id:
                 continue
             name = (p.get("product_name") or "").strip()
-            if name:
+            if name and not scan.product_name:
                 scan.product_name = name
-                return
+            return
     for p in doc.plan:
         if not isinstance(p, dict):
             continue
         if normalize_gtin_key(p.get("gtin")) != normalize_gtin_key(scan.gtin):
             continue
+        pid = p.get("product_id")
+        if pid and isinstance(pid, str) and not scan.moysklad_product_id:
+            scan.moysklad_product_id = pid
         name = (p.get("product_name") or "").strip()
-        if name:
+        if name and not scan.product_name:
             scan.product_name = name
-            return
+        return
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_code")
@@ -281,14 +288,26 @@ async def _verify_code_async(scan_id: str, user_id: str):
                     )
         if scan.status in (ScanStatus.valid, ScanStatus.overflow) and (scan.gtin or scan.moysklad_product_id):
             await _enrich_scan_product_name_from_plan(db, scan)
+        # find_product_by_gtin теперь дёргаем и ради product_id, не только ради имени.
         if (
             scan.status in (ScanStatus.valid, ScanStatus.overflow)
             and scan.gtin
-            and not scan.product_name
+            and not scan.moysklad_product_id
         ):
             await _enrich_scan_product_name_from_ms(db, user_id, scan)
         if scan.status in (ScanStatus.valid, ScanStatus.overflow) and not scan.product_name:
             await _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan)
+
+        # Если КМ валидна, GTIN известен, но product_id не нашёлся ни в плане, ни в МС —
+        # помечаем unknown_product. Кладовщик должен вручную сопоставить с товаром МС
+        # перед отгрузкой документа.
+        if (
+            scan.status in (ScanStatus.valid, ScanStatus.overflow)
+            and scan.gtin
+            and not scan.moysklad_product_id
+        ):
+            scan.status = ScanStatus.unknown_product
+            scan.error_message = "Товар не найден в МС — сопоставьте вручную"
 
         await db.commit()
 

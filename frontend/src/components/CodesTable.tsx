@@ -3,11 +3,12 @@ import { useScanStore } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 
 const STATUS_CONFIG = {
-  pending:   { label: 'Проверяется', cls: 'badge--pending' },
-  valid:     { label: 'Валиден',     cls: 'badge--ok' },
-  invalid:   { label: 'Ошибка',      cls: 'badge--error' },
-  duplicate: { label: 'Дубль',       cls: 'badge--warn' },
-  overflow:  { label: 'Сверх плана', cls: 'badge--error' },
+  pending:         { label: 'Проверяется',  cls: 'badge--pending' },
+  valid:           { label: 'Валиден',      cls: 'badge--ok' },
+  invalid:         { label: 'Ошибка',       cls: 'badge--error' },
+  duplicate:       { label: 'Дубль',        cls: 'badge--warn' },
+  overflow:        { label: 'Сверх плана',  cls: 'badge--error' },
+  unknown_product: { label: 'Нет товара',   cls: 'badge--warn' },
 } as const
 
 export function CodesTable() {

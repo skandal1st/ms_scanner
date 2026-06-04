@@ -422,6 +422,53 @@ class MoySkladService:
                         return row
         return None
 
+    async def search_products(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Поиск товаров в каталоге МС по строке (name/article/code).
+
+        Используется при ручном сопоставлении скана с неизвестным GTIN: кладовщик
+        вводит фрагмент названия, бэк отдаёт совпадения из `/entity/assortment`.
+        Возвращает только товары (type=product) — варианты/услуги отбрасываются.
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/assortment",
+                headers=self.headers,
+                params={"search": query, "limit": limit},
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ms.search_products.failed",
+                    status=resp.status_code,
+                    body=resp.text[:300],
+                )
+                return []
+            rows = resp.json().get("rows", []) or []
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            if (r.get("meta") or {}).get("type") != "product":
+                continue
+            barcodes_raw = r.get("barcodes") or []
+            barcodes: List[str] = []
+            for bc in barcodes_raw:
+                if not isinstance(bc, dict):
+                    continue
+                value = bc.get("gtin") or bc.get("ean13") or bc.get("ean8") or bc.get("code128")
+                if value:
+                    barcodes.append(str(value))
+            out.append(
+                {
+                    "id": r.get("id"),
+                    "name": r.get("name") or "",
+                    "article": r.get("article") or "",
+                    "code": r.get("code") or "",
+                    "barcodes": barcodes,
+                }
+            )
+        return out
+
     async def get_product_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
         """Карточка товара по UUID — имя для ручной привязки КМ к позиции."""
         async with httpx.AsyncClient(timeout=15) as client:

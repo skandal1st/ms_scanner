@@ -75,7 +75,13 @@ export function isSscc(code: string): boolean {
   return code.length === 20 && code.startsWith('00') && /^\d+$/.test(code)
 }
 
-export type ScanStatus = 'pending' | 'valid' | 'invalid' | 'duplicate' | 'overflow'
+export type ScanStatus =
+  | 'pending'
+  | 'valid'
+  | 'invalid'
+  | 'duplicate'
+  | 'overflow'
+  | 'unknown_product'
 
 export interface Scan {
   id: string
@@ -100,6 +106,31 @@ export const scansApi = {
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
+}
+
+export interface ProductSearchItem {
+  id: string
+  name: string
+  article: string
+  code: string
+  barcodes: string[]
+}
+
+export const productsApi = {
+  search: (q: string) =>
+    api.get<ProductSearchItem[]>('/products/search', { params: { q } }),
+  linkGtin: (
+    document_id: string,
+    gtin: string,
+    moysklad_product_id: string,
+    product_name?: string | null,
+  ) =>
+    api.post<{ updated_count: number }>('/products/link-gtin', {
+      document_id,
+      gtin,
+      moysklad_product_id,
+      product_name: product_name ?? null,
+    }),
 }
 
 export interface Integration {

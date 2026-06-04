@@ -5,6 +5,7 @@ import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
+import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document } from '../api/client'
@@ -64,6 +65,7 @@ export function ShipmentPage() {
         </div>
 
         <div className="acc-right">
+          <UnknownProductsPicker />
           <ProgressTable />
           <div className="acc-right__head">
             <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
@@ -87,18 +89,30 @@ export function ShipmentPage() {
         <button
           type="button"
           className="button button--success"
-          disabled={!document || scans.length === 0 || processMutation.isPending}
+          disabled={
+            !document ||
+            scans.length === 0 ||
+            processMutation.isPending ||
+            stats.unknown_product > 0
+          }
+          title={
+            stats.unknown_product > 0
+              ? `Сначала сопоставьте товары для ${stats.unknown_product} кодов`
+              : undefined
+          }
           onClick={() => setShowConfirm(true)}
         >
           {processMutation.isPending
             ? 'Обрабатывается…'
-            : progress.hasPlan
-              ? stats.overflow > 0
-                ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
-                : `Отгрузить ${progress.total.scanned}/${progress.total.expected}`
-              : progress.hasSummary && progress.total.addedTotal > 0
-                ? `Отгрузить (${progress.total.addedTotal})`
-                : 'Отгрузить товары'}
+            : stats.unknown_product > 0
+              ? `Сопоставьте товары (${stats.unknown_product})`
+              : progress.hasPlan
+                ? stats.overflow > 0
+                  ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
+                  : `Отгрузить ${progress.total.scanned}/${progress.total.expected}`
+                : progress.hasSummary && progress.total.addedTotal > 0
+                  ? `Отгрузить (${progress.total.addedTotal})`
+                  : 'Отгрузить товары'}
         </button>
       </footer>
 

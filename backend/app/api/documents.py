@@ -251,6 +251,27 @@ async def process_document(
         raise HTTPException(status_code=404, detail="Document not found")
     _ensure_supported_kind(doc.kind.value)
 
+    # Блокируем процесс, если есть сканы со статусом unknown_product —
+    # их нельзя отправить в МС без сопоставления товара.
+    from sqlalchemy import func
+    from app.db.models import Scan, ScanStatus
+
+    unknown_q = await db.execute(
+        select(func.count(Scan.id)).where(
+            Scan.document_id == document_id,
+            Scan.status == ScanStatus.unknown_product,
+        )
+    )
+    unknown_count = unknown_q.scalar_one()
+    if unknown_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Сначала сопоставьте товары для {unknown_count} "
+                f"кодов с неизвестным GTIN"
+            ),
+        )
+
     from app.worker.tasks import process_document_task
     doc.status = DocumentStatus.processing
     await db.commit()

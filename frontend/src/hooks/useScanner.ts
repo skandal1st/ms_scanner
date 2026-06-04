@@ -64,7 +64,12 @@ export function useScanner(documentId: string | null) {
             : {}),
         })
         if (data.status === 'valid') playBeep('ok')
-        else if (data.status === 'invalid' || data.status === 'overflow') playBeep('error')
+        else if (
+          data.status === 'invalid' ||
+          data.status === 'overflow' ||
+          data.status === 'unknown_product'
+        )
+          playBeep('error')
       }
     }
 

@@ -7,6 +7,7 @@ interface Stats {
   duplicate: number
   pending: number
   overflow: number
+  unknown_product: number
 }
 
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
@@ -60,7 +61,7 @@ function calcStats(scans: Scan[]): Stats {
       acc[s.status] = (acc[s.status] || 0) + 1
       return acc
     },
-    { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 } as Stats
+    { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 } as Stats
   )
 }
 
@@ -198,7 +199,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
-  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
+  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
   targetProductId: null,
 
   setTargetProductId: (id) => set({ targetProductId: id }),
@@ -229,7 +230,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     set({
       document: null,
       scans: [],
-      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0 },
+      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
       targetProductId: null,
     }),
 
