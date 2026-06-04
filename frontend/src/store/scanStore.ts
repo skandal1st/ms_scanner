@@ -45,6 +45,9 @@ interface ScanStore {
   /** Явный товар МС для следующих сканов (UUID); null = только авто по GTIN/плану. */
   targetProductId: string | null
   setTargetProductId: (id: string | null) => void
+  /** Режим удаления: следующий отсканированный код будет удалён из списка, а не добавлен. */
+  deleteMode: boolean
+  setDeleteMode: (v: boolean) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -201,10 +204,12 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   scans: [],
   stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
   targetProductId: null,
+  deleteMode: false,
 
   setTargetProductId: (id) => set({ targetProductId: id }),
+  setDeleteMode: (v) => set({ deleteMode: v }),
 
-  setDocument: (doc) => set({ document: doc, targetProductId: null }),
+  setDocument: (doc) => set({ document: doc, targetProductId: null, deleteMode: false }),
 
   setScans: (scans) => set({ scans, stats: calcStats(scans) }),
 
@@ -232,6 +237,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       scans: [],
       stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
       targetProductId: null,
+      deleteMode: false,
     }),
 
   getProgress: () => {

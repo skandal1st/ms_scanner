@@ -106,9 +106,31 @@ export function useScanner(documentId: string | null) {
     async (code: string) => {
       if (!documentId || !code.trim()) return
       const trimmed = code.trim()
+      const state = useScanStore.getState()
+
+      // Режим удаления: ищем существующий скан с тем же кодом и удаляем его.
+      if (state.deleteMode) {
+        const existing = state.scans.find(
+          (s) => s.document_id === documentId && s.code === trimmed,
+        )
+        if (!existing) {
+          playBeep('error')
+          window.alert('Код не найден в этом документе')
+          return
+        }
+        try {
+          await scansApi.delete(existing.id)
+          state.removeScan(existing.id)
+          playBeep('ok')
+        } catch (err) {
+          playBeep('error')
+          console.error('Delete scan error:', err)
+        }
+        return
+      }
 
       try {
-        const targetPid = useScanStore.getState().targetProductId
+        const targetPid = state.targetProductId
         const { data: scan } = await scansApi.create(
           documentId,
           trimmed,

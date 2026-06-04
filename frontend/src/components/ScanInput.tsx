@@ -3,6 +3,7 @@ import { useScanner } from '../hooks/useScanner'
 import { useSerialScanner } from '../hooks/useSerialScanner'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { useScannerMode } from '../lib/scannerMode'
+import { useScanStore } from '../store/scanStore'
 import { CameraScanModal } from './CameraScanModal'
 
 interface Props {
@@ -45,6 +46,8 @@ export function ScanInput({ documentId }: Props) {
   const { submitCode } = useScanner(documentId)
   const mode = useScannerMode()
   const isComMode = mode === 'com'
+  const deleteMode = useScanStore((s) => s.deleteMode)
+  const setDeleteMode = useScanStore((s) => s.setDeleteMode)
 
   const handleScannedCode = useCallback(
     async (code: string) => {
@@ -96,6 +99,10 @@ export function ScanInput({ documentId }: Props) {
     }
   }
 
+  const inputStyle = deleteMode
+    ? { borderColor: '#dc2626', background: '#fef2f2' }
+    : undefined
+
   return (
     <div className="scan-input">
       <label className="field-label" htmlFor="scan-field">Сканирование</label>
@@ -103,7 +110,13 @@ export function ScanInput({ documentId }: Props) {
         {isComMode ? (
           <div
             className="scan-input__field scan-input__com-status"
-            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-start',
+              gap: 6,
+              ...(deleteMode ? { border: '2px solid #dc2626', background: '#fef2f2', padding: 6, borderRadius: 6 } : {}),
+            }}
           >
             {serial.connected ? (
               <span className="badge badge--ok">🔌 COM-порт подключён</span>
@@ -125,13 +138,32 @@ export function ScanInput({ documentId }: Props) {
             value={value}
             onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
             onKeyDown={handleKeyDown}
-            placeholder="Сканируйте или введите код…"
+            placeholder={deleteMode ? 'Сканируйте код для удаления…' : 'Сканируйте или введите код…'}
             disabled={!documentId}
             className="scan-input__field"
             autoComplete="off"
             spellCheck={false}
+            style={inputStyle}
           />
         )}
+        <button
+          type="button"
+          className="button scan-input__camera"
+          disabled={!documentId}
+          onClick={() => setDeleteMode(!deleteMode)}
+          style={
+            deleteMode
+              ? { background: '#dc2626', borderColor: '#dc2626', color: '#fff' }
+              : undefined
+          }
+          title={
+            deleteMode
+              ? 'Выключить режим удаления'
+              : 'Включить режим: следующий отсканированный код будет удалён из списка'
+          }
+        >
+          {deleteMode ? '✕ Удаление' : '🗑 Удалить'}
+        </button>
         <button
           type="button"
           className="button scan-input__camera"
@@ -141,6 +173,11 @@ export function ScanInput({ documentId }: Props) {
           Камера
         </button>
       </div>
+      {deleteMode && (
+        <div className="alert alert--error" style={{ marginTop: 8 }}>
+          Режим удаления: следующий отсканированный код будет удалён из списка.
+        </div>
+      )}
       {lastCode && (
         <div className="scan-input__last">
           <span>Последний:</span>
