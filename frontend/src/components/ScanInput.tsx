@@ -57,7 +57,7 @@ export function ScanInput({ documentId }: Props) {
   )
 
   const serial = useSerialScanner({
-    enabled: isComMode && !!documentId,
+    enabled: isComMode,
     onCode: handleScannedCode,
   })
 
@@ -101,7 +101,10 @@ export function ScanInput({ documentId }: Props) {
       <label className="field-label" htmlFor="scan-field">Сканирование</label>
       <div className="scan-input__row">
         {isComMode ? (
-          <div className="scan-input__field scan-input__com-status">
+          <div
+            className="scan-input__field scan-input__com-status"
+            style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 6 }}
+          >
             {serial.connected ? (
               <span className="badge badge--ok">🔌 COM-порт подключён</span>
             ) : (
@@ -110,7 +113,9 @@ export function ScanInput({ documentId }: Props) {
               </span>
             )}
             {serial.error && (
-              <span className="hint" style={{ marginLeft: 8 }}>{serial.error}</span>
+              <div className="alert alert--error" style={{ width: '100%', margin: 0 }}>
+                {serial.error}
+              </div>
             )}
           </div>
         ) : (

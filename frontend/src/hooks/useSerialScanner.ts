@@ -96,6 +96,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
+      console.error('[useSerialScanner] reader loop error:', e)
       setError(`Ошибка чтения COM-порта: ${msg}`)
     } finally {
       try {
@@ -108,14 +109,21 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
 
   const openAndRead = useCallback(
     async (port: SerialPort) => {
-      try {
-        await port.open(PORT_OPTIONS)
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        // InvalidStateError — порт уже открыт (например, после hot-reload). Считаем это успехом.
-        if (!msg.includes('already open') && !msg.toLowerCase().includes('invalidstate')) {
-          setError(`Не удалось открыть COM-порт: ${msg}`)
-          return
+      // Если порт уже открыт (например, мы же его и держим) — port.readable не null.
+      // Повторный open даёт InvalidStateError, поэтому пропускаем.
+      const alreadyOpen = port.readable !== null
+      if (!alreadyOpen) {
+        try {
+          await port.open(PORT_OPTIONS)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          console.error('[useSerialScanner] port.open failed:', e)
+          // InvalidStateError — порт уже открыт другим контекстом. Если readable есть — продолжаем.
+          if (port.readable === null) {
+            setError(`Не удалось открыть COM-порт: ${msg}`)
+            setConnected(false)
+            return
+          }
         }
       }
       portRef.current = port
@@ -161,11 +169,16 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     void (async () => {
       try {
         const ports = await navigator.serial.getPorts()
-        if (cancelled || ports.length === 0) return
+        if (cancelled) return
+        if (ports.length === 0) {
+          setError('Нет авторизованного COM-порта. Откройте «Настройки» и нажмите «Подключить COM-порт».')
+          return
+        }
         await openAndRead(ports[0])
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : String(e)
+        console.error('[useSerialScanner] getPorts failed:', e)
         setError(`Не удалось получить список COM-портов: ${msg}`)
       }
     })()
