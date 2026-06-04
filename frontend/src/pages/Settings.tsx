@@ -1,11 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { integrationsApi } from '../api/client'
+import { czApi, integrationsApi } from '../api/client'
+import type { Integration } from '../api/client'
 import {
   isWebSerialSupported,
   setScannerMode,
   useScannerMode,
 } from '../lib/scannerMode'
+import {
+  isPluginAvailable,
+  listCertificates,
+  signDataCadesBes,
+  type CzCertificate,
+} from '../lib/cprob'
 
 interface SettingsPageProps {
   embedded?: boolean
@@ -258,8 +265,207 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
           )}
         </section>
 
+        {!embedded && <ChestnyZnakSection integration={integration} />}
         {!embedded && <ScannerSection />}
       </div>
     </div>
+  )
+}
+
+function ChestnyZnakSection({
+  integration,
+}: {
+  integration?: Integration | undefined
+}) {
+  const qc = useQueryClient()
+  const [pluginAvailable, setPluginAvailable] = useState<boolean | null>(null)
+  const [certs, setCerts] = useState<CzCertificate[]>([])
+  const [selectedThumbprint, setSelectedThumbprint] = useState('')
+  const [loadingCerts, setLoadingCerts] = useState(false)
+  const [signing, setSigning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
+
+  // На монтировании пробуем понять, доступен ли плагин — это бесплатная операция,
+  // ответ сразу красит UI.
+  useEffect(() => {
+    let cancelled = false
+    void isPluginAvailable().then((ok) => {
+      if (!cancelled) setPluginAvailable(ok)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshCerts = async () => {
+    setError(null)
+    setLoadingCerts(true)
+    try {
+      const list = await listCertificates()
+      setCerts(list)
+      if (list.length && !selectedThumbprint) {
+        setSelectedThumbprint(list[0].thumbprint)
+      }
+      if (!list.length) {
+        setError(
+          'В хранилище личных сертификатов не найдено действующих сертификатов. Подключите УКЭП-токен.',
+        )
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setLoadingCerts(false)
+    }
+  }
+
+  const handleLogin = async () => {
+    if (!selectedThumbprint) {
+      setError('Выберите сертификат для входа')
+      return
+    }
+    setError(null)
+    setSuccess(false)
+    setSigning(true)
+    try {
+      const { data: challenge } = await czApi.challenge()
+      const signature = await signDataCadesBes(selectedThumbprint, challenge.data)
+      const cert = certs.find((c) => c.thumbprint === selectedThumbprint)
+      await czApi.login({
+        uuid: challenge.uuid,
+        signed_data: signature,
+        cert_thumbprint: selectedThumbprint,
+        cert_subject: cert?.subject,
+      })
+      qc.invalidateQueries({ queryKey: ['integration'] })
+      setSuccess(true)
+      window.setTimeout(() => setSuccess(false), 4000)
+    } catch (e) {
+      const ax = e as { response?: { data?: { detail?: string } } }
+      const msg = ax?.response?.data?.detail
+      setError(
+        msg
+          ? `Не удалось войти в ЧЗ: ${msg}`
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      )
+    } finally {
+      setSigning(false)
+    }
+  }
+
+  const handleLogout = async () => {
+    setError(null)
+    try {
+      await czApi.logout()
+      qc.invalidateQueries({ queryKey: ['integration'] })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  const validUntil = integration?.cz_token_valid_until
+    ? new Date(integration.cz_token_valid_until)
+    : null
+  const isExpired =
+    validUntil != null && validUntil.getTime() <= Date.now()
+  const isConnected = !!integration?.has_cz && !isExpired
+
+  return (
+    <section className="section">
+      <div className="section__head">
+        <h2 style={{ margin: 0 }}>Честный Знак</h2>
+        <span className={`badge ${isConnected ? 'badge--ok' : 'badge--error'}`}>
+          {isConnected ? 'Подключён' : 'Не подключён'}
+        </span>
+      </div>
+
+      <p className="hint">
+        Авторизация через УКЭП — позволяет проверять статус кодов маркировки
+        напрямую в ЧЗ во время сканирования и распаковывать SSCC-коробки.
+      </p>
+
+      {isConnected && (
+        <div className="hint mt-8">
+          {integration?.cz_cert_subject && (
+            <div>Сертификат: <b>{integration.cz_cert_subject}</b></div>
+          )}
+          {validUntil && (
+            <div>Действует до: {validUntil.toLocaleString('ru')}</div>
+          )}
+          <div className="field-row mt-8">
+            <button type="button" className="button" onClick={() => void handleLogout()}>
+              Выйти
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isConnected && (
+        <>
+          {pluginAvailable === false && (
+            <div className="alert alert--warn mt-12">
+              КриптоПро Browser Plugin не обнаружен в браузере. Установите{' '}
+              <a
+                href="https://www.cryptopro.ru/products/cades/plugin"
+                target="_blank"
+                rel="noreferrer"
+              >
+                плагин КриптоПро
+              </a>{' '}
+              и перезагрузите страницу.
+            </div>
+          )}
+          {pluginAvailable !== false && (
+            <>
+              <div className="field-row mt-8">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => void refreshCerts()}
+                  disabled={loadingCerts}
+                >
+                  {loadingCerts ? 'Загружаю…' : 'Найти сертификаты'}
+                </button>
+              </div>
+              {certs.length > 0 && (
+                <div className="field-row mt-8">
+                  <select
+                    className="ui-select"
+                    style={{ minWidth: 0, width: '100%' }}
+                    value={selectedThumbprint}
+                    onChange={(e) => setSelectedThumbprint(e.target.value)}
+                  >
+                    {certs.map((c) => (
+                      <option key={c.thumbprint} value={c.thumbprint}>
+                        {c.subject.length > 80
+                          ? `${c.subject.slice(0, 80)}…`
+                          : c.subject}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div className="field-row mt-12">
+                <button
+                  type="button"
+                  className="button button--success"
+                  onClick={() => void handleLogin()}
+                  disabled={signing || !selectedThumbprint}
+                >
+                  {signing ? 'Подписываю…' : 'Войти через УКЭП'}
+                </button>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {success && (
+        <div className="alert alert--ok mt-12">Вход в Честный Знак выполнен.</div>
+      )}
+      {error && <div className="alert alert--error mt-12">{error}</div>}
+    </section>
   )
 }

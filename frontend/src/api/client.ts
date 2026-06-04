@@ -137,10 +137,36 @@ export const productsApi = {
 export interface Integration {
   has_moysklad: boolean
   moysklad_account_name: string | null
+  has_cz: boolean
+  cz_token_valid_until: string | null
+  cz_cert_subject: string | null
+  cz_auth_method: string
+  cz_box_mode_enabled: boolean
 }
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
   update: (data: { moysklad_token?: string }) =>
     api.put<Integration>('/integrations/', data),
+}
+
+export interface CzChallenge {
+  uuid: string
+  data: string
+}
+
+export interface CzLoginResult {
+  cz_token_valid_until: string
+  cz_cert_subject: string | null
+}
+
+export const czApi = {
+  challenge: () => api.post<CzChallenge>('/integrations/cz/challenge'),
+  login: (body: {
+    uuid: string
+    signed_data: string
+    cert_thumbprint?: string
+    cert_subject?: string
+  }) => api.post<CzLoginResult>('/integrations/cz/login', body),
+  logout: () => api.delete<Integration>('/integrations/cz'),
 }
