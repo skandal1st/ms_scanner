@@ -45,6 +45,7 @@ class MoySkladDocumentItem(BaseModel):
     id: str
     name: str
     moment: Optional[str]
+    customer_order_name: Optional[str] = None
 
 
 def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMsDocuments, useDocuments, useCreateDocument } from '../hooks/useDocuments'
-import type { Document, DocumentKind } from '../api/client'
+import type { Document, DocumentKind, MsDocument } from '../api/client'
 
 interface Props {
   kind: DocumentKind
@@ -10,6 +10,13 @@ interface Props {
 
 const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'отгрузку',
+}
+
+/** Отображаемое имя МС-отгрузки: "00123 (#00045)" если есть связанный заказ. */
+function msDocLabel(m: MsDocument): string {
+  const base = m.name || `Без имени · ${m.id.slice(0, 8)}`
+  if (m.customer_order_name) return `${base} (#${m.customer_order_name})`
+  return base
 }
 
 export function DocumentSelector({ kind, onSelect, selected }: Props) {
@@ -81,13 +88,13 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
         const unboundMs = (msDocs ?? []).filter((m) => !boundMsIds.has(m.id))
         const isEmpty = (!documents || documents.length === 0) && unboundMs.length === 0
 
-        const handleBindMs = async (msId: string, msName: string) => {
+        const handleBindMs = async (m: MsDocument) => {
           setCreateError(null)
           try {
             const doc = await createMutation.mutateAsync({
-              name: msName || `МС ${msId.slice(0, 8)}`,
+              name: msDocLabel(m),
               kind,
-              moysklad_id: msId,
+              moysklad_id: m.id,
             })
             onSelect(doc)
           } catch (err: any) {
@@ -121,11 +128,11 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
                 key={`ms-${m.id}`}
                 type="button"
                 className="doc-list__item"
-                onClick={() => handleBindMs(m.id, m.name)}
+                onClick={() => handleBindMs(m)}
                 disabled={createMutation.isPending}
                 title="Привязать документ из МойСклад"
               >
-                <span>{m.name || `Без имени · ${m.id.slice(0, 8)}`}</span>
+                <span>{msDocLabel(m)}</span>
                 <span className="doc-list__item-count">+ привязать</span>
               </button>
             ))}
@@ -158,12 +165,12 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
               onChange={(e) => {
                 setSelectedMsId(e.target.value)
                 const s = msDocs.find((x) => x.id === e.target.value)
-                if (s) setNewName(s.name)
+                if (s) setNewName(msDocLabel(s))
               }}
             >
               <option value="">Привязать {KIND_LABEL[kind]} из МойСклад...</option>
               {msDocs.map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
+                <option key={s.id} value={s.id}>{msDocLabel(s)}</option>
               ))}
             </select>
           )}

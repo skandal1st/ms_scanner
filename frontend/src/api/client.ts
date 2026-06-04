@@ -39,6 +39,7 @@ export interface MsDocument {
   id: string
   name: string
   moment: string | null
+  customer_order_name: string | null
 }
 
 export interface PlanItem {

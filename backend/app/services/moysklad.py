@@ -34,29 +34,42 @@ class MoySkladService:
     # --- Универсальные методы по типу документа ---
 
     async def get_documents(self, kind: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Список МС-документов выбранного типа."""
+        """Список МС-документов выбранного типа.
+
+        expand=customerOrder — чтобы вытащить имя связанного заказа покупателя
+        для отображения в селекторе (UX: "00123 (#00045)").
+        """
         self._validate_kind(kind)
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{self.base_url}/entity/{kind}",
                 headers=self.headers,
-                params={"limit": limit, "order": "moment,desc"},
+                params={
+                    "limit": limit,
+                    "order": "moment,desc",
+                    "expand": "customerOrder",
+                },
             )
             resp.raise_for_status()
             data = resp.json()
 
         rows = data.get("rows", [])
-        return [
-            {
-                "id": r["id"],
-                # `dict.get(key, default)` возвращает default ТОЛЬКО если ключ
-                # отсутствует. Если МС вернёт {"name": null} — придёт None,
-                # фронт сломается на name.trim(). Поэтому `or ""`.
-                "name": r.get("name") or "",
-                "moment": r.get("moment"),
-            }
-            for r in rows
-        ]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            order = r.get("customerOrder") or {}
+            order_name = order.get("name") if isinstance(order, dict) else None
+            out.append(
+                {
+                    "id": r["id"],
+                    # `dict.get(key, default)` возвращает default ТОЛЬКО если ключ
+                    # отсутствует. Если МС вернёт {"name": null} — придёт None,
+                    # фронт сломается на name.trim(). Поэтому `or ""`.
+                    "name": r.get("name") or "",
+                    "moment": r.get("moment"),
+                    "customer_order_name": order_name or None,
+                }
+            )
+        return out
 
     async def get_document(self, kind: str, doc_id: str) -> Dict[str, Any]:
         """Детали МС-документа выбранного типа."""
