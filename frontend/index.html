@@ -8,11 +8,10 @@
   <body>
     <div id="root"></div>
     <!--
-      cadesplugin_api.js поставляется КриптоПро вместе с Browser Plugin.
-      Положите файл из официального дистрибутива в frontend/public/.
-      Если файла нет — detectPlugin() вернёт 'absent' и UI покажет инструкцию.
+      window.cadesplugin инжектируется расширением CryptoPro CAdES Browser Plug-in
+      (Chrome/Edge) автоматически на все страницы — отдельный <script src="..."> не нужен.
+      Пользователь должен установить плагин + расширение из https://www.cryptopro.ru/products/cades/plugin
     -->
-    <script src="/cadesplugin_api.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
