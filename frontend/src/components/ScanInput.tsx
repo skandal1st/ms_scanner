@@ -1,6 +1,8 @@
 import { useRef, useEffect, useState, useCallback, KeyboardEvent } from 'react'
 import { useScanner } from '../hooks/useScanner'
+import { useSerialScanner } from '../hooks/useSerialScanner'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { useScannerMode } from '../lib/scannerMode'
 import { CameraScanModal } from './CameraScanModal'
 
 interface Props {
@@ -41,27 +43,45 @@ export function ScanInput({ documentId }: Props) {
   const [cameraOpen, setCameraOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { submitCode } = useScanner(documentId)
+  const mode = useScannerMode()
+  const isComMode = mode === 'com'
 
+  const handleScannedCode = useCallback(
+    async (code: string) => {
+      const trimmed = code.trim()
+      if (!trimmed) return
+      setLastCode(trimmed)
+      await submitCode(trimmed)
+    },
+    [submitCode],
+  )
+
+  const serial = useSerialScanner({
+    enabled: isComMode && !!documentId,
+    onCode: handleScannedCode,
+  })
+
+  // Keyboard wedge: фокус в input, чтобы сканер всегда туда писал.
   useEffect(() => {
-    if (cameraOpen) return
+    if (isComMode || cameraOpen) return
     const el = inputRef.current
     if (!el) return
     el.focus()
     const onBlur = () => setTimeout(() => el.focus(), 0)
     el.addEventListener('blur', onBlur)
     return () => el.removeEventListener('blur', onBlur)
-  }, [cameraOpen])
+  }, [cameraOpen, isComMode])
 
   // Пока фокус в поле скана — глушим шорткаты DevTools (capture: раньше дефолта Chrome).
   useEffect(() => {
-    if (!documentId || cameraOpen) return
+    if (isComMode || !documentId || cameraOpen) return
     const onCap = (ev: globalThis.KeyboardEvent) => {
       if (document.activeElement !== inputRef.current) return
       swallowChromeInspectorKeys(ev)
     }
     window.addEventListener('keydown', onCap, true)
     return () => window.removeEventListener('keydown', onCap, true)
-  }, [documentId, cameraOpen])
+  }, [documentId, cameraOpen, isComMode])
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
     swallowChromeInspectorKeys(e.nativeEvent)
@@ -71,36 +91,42 @@ export function ScanInput({ documentId }: Props) {
       const raw = inputRef.current?.value ?? value
       const code = normalizeScannerInput(raw).trim()
       if (!code) return
-      setLastCode(code)
       setValue('')
-      await submitCode(code)
+      await handleScannedCode(code)
     }
   }
-
-  const handleCameraCode = useCallback(
-    async (code: string) => {
-      setLastCode(code)
-      await submitCode(code)
-    },
-    [submitCode],
-  )
 
   return (
     <div className="scan-input">
       <label className="field-label" htmlFor="scan-field">Сканирование</label>
       <div className="scan-input__row">
-        <input
-          id="scan-field"
-          ref={inputRef}
-          value={value}
-          onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
-          onKeyDown={handleKeyDown}
-          placeholder="Сканируйте или введите код…"
-          disabled={!documentId}
-          className="scan-input__field"
-          autoComplete="off"
-          spellCheck={false}
-        />
+        {isComMode ? (
+          <div className="scan-input__field scan-input__com-status">
+            {serial.connected ? (
+              <span className="badge badge--ok">🔌 COM-порт подключён</span>
+            ) : (
+              <span className="badge badge--warn">
+                ⚠ COM-порт не подключён — настройте в разделе «Настройки»
+              </span>
+            )}
+            {serial.error && (
+              <span className="hint" style={{ marginLeft: 8 }}>{serial.error}</span>
+            )}
+          </div>
+        ) : (
+          <input
+            id="scan-field"
+            ref={inputRef}
+            value={value}
+            onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
+            onKeyDown={handleKeyDown}
+            placeholder="Сканируйте или введите код…"
+            disabled={!documentId}
+            className="scan-input__field"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        )}
         <button
           type="button"
           className="button scan-input__camera"
@@ -122,7 +148,7 @@ export function ScanInput({ documentId }: Props) {
       <CameraScanModal
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
-        onCode={handleCameraCode}
+        onCode={handleScannedCode}
       />
     </div>
   )
