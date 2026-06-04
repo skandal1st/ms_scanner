@@ -298,16 +298,28 @@ async def _verify_code_async(scan_id: str, user_id: str):
         if scan.status in (ScanStatus.valid, ScanStatus.overflow) and not scan.product_name:
             await _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan)
 
-        # Если КМ валидна, GTIN известен, но product_id не нашёлся ни в плане, ни в МС —
-        # помечаем unknown_product. Кладовщик должен вручную сопоставить с товаром МС
-        # перед отгрузкой документа.
+        # unknown_product — только если GTIN не упомянут в плане документа И не нашёлся
+        # в каталоге МС. Если GTIN есть в плане (даже без product_id в plan-item) —
+        # код считается валидным для документа: позиция МС уже относится к нему,
+        # product_id подтянется при /process через find_product_by_gtin.
         if (
             scan.status in (ScanStatus.valid, ScanStatus.overflow)
             and scan.gtin
             and not scan.moysklad_product_id
         ):
-            scan.status = ScanStatus.unknown_product
-            scan.error_message = "Товар не найден в МС — сопоставьте вручную"
+            doc_q2 = await db.execute(
+                select(Document).where(Document.id == scan.document_id)
+            )
+            doc2 = doc_q2.scalar_one_or_none()
+            scan_key = normalize_gtin_key(scan.gtin)
+            in_plan = False
+            for p in (doc2.plan or []) if doc2 else []:
+                if isinstance(p, dict) and normalize_gtin_key(p.get("gtin")) == scan_key:
+                    in_plan = True
+                    break
+            if not in_plan:
+                scan.status = ScanStatus.unknown_product
+                scan.error_message = "Товар не найден в МС — сопоставьте вручную"
 
         await db.commit()
 
