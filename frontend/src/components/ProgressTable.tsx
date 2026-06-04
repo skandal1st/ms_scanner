@@ -1,5 +1,8 @@
+import { useEffect, useState } from 'react'
 import { useScanStore, buildProgress } from '../store/scanStore'
 import type { CSSProperties } from 'react'
+
+const COLLAPSE_KEY = 'progress_collapsed'
 
 export function ProgressTable() {
   const plan = useScanStore((s) => s.document?.plan)
@@ -8,17 +11,43 @@ export function ProgressTable() {
   const targetProductId = useScanStore((s) => s.targetProductId)
   const setTargetProductId = useScanStore((s) => s.setTargetProductId)
   const progress = buildProgress(plan, scans)
+  const [collapsed, setCollapsed] = useState<boolean>(
+    () => localStorage.getItem(COLLAPSE_KEY) === '1',
+  )
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
+  }, [collapsed])
 
   if (!progress.hasSummary) return null
 
   const title = progress.hasPlan ? 'Прогресс сборки' : 'По товарам'
   const canPickProduct =
     progress.hasPlan && progress.rows.some((r) => r.product_id)
+  const overallPct =
+    progress.hasPlan && progress.total.expected > 0
+      ? Math.min(100, Math.round((progress.total.scanned / progress.total.expected) * 100))
+      : 0
 
   return (
     <div style={styles.wrap}>
-      <div style={styles.head}>
-        <span style={styles.title}>{title}</span>
+      <div
+        style={{ ...styles.head, cursor: 'pointer', marginBottom: collapsed ? 6 : 10 }}
+        onClick={() => setCollapsed((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setCollapsed((v) => !v)
+          }
+        }}
+        aria-expanded={!collapsed}
+      >
+        <span style={styles.title}>
+          <span style={styles.chevron}>{collapsed ? '▸' : '▾'}</span>
+          {title}
+        </span>
         {progress.hasPlan ? (
           <span style={styles.totals}>
             В плане: {progress.total.scanned} / {progress.total.expected}
@@ -34,7 +63,18 @@ export function ProgressTable() {
           </span>
         )}
       </div>
-      {canPickProduct && (
+      {collapsed && progress.hasPlan && (
+        <div style={styles.barWrap}>
+          <div
+            style={{
+              ...styles.bar,
+              width: `${overallPct}%`,
+              background: overallPct >= 100 ? '#16a34a' : '#f59e0b',
+            }}
+          />
+        </div>
+      )}
+      {!collapsed && canPickProduct && (
         <div style={styles.targetBar}>
           <span style={styles.targetLabel}>Сканировать в товар:</span>
           <button
@@ -52,7 +92,7 @@ export function ProgressTable() {
           </button>
         </div>
       )}
-      <div style={styles.list}>
+      {!collapsed && <div style={styles.list}>
         {progress.rows.map((item) => {
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
@@ -123,8 +163,8 @@ export function ProgressTable() {
             </div>
           )
         })}
-      </div>
-      {overflow > 0 && progress.hasPlan && (
+      </div>}
+      {!collapsed && overflow > 0 && progress.hasPlan && (
         <div style={styles.overflowNote}>
           Всего сверх плана: {overflow}{' '}
           <span style={{ color: '#9ca3af' }}>— уйдут в отгрузку вместе с валидными</span>
@@ -154,6 +194,14 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 13,
     fontWeight: 600,
     color: '#1f2937',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+  chevron: {
+    color: '#6b7280',
+    fontSize: 11,
+    userSelect: 'none',
   },
   totals: {
     fontSize: 13,
