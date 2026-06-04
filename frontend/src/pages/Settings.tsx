@@ -286,8 +286,13 @@ function ChestnyZnakSection({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
-  // На монтировании пробуем понять, доступен ли плагин — это бесплатная операция,
-  // ответ сразу красит UI.
+  // Расширение CryptoPro инжектирует API асинхронно — ждём (до 5 сек).
+  const recheckPlugin = async () => {
+    setPluginAvailable(null)
+    const ok = await isPluginAvailable()
+    setPluginAvailable(ok)
+  }
+
   useEffect(() => {
     let cancelled = false
     void isPluginAvailable().then((ok) => {
@@ -404,20 +409,50 @@ function ChestnyZnakSection({
 
       {!isConnected && (
         <>
+          {pluginAvailable === null && (
+            <div className="hint mt-12">Проверяю наличие плагина КриптоПро…</div>
+          )}
           {pluginAvailable === false && (
             <div className="alert alert--warn mt-12">
-              КриптоПро Browser Plugin не обнаружен в браузере. Установите{' '}
-              <a
-                href="https://www.cryptopro.ru/products/cades/plugin"
-                target="_blank"
-                rel="noreferrer"
-              >
-                плагин КриптоПро
-              </a>{' '}
-              и перезагрузите страницу.
+              <div>КриптоПро Browser Plugin не обнаружен в браузере.</div>
+              <ol style={{ margin: '8px 0 0 18px', padding: 0, fontSize: 12 }}>
+                <li>
+                  Установить{' '}
+                  <a
+                    href="https://www.cryptopro.ru/products/cades/plugin"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    плагин КриптоПро
+                  </a>{' '}
+                  (CSP + Browser Plug-in).
+                </li>
+                <li>
+                  Поставить{' '}
+                  <a
+                    href="https://chromewebstore.google.com/detail/cryptopro-extension-for-c/iifchhfnnmpdbibifmljnfjhpififfog"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    расширение для Chrome
+                  </a>{' '}
+                  (или Edge).
+                </li>
+                <li>В иконке расширения убедиться, что для skandata.ru разрешён доступ.</li>
+                <li>Полностью перезагрузить страницу (Ctrl+Shift+R).</li>
+              </ol>
+              <div className="field-row mt-8">
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => void recheckPlugin()}
+                >
+                  Проверить ещё раз
+                </button>
+              </div>
             </div>
           )}
-          {pluginAvailable !== false && (
+          {pluginAvailable === true && (
             <>
               <div className="field-row mt-8">
                 <button

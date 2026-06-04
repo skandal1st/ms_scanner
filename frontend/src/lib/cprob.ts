@@ -24,14 +24,39 @@ export interface CzCertificate {
   notAfter: string | null
 }
 
+/** Расширение CryptoPro инжектирует window.cadesplugin через content script
+ *  на document_idle и шлёт событие `cadesplugin_loaded`. Может занять до пары секунд. */
+function waitForCadesGlobal(timeoutMs = 5000): Promise<AnyPlugin> {
+  if (window.cadesplugin) return Promise.resolve(window.cadesplugin)
+  return new Promise((resolve, reject) => {
+    let done = false
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      window.removeEventListener('cadesplugin_loaded', onEvent)
+      window.clearInterval(poll)
+      window.clearTimeout(timer)
+      if (ok && window.cadesplugin) resolve(window.cadesplugin)
+      else
+        reject(
+          new Error(
+            'КриптоПро Browser Plugin не обнаружен. Убедитесь, что установлено расширение CryptoPro для Chrome/Edge и разрешена работа на этом сайте, затем обновите страницу.',
+          ),
+        )
+    }
+    const onEvent = () => finish(true)
+    window.addEventListener('cadesplugin_loaded', onEvent)
+    // Fallback-поллинг: некоторые версии расширения не шлют событие.
+    const poll = window.setInterval(() => {
+      if (window.cadesplugin) finish(true)
+    }, 300)
+    const timer = window.setTimeout(() => finish(false), timeoutMs)
+  })
+}
+
 /** Дождаться, когда cadesplugin будет готов (плагин инициализируется асинхронно). */
 async function waitForPlugin(): Promise<AnyPlugin> {
-  const cp = window.cadesplugin
-  if (!cp) {
-    throw new Error(
-      'КриптоПро Browser Plugin не обнаружен. Установите расширение и перезагрузите страницу.',
-    )
-  }
+  const cp = await waitForCadesGlobal()
   // Современные сборки плагина возвращают thenable — ждём готовности.
   if (typeof cp.then === 'function') {
     await new Promise<void>((resolve, reject) => {
