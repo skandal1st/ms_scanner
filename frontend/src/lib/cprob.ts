@@ -1,9 +1,9 @@
-// Обёртка над CryptoPro Browser Plugin (window.cadesplugin).
+// Обёртка над КриптоПро ЭЦП Browser Plug-in (window.cadesplugin).
 // Используется для входа в Честный Знак по УКЭП: challenge от ЧЗ подписывается
 // сертификатом из CSP клиента, бэк меняет подпись на access_token.
 //
-// Сам файл cadesplugin_api.js берётся из дистрибутива КриптоПро Browser Plugin
-// и кладётся в frontend/public/cadesplugin_api.js (подключается из index.html).
+// В современных Chrome/Edge window.cadesplugin инжектируется расширением
+// «CAdES Browser Plugin» автоматически. Отдельный <script src="..."> не нужен.
 
 // У cadesplugin нет официальных .d.ts; типизируем как any.
 // Плагин сам по себе — thenable объект (с методом then), который дополнительно
@@ -24,9 +24,9 @@ export interface CzCertificate {
   notAfter: string | null
 }
 
-/** Расширение CryptoPro инжектирует window.cadesplugin через content script
- *  на document_idle и шлёт событие `cadesplugin_loaded`. Может занять до пары секунд. */
-function waitForCadesGlobal(timeoutMs = 5000): Promise<AnyPlugin> {
+/** Расширение «CAdES Browser Plugin» инжектирует window.cadesplugin через content
+ *  script на document_idle и шлёт событие `cadesplugin_loaded`. Может занять до пары секунд. */
+function waitForCadesGlobal(timeoutMs = 10000): Promise<AnyPlugin> {
   if (window.cadesplugin) return Promise.resolve(window.cadesplugin)
   return new Promise((resolve, reject) => {
     let done = false
@@ -40,7 +40,7 @@ function waitForCadesGlobal(timeoutMs = 5000): Promise<AnyPlugin> {
       else
         reject(
           new Error(
-            'КриптоПро Browser Plugin не обнаружен. Убедитесь, что установлено расширение CryptoPro для Chrome/Edge и разрешена работа на этом сайте, затем обновите страницу.',
+            'КриптоПро ЭЦП Browser Plug-in не обнаружен. Установите расширение «CAdES Browser Plugin» для Chrome/Edge, разрешите ему работу на этом сайте и обновите страницу.',
           ),
         )
     }
@@ -74,9 +74,35 @@ export async function isPluginAvailable(): Promise<boolean> {
   try {
     await waitForPlugin()
     return true
-  } catch {
+  } catch (e) {
+    console.warn('[cprob] plugin not available:', e)
     return false
   }
+}
+
+/** Диагностика для пользователя — что именно видит JS из плагина. */
+export function diagnosePlugin(): string {
+  const cp = window.cadesplugin
+  const lines: string[] = []
+  lines.push(`window.cadesplugin: ${typeof cp}`)
+  if (cp) {
+    lines.push(`typeof cp.then: ${typeof cp.then}`)
+    lines.push(
+      `typeof cp.CreateObjectAsync: ${typeof cp.CreateObjectAsync}`,
+    )
+    try {
+      const keys = Object.keys(cp).slice(0, 20)
+      lines.push(`keys (first 20): ${keys.join(', ')}`)
+    } catch (e) {
+      lines.push(`keys read error: ${e instanceof Error ? e.message : String(e)}`)
+    }
+    lines.push(
+      `CAPICOM_CURRENT_USER_STORE: ${cp.CAPICOM_CURRENT_USER_STORE ?? 'нет'}`,
+    )
+  }
+  lines.push(`userAgent: ${navigator.userAgent}`)
+  lines.push(`isSecureContext: ${window.isSecureContext}`)
+  return lines.join('\n')
 }
 
 export async function listCertificates(): Promise<CzCertificate[]> {

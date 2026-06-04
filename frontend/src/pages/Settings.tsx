@@ -8,6 +8,7 @@ import {
   useScannerMode,
 } from '../lib/scannerMode'
 import {
+  diagnosePlugin,
   isPluginAvailable,
   listCertificates,
   signDataCadesBes,
@@ -286,7 +287,7 @@ function ChestnyZnakSection({
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
 
-  // Расширение CryptoPro инжектирует API асинхронно — ждём (до 5 сек).
+  // Расширение «CAdES Browser Plugin» инжектирует API асинхронно — ждём (до 5 сек).
   const recheckPlugin = async () => {
     setPluginAvailable(null)
     const ok = await isPluginAvailable()
@@ -414,7 +415,7 @@ function ChestnyZnakSection({
           )}
           {pluginAvailable === false && (
             <div className="alert alert--warn mt-12">
-              <div>КриптоПро Browser Plugin не обнаружен в браузере.</div>
+              <div>КриптоПро ЭЦП Browser Plug-in не обнаружен в браузере.</div>
               <ol style={{ margin: '8px 0 0 18px', padding: 0, fontSize: 12 }}>
                 <li>
                   Установить{' '}
@@ -423,22 +424,22 @@ function ChestnyZnakSection({
                     target="_blank"
                     rel="noreferrer"
                   >
-                    плагин КриптоПро
+                    КриптоПро ЭЦП Browser Plug-in
                   </a>{' '}
-                  (CSP + Browser Plug-in).
+                  (нативная часть + CSP).
                 </li>
                 <li>
-                  Поставить{' '}
+                  Поставить расширение{' '}
                   <a
-                    href="https://chromewebstore.google.com/detail/cryptopro-extension-for-c/iifchhfnnmpdbibifmljnfjhpififfog"
+                    href="https://chromewebstore.google.com/detail/cades-browser-plugin/iifchhfnnmpdbibifmljnfjhpififfog"
                     target="_blank"
                     rel="noreferrer"
                   >
-                    расширение для Chrome
+                    «CAdES Browser Plugin»
                   </a>{' '}
-                  (или Edge).
+                  для Chrome (или Edge).
                 </li>
-                <li>В иконке расширения убедиться, что для skandata.ru разрешён доступ.</li>
+                <li>В иконке расширения разрешить работу на skandata.ru.</li>
                 <li>Полностью перезагрузить страницу (Ctrl+Shift+R).</li>
               </ol>
               <div className="field-row mt-8">
@@ -448,6 +449,14 @@ function ChestnyZnakSection({
                   onClick={() => void recheckPlugin()}
                 >
                   Проверить ещё раз
+                </button>
+                <button
+                  type="button"
+                  className="button"
+                  onClick={() => window.alert(diagnosePlugin())}
+                  title="Показать состояние window.cadesplugin"
+                >
+                  Диагностика
                 </button>
               </div>
             </div>
