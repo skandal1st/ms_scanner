@@ -163,7 +163,12 @@ async def cz_login(
     try:
         result = await cz.exchange_cert_signature(body.uuid, body.signed_data)
     except CZApiError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        # НЕ 401: фронтовый axios-интерцептор трактует любой 401 как протухшую
+        # сессию приложения и выкидывает пользователя на /login. Здесь же отказ
+        # касается обмена подписи в Честном Знаке, а не сессии в нашем приложении.
+        raise HTTPException(
+            status_code=502, detail=f"Честный Знак отклонил вход: {e}"
+        )
 
     token = result.get("token")
     expire = int(result.get("expire", 3600))

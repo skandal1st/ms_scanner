@@ -4,16 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>МС-Сканер — Приёмка маркировки</title>
+    <!--
+      Официальный cadesplugin_api.js (КриптоПро ЭЦП Browser plug-in 2.0) создаёт
+      window.cadesplugin и поднимает событие cadesplugin_loaded, наладив мост к
+      расширению «CAdES Browser Plugin». Современные версии расширения НЕ инжектят
+      API в страницу автоматически — файл обязателен. Лежит в frontend/public/,
+      Vite копирует его в корень сборки. Пользователь дополнительно ставит:
+      1) КриптоПро ЭЦП Browser Plug-in (нативная часть + CSP);
+      2) расширение «CAdES Browser Plugin» (Chrome Web Store id iifchhfnnmpdbibifmljnfjhpififfog).
+    -->
+    <script src="/cadesplugin_api.js"></script>
   </head>
   <body>
     <div id="root"></div>
-    <!--
-      window.cadesplugin инжектируется расширением «CAdES Browser Plugin» (Chrome/Edge)
-      автоматически на все страницы — отдельный <script src="..."> не нужен.
-      Пользователь устанавливает: 1) КриптоПро ЭЦП Browser Plug-in с
-      https://www.cryptopro.ru/products/cades/plugin ; 2) расширение «CAdES Browser Plugin»
-      из Chrome Web Store (id iifchhfnnmpdbibifmljnfjhpififfog).
-    -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

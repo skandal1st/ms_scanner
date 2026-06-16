@@ -26,9 +26,9 @@ export interface CzCertificate {
 
 /** Расширение «CAdES Browser Plugin» инжектирует window.cadesplugin через content
  *  script на document_idle и шлёт событие `cadesplugin_loaded`. Может занять до пары секунд. */
-function waitForCadesGlobal(timeoutMs = 10000): Promise<AnyPlugin> {
-  if (window.cadesplugin) return Promise.resolve(window.cadesplugin)
-  return new Promise((resolve, reject) => {
+function waitForCadesGlobal(timeoutMs = 10000): Promise<void> {
+  if (window.cadesplugin) return Promise.resolve()
+  return new Promise<void>((resolve, reject) => {
     let done = false
     const finish = (ok: boolean) => {
       if (done) return
@@ -36,7 +36,7 @@ function waitForCadesGlobal(timeoutMs = 10000): Promise<AnyPlugin> {
       window.removeEventListener('cadesplugin_loaded', onEvent)
       window.clearInterval(poll)
       window.clearTimeout(timer)
-      if (ok && window.cadesplugin) resolve(window.cadesplugin)
+      if (ok && window.cadesplugin) resolve()
       else
         reject(
           new Error(
@@ -54,26 +54,61 @@ function waitForCadesGlobal(timeoutMs = 10000): Promise<AnyPlugin> {
   })
 }
 
-/** Дождаться, когда cadesplugin будет готов (плагин инициализируется асинхронно). */
-async function waitForPlugin(): Promise<AnyPlugin> {
-  const cp = await waitForCadesGlobal()
-  // Современные сборки плагина возвращают thenable — ждём готовности.
-  if (typeof cp.then === 'function') {
-    await new Promise<void>((resolve, reject) => {
-      try {
-        cp.then(() => resolve(), (err: unknown) => reject(err))
-      } catch (e) {
-        reject(e)
-      }
-    })
+/**
+ * Дождаться готовности плагина. Возвращает void — НЕ объект плагина: window.cadesplugin
+ * это augmented Promise (thenable), а возврат thenable из async-функции адаптируется
+ * (вызывающий получил бы resolve-value = undefined вместо объекта). Поэтому ждём здесь,
+ * а сам объект каждый вызывающий берёт из window.cadesplugin напрямую через getPlugin().
+ */
+async function ensurePluginReady(): Promise<void> {
+  await waitForCadesGlobal()
+  const cp = window.cadesplugin
+  if (cp && typeof cp.then === 'function') {
+    // Дожидаемся инициализации нативной части. Если она недоступна — промис
+    // отклонится с понятной ошибкой из cadesplugin_api.js, и она пробросится выше.
+    await cp
   }
-  return cp
+}
+
+/** Объект плагина из global (после ensurePluginReady). Без адаптации thenable. */
+function getPlugin(): AnyPlugin {
+  return window.cadesplugin
+}
+
+/**
+ * Привести исключение плагина к читаемой строке. КриптоПро бросает не Error, а
+ * объекты/строки (иначе в UI получается «[object Object]»). getLastError() —
+ * официальный способ извлечь текст ошибки CAdESCOM.
+ */
+function formatCadesError(e: unknown): string {
+  const cp = window.cadesplugin
+  try {
+    if (cp && typeof cp.getLastError === 'function') {
+      const m = cp.getLastError(e)
+      if (m) return String(m)
+    }
+  } catch {
+    /* ignore */
+  }
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  if (e && typeof e === 'object') {
+    const anyE = e as { message?: unknown }
+    if (anyE.message) return String(anyE.message)
+    try {
+      return JSON.stringify(e)
+    } catch {
+      /* ignore */
+    }
+  }
+  return String(e)
 }
 
 export async function isPluginAvailable(): Promise<boolean> {
   try {
-    await waitForPlugin()
-    return true
+    await ensurePluginReady()
+    const cp = getPlugin()
+    return !!(cp && typeof cp.CreateObjectAsync === 'function')
   } catch (e) {
     console.warn('[cprob] plugin not available:', e)
     return false
@@ -106,43 +141,49 @@ export function diagnosePlugin(): string {
 }
 
 export async function listCertificates(): Promise<CzCertificate[]> {
-  const cp = await waitForPlugin()
-  const store = await cp.CreateObjectAsync('CAPICOM.Store')
-  await store.Open(
-    cp.CAPICOM_CURRENT_USER_STORE,
-    cp.CAPICOM_MY_STORE,
-    cp.CAPICOM_STORE_OPEN_READ_ONLY,
-  )
+  await ensurePluginReady()
+  const cp = getPlugin()
   try {
-    const certs = await store.Certificates
-    const count = await certs.Count
-    const now = Date.now()
-    const out: CzCertificate[] = []
-    for (let i = 1; i <= count; i++) {
-      const cert = await certs.Item(i)
-      const thumbprint = String(await cert.Thumbprint)
-      const subject = String(await cert.SubjectName)
-      let notAfter: string | null = null
-      try {
-        const raw = await cert.ValidToDate
-        const d = new Date(raw)
-        if (!isNaN(d.getTime())) {
-          notAfter = d.toISOString()
-          // Не показываем просроченные сертификаты.
-          if (d.getTime() < now) continue
+    const store = await cp.CreateObjectAsync('CAPICOM.Store')
+    await store.Open(
+      cp.CAPICOM_CURRENT_USER_STORE,
+      cp.CAPICOM_MY_STORE,
+      cp.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+    )
+    try {
+      const certs = await store.Certificates
+      const count = await certs.Count
+      const now = Date.now()
+      const out: CzCertificate[] = []
+      for (let i = 1; i <= count; i++) {
+        const cert = await certs.Item(i)
+        const thumbprint = String(await cert.Thumbprint)
+        const subject = String(await cert.SubjectName)
+        let notAfter: string | null = null
+        try {
+          const raw = await cert.ValidToDate
+          const d = new Date(raw)
+          if (!isNaN(d.getTime())) {
+            notAfter = d.toISOString()
+            // Не показываем просроченные сертификаты.
+            if (d.getTime() < now) continue
+          }
+        } catch {
+          /* ignore */
         }
+        out.push({ thumbprint, subject, notAfter })
+      }
+      return out
+    } finally {
+      try {
+        await store.Close()
       } catch {
         /* ignore */
       }
-      out.push({ thumbprint, subject, notAfter })
     }
-    return out
-  } finally {
-    try {
-      await store.Close()
-    } catch {
-      /* ignore */
-    }
+  } catch (e) {
+    console.warn('[cprob] listCertificates failed:', e)
+    throw new Error(formatCadesError(e))
   }
 }
 
@@ -151,40 +192,53 @@ export async function signDataCadesBes(
   thumbprint: string,
   data: string,
 ): Promise<string> {
-  const cp = await waitForPlugin()
-  const store = await cp.CreateObjectAsync('CAPICOM.Store')
-  await store.Open(
-    cp.CAPICOM_CURRENT_USER_STORE,
-    cp.CAPICOM_MY_STORE,
-    cp.CAPICOM_STORE_OPEN_READ_ONLY,
-  )
+  await ensurePluginReady()
+  const cp = getPlugin()
   try {
-    const certs = await store.Certificates
-    const found = await certs.Find(cp.CAPICOM_CERTIFICATE_FIND_SHA1_HASH, thumbprint)
-    const cnt = await found.Count
-    if (cnt < 1) {
-      throw new Error('Сертификат с указанным отпечатком не найден в хранилище')
-    }
-    const cert = await found.Item(1)
-
-    const signer = await cp.CreateObjectAsync('CAdESCOM.CPSigner')
-    await signer.propset_Certificate(cert)
-
-    const signedData = await cp.CreateObjectAsync('CAdESCOM.CadesSignedData')
-    await signedData.propset_Content(data)
-
-    // detached=true → подпись без оборачивания исходных данных.
-    const signature: string = await signedData.SignCades(
-      signer,
-      cp.CADESCOM_CADES_BES,
-      true,
+    const store = await cp.CreateObjectAsync('CAPICOM.Store')
+    await store.Open(
+      cp.CAPICOM_CURRENT_USER_STORE,
+      cp.CAPICOM_MY_STORE,
+      cp.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
     )
-    return signature
-  } finally {
     try {
-      await store.Close()
-    } catch {
-      /* ignore */
+      const certs = await store.Certificates
+      const found = await certs.Find(cp.CAPICOM_CERTIFICATE_FIND_SHA1_HASH, thumbprint)
+      const cnt = await found.Count
+      if (cnt < 1) {
+        throw new Error('Сертификат с указанным отпечатком не найден в хранилище')
+      }
+      const cert = await found.Item(1)
+
+      const signer = await cp.CreateObjectAsync('CAdESCOM.CPSigner')
+      await signer.propset_Certificate(cert)
+
+      const signedData = await cp.CreateObjectAsync('CAdESCOM.CadesSignedData')
+      // ЧЗ присылает data как строку-nonce (hex) и проверяет detached-подпись над
+      // её БАЙТАМИ. КриптоПро по умолчанию кодирует строку в UTF-16LE → подпись над
+      // не теми байтами («Подпись невалидна, код 2»). Передаём base64(строки) и
+      // ставим ContentEncoding=BASE64_TO_BINARY: КриптоПро декодирует обратно в
+      // исходные байты строки и подписывает именно их (как в примере ЦРПТ).
+      await signedData.propset_ContentEncoding(cp.CADESCOM_BASE64_TO_BINARY)
+      await signedData.propset_Content(btoa(data))
+
+      // ЧЗ True API (/auth/cert/) ждёт ATTACHED-подпись (detached=false): исходные
+      // данные встроены в CMS. Рабочий пример ЦРПТ: SignCades(signer, CADES_BES, false).
+      const signature: string = await signedData.SignCades(
+        signer,
+        cp.CADESCOM_CADES_BES,
+        false,
+      )
+      return signature
+    } finally {
+      try {
+        await store.Close()
+      } catch {
+        /* ignore */
+      }
     }
+  } catch (e) {
+    console.warn('[cprob] signDataCadesBes failed:', e)
+    throw new Error(formatCadesError(e))
   }
 }
