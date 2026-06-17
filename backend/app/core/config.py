@@ -51,6 +51,14 @@ class Settings(BaseSettings):
     CZ_API_BASE_URL: str = "https://markirovka.crpt.ru"
     CZ_AUTH_METHOD: Literal["mock", "cprob_plugin"] = "cprob_plugin"
     CZ_CHALLENGE_TTL_SECONDS: int = 60
+    # Товарные группы (pg) для True API cises/info — перебор при детекте агрегата (блока).
+    # pg обязателен и зависит от группы товара; перебираем до первого ответа 200.
+    CZ_PRODUCT_GROUPS: str = "otp,tobacco,ncp"
+
+    @computed_field
+    @property
+    def cz_product_groups_list(self) -> List[str]:
+        return [g.strip() for g in self.CZ_PRODUCT_GROUPS.split(",") if g.strip()]
 
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"

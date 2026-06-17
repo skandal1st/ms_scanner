@@ -5,7 +5,7 @@ from typing import Optional
 
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
-from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key
+from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key, extract_gtin
 
 
 def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
@@ -108,24 +108,46 @@ async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> 
         scan.product_name = row["name"]
 
 
+async def _get_cz_token(db, user_id) -> Optional[str]:
+    """Действующий (не просроченный) токен ЧЗ пользователя или None."""
+    from sqlalchemy import select
+    from app.db.models import Integration
+    from app.core.security import decrypt_token
+
+    q = await db.execute(select(Integration).where(Integration.user_id == user_id))
+    integ = q.scalar_one_or_none()
+    if not integ or not integ.cz_token:
+        return None
+    if (
+        integ.cz_token_expires_at is not None
+        and integ.cz_token_expires_at <= datetime.now(timezone.utc)
+    ):
+        return None
+    try:
+        return decrypt_token(integ.cz_token)
+    except Exception as exc:
+        logger.warning("cz_token.decrypt_failed", user_id=str(user_id), error=str(exc))
+        return None
+
+
 async def _count_valid_units_for_gtin(db, document_id, scan_key: str, exclude_id) -> int:
     """Сколько единиц товара GTIN уже набрано валидными сканами документа.
-    Короб считается как box_quantity единиц, обычный скан — как 1. Нужно для overflow:
-    короб из N штук может перевести строку плана за лимит целиком."""
+    Короб/блок считается как box_quantity единиц, обычный скан — как 1. Нужно для
+    overflow: агрегат из N штук может перевести строку плана за лимит целиком."""
     from sqlalchemy import select
     from app.db.models import Scan, ScanStatus
 
     rows = await db.execute(
-        select(Scan.gtin, Scan.is_box, Scan.box_quantity).where(
+        select(Scan.gtin, Scan.box_quantity).where(
             Scan.document_id == document_id,
             Scan.status == ScanStatus.valid,
             Scan.id != exclude_id,
         )
     )
     total = 0
-    for g, is_box, bq in rows.all():
+    for g, bq in rows.all():
         if g and normalize_gtin_key(g) == scan_key:
-            total += (int(bq or 0) if is_box else 1)
+            total += int(bq) if bq else 1
     return total
 
 
@@ -268,6 +290,50 @@ async def _verify_code_async(scan_id: str, user_id: str):
             if gk:
                 scan.gtin = gk
 
+        # Детект агрегата (блок/групповая упаковка) → разворот в единицы.
+        # Только реальный режим, валидный код, есть токен ЧЗ, ещё не короб.
+        if (
+            scan.status == ScanStatus.valid
+            and not settings.CZ_MOCK_MODE
+            and not scan.is_box
+            and not scan.child_codes
+        ):
+            cz_token2 = await _get_cz_token(db, user_id)
+            if cz_token2:
+                info = None
+                try:
+                    info = await ChestnyZnakService(
+                        token=cz_token2, mock=False
+                    ).get_aggregate_info(scan.code)
+                except Exception as exc:
+                    logger.warning(
+                        "verify_code.aggregate_failed", scan_id=scan_id, error=str(exc)
+                    )
+                if info and info.is_aggregate:
+                    scan.child_codes = info.children
+                    scan.box_quantity = info.inner_unit_count or len(info.children)
+                    # GTIN агрегата ≠ GTIN пачки: берём GTIN вложенной пачки, чтобы
+                    # скан матчился с планом и считался как N единиц.
+                    child_gtin = (
+                        extract_gtin(info.children[0]) if info.children else None
+                    )
+                    if child_gtin:
+                        gk2 = normalize_gtin_key(child_gtin)
+                        if gk2:
+                            scan.gtin = gk2
+                    if info.product_name:
+                        scan.product_name = info.product_name
+                    logger.info(
+                        "verify_code.aggregate",
+                        scan_id=scan_id,
+                        units=scan.box_quantity,
+                        children=len(info.children),
+                        gtin=scan.gtin,
+                    )
+
+        # Единиц в скане: агрегат = box_quantity, обычный КМ = 1.
+        units = int(scan.box_quantity) if scan.box_quantity else 1
+
         # Проверка плана: если документ имеет план и для GTIN скана уже
         # отсканировано >= expected_qty валидных — текущий скан переводим
         # в overflow (сверхплана: визуально ошибка, но в МС уходит с valid).
@@ -291,12 +357,12 @@ async def _verify_code_async(scan_id: str, user_id: str):
                 already = await _count_valid_units_for_gtin(
                     db, scan.document_id, scan_key, scan.id
                 )
-                if already + 1 > expected:
+                if already + units > expected:
                     # overflow — визуально красный, но при подтверждении
                     # документа всё равно уйдёт в МС (вместе с valid).
                     scan.status = ScanStatus.overflow
                     scan.error_message = (
-                        f"Сверх плана: ожидалось {expected}, отсканировано {already + 1}"
+                        f"Сверх плана: ожидалось {expected}, отсканировано {already + units}"
                     )
         if scan.status in (ScanStatus.valid, ScanStatus.overflow) and (scan.gtin or scan.moysklad_product_id):
             await _enrich_scan_product_name_from_plan(db, scan)
@@ -351,6 +417,8 @@ async def _verify_code_async(scan_id: str, user_id: str):
             scan.error_message,
             gtin=scan.gtin,
             moysklad_product_id=scan.moysklad_product_id,
+            is_box=scan.is_box,
+            box_quantity=scan.box_quantity,
         )
 
 
@@ -449,6 +517,8 @@ async def _verify_box_async(scan_id: str, user_id: str):
             scan.error_message,
             gtin=scan.gtin,
             moysklad_product_id=scan.moysklad_product_id,
+            is_box=scan.is_box,
+            box_quantity=scan.box_quantity,
         )
 
 
@@ -461,6 +531,8 @@ async def _push_ws_update(
     *,
     gtin: Optional[str] = None,
     moysklad_product_id: Optional[str] = None,
+    is_box: Optional[bool] = None,
+    box_quantity: Optional[int] = None,
 ):
     import redis.asyncio as aioredis
     import json
@@ -475,6 +547,8 @@ async def _push_ws_update(
         "error_message": error,
         "gtin": gtin,
         "moysklad_product_id": moysklad_product_id,
+        "is_box": is_box,
+        "box_quantity": box_quantity,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()
@@ -582,24 +656,41 @@ async def _process_document_async(document_id: str, user_id: str):
 
             remaining_scans = list(valid_scans)
             while remaining_scans:
-                scans_data = [
-                    {
-                        "code": s.code,
-                        "gtin": s.gtin,
-                        "product_id": (
-                            s.moysklad_product_id
-                            or (
-                                gtin_to_product_id.get(normalize_gtin_key(s.gtin))
-                                if s.gtin
-                                else None
-                            )
-                        ),
-                        "is_box": s.is_box,
-                        # Короб «целиком» = box_quantity единиц; обычный скан = 1.
-                        "quantity": (int(s.box_quantity or 0) or 1) if s.is_box else 1,
-                    }
-                    for s in remaining_scans
-                ]
+                scans_data = []
+                for s in remaining_scans:
+                    pid_default = (
+                        s.moysklad_product_id
+                        or (
+                            gtin_to_product_id.get(normalize_gtin_key(s.gtin))
+                            if s.gtin
+                            else None
+                        )
+                    )
+                    if s.child_codes:
+                        # Блок/агрегат: в МС пишем КМ вложенных пачек поштучно,
+                        # код блока не отправляем.
+                        for cc in s.child_codes:
+                            cg = normalize_gtin_key(extract_gtin(cc)) or normalize_gtin_key(s.gtin)
+                            scans_data.append({
+                                "code": cc,
+                                "gtin": cg,
+                                "product_id": (
+                                    s.moysklad_product_id
+                                    or (gtin_to_product_id.get(cg) if cg else None)
+                                    or pid_default
+                                ),
+                                "is_box": False,
+                                "quantity": 1,
+                            })
+                    else:
+                        scans_data.append({
+                            "code": s.code,
+                            "gtin": s.gtin,
+                            "product_id": pid_default,
+                            "is_box": s.is_box,
+                            # Короб «целиком» = box_quantity единиц; обычный скан = 1.
+                            "quantity": (int(s.box_quantity or 0) or 1) if s.is_box else 1,
+                        })
                 # В update_document попадут только строки с product_id.
                 if not any(s.get("product_id") for s in scans_data):
                     logger.warning(
@@ -628,7 +719,15 @@ async def _process_document_async(document_id: str, user_id: str):
                             "МойСклад отклонил сохранение документа (412): не удалось извлечь код из ответа."
                         )
                     bad_scan = next(
-                        (s for s in remaining_scans if _cis_matches_ms_error_message(s.code, bad_code)),
+                        (
+                            s
+                            for s in remaining_scans
+                            if _cis_matches_ms_error_message(s.code, bad_code)
+                            or any(
+                                _cis_matches_ms_error_message(cc, bad_code)
+                                for cc in (s.child_codes or [])
+                            )
+                        ),
                         None,
                     )
                     if not bad_scan:

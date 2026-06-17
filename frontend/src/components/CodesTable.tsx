@@ -59,6 +59,8 @@ function ScanRow({
   onDelete: () => void
 }) {
   const cfg = STATUS_CONFIG[scan.status]
+  // Блок (групповая упаковка): развёрнут в единицы, box_quantity без is_box.
+  const isBlock = !scan.is_box && scan.box_quantity != null
 
   return (
     <>
@@ -67,7 +69,7 @@ function ScanRow({
         onClick={onToggle}
       >
         <td className="is-code">
-          {scan.is_box ? '📦 ' : ''}
+          {scan.is_box || isBlock ? '📦 ' : ''}
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
@@ -79,6 +81,11 @@ function ScanRow({
           {scan.is_box ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
               Короб · {scan.box_quantity ?? '?'} шт.
+            </div>
+          ) : null}
+          {isBlock ? (
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+              Блок · {scan.box_quantity ?? '?'} шт.
             </div>
           ) : null}
           {scan.moysklad_product_id ? (

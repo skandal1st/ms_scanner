@@ -34,6 +34,26 @@ class SsccInfo:
     quantity: int
 
 
+@dataclass
+class AggregateInfo:
+    """Состав агрегата (блок/групповая упаковка) из True API cises/info.
+
+    package_type — generalPackageType из ЧЗ (GROUP=блок, UNIT=пачка, SET и т.д.).
+    children — КМ вложенных единиц (для блока это листовые пачки).
+    is_aggregate True, если это групповая упаковка с непустым составом."""
+    cis: str
+    package_type: Optional[str]
+    children: list[str]
+    inner_unit_count: int
+    gtin: Optional[str]
+    product_name: Optional[str]
+    product_group: Optional[str]
+
+    @property
+    def is_aggregate(self) -> bool:
+        return bool(self.children) and (self.package_type or "").upper() != "UNIT"
+
+
 # Путь метода ЧЗ «sscc_check» (право SSCC_CHECK). Точный префикс версии/группы
 # может отличаться — при 404 поправить здесь (доки ЧЗ давали относительный
 # `/reestr/sscc/{sscc}/sscc_check`). Базовый хост — settings.CZ_API_BASE_URL.
@@ -447,6 +467,81 @@ class ChestnyZnakService:
             raise CZApiError(
                 f"HTTP {e.response.status_code} при sscc_check: {e.response.text[:200]}"
             )
+
+    async def get_aggregate_info(self, code: str) -> Optional["AggregateInfo"]:
+        """Состав агрегата по КМ через True API ``POST /cises/info?pg=<group>``.
+
+        ``pg`` обязателен и зависит от товарной группы — перебираем
+        ``settings.cz_product_groups_list`` до первого ответа 200 с cisInfo без
+        errorCode. 403 (нет прав) / 404 / errorCode=404 (не та группа) → следующая.
+        Возвращает AggregateInfo (для блока — generalPackageType=GROUP + child[]),
+        либо None если код нигде не найден / ошибка. В mock не используется.
+        """
+        if self.mock or not self.token:
+            return None
+
+        from app.services.cz_logger import log_cz_request
+
+        url = f"{self.base_url}/api/v3/true-api/cises/info"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        for pg in settings.cz_product_groups_list:
+            start = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(
+                        url, params={"pg": pg}, headers=headers, json=[code]
+                    )
+                    duration_ms = int((time.time() - start) * 1000)
+                    body = resp.json() if resp.status_code == 200 else None
+                    await log_cz_request(
+                        method="POST",
+                        url=f"{url}?pg={pg}",
+                        request_body=[code],
+                        response_status=resp.status_code,
+                        response_body=body,
+                        duration_ms=duration_ms,
+                    )
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                logger.warning("cz.aggregate_info.http_error", pg=pg, error=str(exc))
+                continue
+
+            if resp.status_code != 200 or not isinstance(body, list) or not body:
+                continue
+            entry = body[0] if isinstance(body[0], dict) else {}
+            if entry.get("errorCode"):
+                # not found in this group → try next
+                continue
+            ci = entry.get("cisInfo") or {}
+            children = [c for c in (ci.get("child") or []) if isinstance(c, str)]
+            psi = ci.get("partialSaleInfo") or {}
+            inner = psi.get("innerUnitCount")
+            try:
+                inner = int(inner)
+            except (TypeError, ValueError):
+                inner = len(children)
+            info = AggregateInfo(
+                cis=ci.get("cis") or code,
+                package_type=ci.get("generalPackageType") or ci.get("packageType"),
+                children=children,
+                inner_unit_count=inner or len(children),
+                gtin=_digits_gtin14_from_value(ci.get("gtin")),
+                product_name=(ci.get("productName") or None),
+                product_group=ci.get("productGroup") or pg,
+            )
+            logger.info(
+                "cz.aggregate_info.ok",
+                pg=pg,
+                package_type=info.package_type,
+                children=len(info.children),
+                is_aggregate=info.is_aggregate,
+            )
+            return info
+        logger.info("cz.aggregate_info.not_found", groups=len(settings.cz_product_groups_list))
+        return None
 
     async def accept_batch(self, codes: list[str], document_id: str) -> bool:
         """Подтвердить приёмку партии кодов."""

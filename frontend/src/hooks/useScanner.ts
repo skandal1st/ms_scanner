@@ -62,6 +62,10 @@ export function useScanner(documentId: string | null) {
           ...(data.moysklad_product_id != null && data.moysklad_product_id !== ''
             ? { moysklad_product_id: data.moysklad_product_id as string }
             : {}),
+          ...(typeof data.is_box === 'boolean' ? { is_box: data.is_box } : {}),
+          ...(data.box_quantity != null
+            ? { box_quantity: data.box_quantity as number }
+            : {}),
         })
         if (data.status === 'valid') playBeep('ok')
         else if (

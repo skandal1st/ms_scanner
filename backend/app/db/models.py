@@ -138,6 +138,10 @@ class Scan(Base):
     # В МС такой скан пишется одним trackingCode type=transportpack с quantity=box_quantity.
     is_box = Column(Boolean, nullable=False, default=False, server_default="false")
     box_quantity = Column(Integer, nullable=True)
+    # Состав агрегата (блок/групповая упаковка): КМ вложенных пачек из ЧЗ cises/info.
+    # Непустой → скан представляет box_quantity единиц и при process разворачивается
+    # в эти коды поштучно (is_box=False; в отличие от SSCC-transportpack).
+    child_codes = Column(JSONB, nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
 

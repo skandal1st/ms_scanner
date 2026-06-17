@@ -96,9 +96,9 @@ export function effectiveGtinKey(scan: Scan): string | null {
   return null
 }
 
-/** Сколько единиц товара представляет скан: короб = box_quantity, обычный = 1. */
+/** Сколько единиц товара представляет скан: короб/блок = box_quantity, обычный = 1. */
 export function scanUnits(scan: Scan): number {
-  if (scan.is_box) return scan.box_quantity || 0
+  if (scan.box_quantity != null) return scan.box_quantity
   return 1
 }
 
