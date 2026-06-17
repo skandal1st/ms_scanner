@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -46,6 +46,7 @@ class MoySkladDocumentItem(BaseModel):
     name: str
     moment: Optional[str]
     customer_order_name: Optional[str] = None
+    agent_name: Optional[str] = None
 
 
 def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
@@ -110,13 +111,14 @@ def _ensure_supported_kind(kind: str) -> None:
 @router.get("/moysklad/{kind}", response_model=List[MoySkladDocumentItem])
 async def list_moysklad_documents(
     kind: str,
+    search: Optional[str] = Query(None, description="Поиск по номеру/контрагенту (полнотекстовый поиск МС)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Список МС-документов выбранного типа (supply/demand/loss/move/salesreturn)."""
     _ensure_supported_kind(kind)
     ms = await _get_ms_service(current_user, db)
-    return await ms.get_documents(kind)
+    return await ms.get_documents(kind, search=search)
 
 
 @router.get("/moysklad-supplies", response_model=List[MoySkladDocumentItem])

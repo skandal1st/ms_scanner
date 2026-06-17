@@ -33,22 +33,29 @@ class MoySkladService:
 
     # --- Универсальные методы по типу документа ---
 
-    async def get_documents(self, kind: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_documents(
+        self, kind: str, limit: int = 50, search: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Список МС-документов выбранного типа.
 
-        expand=customerOrder — чтобы вытащить имя связанного заказа покупателя
-        для отображения в селекторе (UX: "00123 (#00045)").
+        expand=customerOrder,agent — чтобы вытащить имя связанного заказа покупателя
+        и контрагента для отображения в селекторе (UX: "00123 — ООО Покупатель (#00045)").
+        search — полнотекстовый поиск МС по номеру/контрагенту: позволяет найти
+        документ за пределами 50 последних.
         """
         self._validate_kind(kind)
+        params: Dict[str, Any] = {
+            "limit": limit,
+            "order": "moment,desc",
+            "expand": "customerOrder,agent",
+        }
+        if search and search.strip():
+            params["search"] = search.strip()
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{self.base_url}/entity/{kind}",
                 headers=self.headers,
-                params={
-                    "limit": limit,
-                    "order": "moment,desc",
-                    "expand": "customerOrder",
-                },
+                params=params,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -58,6 +65,8 @@ class MoySkladService:
         for r in rows:
             order = r.get("customerOrder") or {}
             order_name = order.get("name") if isinstance(order, dict) else None
+            agent = r.get("agent") or {}
+            agent_name = agent.get("name") if isinstance(agent, dict) else None
             out.append(
                 {
                     "id": r["id"],
@@ -67,6 +76,7 @@ class MoySkladService:
                     "name": r.get("name") or "",
                     "moment": r.get("moment"),
                     "customer_order_name": order_name or None,
+                    "agent_name": agent_name or None,
                 }
             )
         return out

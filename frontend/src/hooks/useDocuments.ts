@@ -2,10 +2,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, scansApi, type DocumentKind } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 
-export function useMsDocuments(kind: DocumentKind) {
+export function useMsDocuments(kind: DocumentKind, search?: string) {
   return useQuery({
-    queryKey: ['ms-docs', kind],
-    queryFn: () => documentsApi.listMs(kind).then((r) => r.data),
+    queryKey: ['ms-docs', kind, search ?? ''],
+    queryFn: () => documentsApi.listMs(kind, search).then((r) => r.data),
     staleTime: 60_000,
   })
 }

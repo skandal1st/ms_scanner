@@ -40,6 +40,7 @@ export interface MsDocument {
   name: string
   moment: string | null
   customer_order_name: string | null
+  agent_name: string | null
 }
 
 export interface PlanItem {
@@ -61,8 +62,10 @@ export interface Document {
 }
 
 export const documentsApi = {
-  listMs: (kind: DocumentKind) =>
-    api.get<MsDocument[]>(`/documents/moysklad/${kind}`),
+  listMs: (kind: DocumentKind, search?: string) =>
+    api.get<MsDocument[]>(`/documents/moysklad/${kind}`, {
+      params: search ? { search } : {},
+    }),
   list: (kind?: DocumentKind) =>
     api.get<Document[]>('/documents/', { params: kind ? { kind } : {} }),
   create: (name: string, kind: DocumentKind, moysklad_id?: string) =>

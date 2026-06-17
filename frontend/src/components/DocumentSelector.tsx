@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMsDocuments, useDocuments, useCreateDocument } from '../hooks/useDocuments'
 import type { Document, DocumentKind, MsDocument } from '../api/client'
 
@@ -12,11 +12,12 @@ const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'отгрузку',
 }
 
-/** Отображаемое имя МС-отгрузки: "00123 (#00045)" если есть связанный заказ. */
+/** Отображаемое имя МС-отгрузки: "00123 — ООО Покупатель (#00045)". */
 function msDocLabel(m: MsDocument): string {
-  const base = m.name || `Без имени · ${m.id.slice(0, 8)}`
-  if (m.customer_order_name) return `${base} (#${m.customer_order_name})`
-  return base
+  const number = m.name || `Без имени · ${m.id.slice(0, 8)}`
+  let label = m.agent_name ? `${number} — ${m.agent_name}` : number
+  if (m.customer_order_name) label += ` (#${m.customer_order_name})`
+  return label
 }
 
 export function DocumentSelector({ kind, onSelect, selected }: Props) {
@@ -24,8 +25,19 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
   const [newName, setNewName] = useState('')
   const [selectedMsId, setSelectedMsId] = useState('')
   const [createError, setCreateError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [debounced, setDebounced] = useState('')
 
-  const { data: msDocs, isLoading: msLoading } = useMsDocuments(kind)
+  // Серверный поиск в МС: дебаунс 300мс, не дёргаем МС на 1 символ.
+  useEffect(() => {
+    const trimmed = search.trim()
+    const handle = window.setTimeout(() => {
+      setDebounced(trimmed.length >= 2 ? trimmed : '')
+    }, 300)
+    return () => window.clearTimeout(handle)
+  }, [search])
+
+  const { data: msDocs, isLoading: msLoading } = useMsDocuments(kind, debounced || undefined)
   const { data: documents } = useDocuments(kind)
   const createMutation = useCreateDocument()
 
@@ -82,11 +94,15 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
       )}
 
       {mode === 'select' && (() => {
+        const q = search.trim().toLowerCase()
+        const localDocs = (documents ?? []).filter(
+          (d) => !q || d.name.toLowerCase().includes(q),
+        )
         const boundMsIds = new Set(
           (documents ?? []).map((d) => d.moysklad_id).filter(Boolean) as string[],
         )
         const unboundMs = (msDocs ?? []).filter((m) => !boundMsIds.has(m.id))
-        const isEmpty = (!documents || documents.length === 0) && unboundMs.length === 0
+        const isEmpty = localDocs.length === 0 && unboundMs.length === 0
 
         const handleBindMs = async (m: MsDocument) => {
           setCreateError(null)
@@ -102,17 +118,25 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
           }
         }
 
-        if (isEmpty) {
-          return (
-            <p className="hint">
-              {msLoading ? 'Загружаю документы из МойСклад...' : 'Нет документов'}
-            </p>
-          )
-        }
-
         return (
+          <div>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск по номеру или контрагенту"
+              className="ui-input ui-input--block mb-8"
+            />
+            {isEmpty ? (
+              <p className="hint">
+                {msLoading
+                  ? 'Загружаю документы из МойСклад...'
+                  : q
+                    ? 'Ничего не найдено'
+                    : 'Нет документов'}
+              </p>
+            ) : (
           <div className="doc-list">
-            {(documents ?? []).map((doc) => (
+            {localDocs.map((doc) => (
               <button
                 key={doc.id}
                 type="button"
@@ -150,6 +174,8 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
               >
                 {createError}
               </div>
+            )}
+          </div>
             )}
           </div>
         )
