@@ -37,6 +37,9 @@ class ScanResponse(BaseModel):
     scanned_at: datetime
     is_box: bool = False
     box_quantity: Optional[int] = None
+    owner_name: Optional[str] = None
+    producer_name: Optional[str] = None
+    child_codes: Optional[List[str]] = None
 
     model_config = {"from_attributes": True}
 

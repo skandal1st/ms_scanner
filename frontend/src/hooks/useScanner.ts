@@ -66,6 +66,13 @@ export function useScanner(documentId: string | null) {
           ...(data.box_quantity != null
             ? { box_quantity: data.box_quantity as number }
             : {}),
+          ...(data.owner_name != null ? { owner_name: data.owner_name as string } : {}),
+          ...(data.producer_name != null
+            ? { producer_name: data.producer_name as string }
+            : {}),
+          ...(Array.isArray(data.child_codes)
+            ? { child_codes: data.child_codes as string[] }
+            : {}),
         })
         if (data.status === 'valid') playBeep('ok')
         else if (

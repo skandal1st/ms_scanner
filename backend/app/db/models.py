@@ -142,6 +142,9 @@ class Scan(Base):
     # Непустой → скан представляет box_quantity единиц и при process разворачивается
     # в эти коды поштучно (is_box=False; в отличие от SSCC-transportpack).
     child_codes = Column(JSONB, nullable=True)
+    # Владелец и производитель КМ из ЧЗ (cises/info) — для отображения при проверке.
+    owner_name = Column(String(500), nullable=True)
+    producer_name = Column(String(500), nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
 

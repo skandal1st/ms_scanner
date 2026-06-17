@@ -290,46 +290,48 @@ async def _verify_code_async(scan_id: str, user_id: str):
             if gk:
                 scan.gtin = gk
 
-        # Детект агрегата (блок/групповая упаковка) → разворот в единицы.
-        # Только реальный режим, валидный код, есть токен ЧЗ, ещё не короб.
-        if (
-            scan.status == ScanStatus.valid
-            and not settings.CZ_MOCK_MODE
-            and not scan.is_box
-            and not scan.child_codes
-        ):
+        # Сведения ЧЗ: владелец/производитель + детект агрегата (блок/короб) → разворот.
+        # Реальный режим, есть токен ЧЗ, ещё не SSCC-короб и не развёрнут.
+        # Короб (02/37) приходит со status=invalid (не КИ) — проверяем независимо от статуса.
+        if not settings.CZ_MOCK_MODE and not scan.is_box and not scan.child_codes:
             cz_token2 = await _get_cz_token(db, user_id)
             if cz_token2:
                 info = None
                 try:
                     info = await ChestnyZnakService(
                         token=cz_token2, mock=False
-                    ).get_aggregate_info(scan.code)
+                    ).get_code_info(scan.code)
                 except Exception as exc:
                     logger.warning(
-                        "verify_code.aggregate_failed", scan_id=scan_id, error=str(exc)
+                        "verify_code.code_info_failed", scan_id=scan_id, error=str(exc)
                     )
-                if info and info.is_aggregate:
-                    scan.child_codes = info.children
-                    scan.box_quantity = info.inner_unit_count or len(info.children)
-                    # GTIN агрегата ≠ GTIN пачки: берём GTIN вложенной пачки, чтобы
-                    # скан матчился с планом и считался как N единиц.
-                    child_gtin = (
-                        extract_gtin(info.children[0]) if info.children else None
-                    )
-                    if child_gtin:
-                        gk2 = normalize_gtin_key(child_gtin)
-                        if gk2:
-                            scan.gtin = gk2
-                    if info.product_name:
-                        scan.product_name = info.product_name
-                    logger.info(
-                        "verify_code.aggregate",
-                        scan_id=scan_id,
-                        units=scan.box_quantity,
-                        children=len(info.children),
-                        gtin=scan.gtin,
-                    )
+                if info:
+                    scan.owner_name = info.owner_name
+                    scan.producer_name = info.producer_name
+                    if info.is_aggregate:
+                        # Блок/короб: разворачиваем в листовые КМ пачек.
+                        scan.status = ScanStatus.valid
+                        scan.error_message = None
+                        scan.child_codes = info.children
+                        scan.box_quantity = len(info.children)
+                        # GTIN агрегата ≠ GTIN пачки: берём GTIN вложенной пачки, чтобы
+                        # скан матчился с планом и считался как N единиц.
+                        child_gtin = (
+                            extract_gtin(info.children[0]) if info.children else None
+                        )
+                        if child_gtin:
+                            gk2 = normalize_gtin_key(child_gtin)
+                            if gk2:
+                                scan.gtin = gk2
+                        if info.product_name:
+                            scan.product_name = info.product_name
+                        logger.info(
+                            "verify_code.aggregate",
+                            scan_id=scan_id,
+                            package_type=info.package_type,
+                            units=scan.box_quantity,
+                            gtin=scan.gtin,
+                        )
 
         # Единиц в скане: агрегат = box_quantity, обычный КМ = 1.
         units = int(scan.box_quantity) if scan.box_quantity else 1
@@ -419,6 +421,9 @@ async def _verify_code_async(scan_id: str, user_id: str):
             moysklad_product_id=scan.moysklad_product_id,
             is_box=scan.is_box,
             box_quantity=scan.box_quantity,
+            owner_name=scan.owner_name,
+            producer_name=scan.producer_name,
+            child_codes=scan.child_codes,
         )
 
 
@@ -533,6 +538,9 @@ async def _push_ws_update(
     moysklad_product_id: Optional[str] = None,
     is_box: Optional[bool] = None,
     box_quantity: Optional[int] = None,
+    owner_name: Optional[str] = None,
+    producer_name: Optional[str] = None,
+    child_codes: Optional[list] = None,
 ):
     import redis.asyncio as aioredis
     import json
@@ -549,6 +557,9 @@ async def _push_ws_update(
         "moysklad_product_id": moysklad_product_id,
         "is_box": is_box,
         "box_quantity": box_quantity,
+        "owner_name": owner_name,
+        "producer_name": producer_name,
+        "child_codes": child_codes,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()

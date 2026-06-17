@@ -99,8 +99,13 @@ export interface Scan {
   scanned_at: string
   /** Короб SSCC, сохранённый целиком (transportpack). */
   is_box?: boolean
-  /** Число SGTIN внутри короба (из ЧЗ sscc_check). */
+  /** Число SGTIN внутри короба/блока (из ЧЗ). */
   box_quantity?: number | null
+  /** Владелец и производитель КМ из ЧЗ (cises/info). */
+  owner_name?: string | null
+  producer_name?: string | null
+  /** Состав агрегата (блок/короб): КМ вложенных пачек из ЧЗ. */
+  child_codes?: string[] | null
 }
 
 export const scansApi = {

@@ -35,23 +35,45 @@ class SsccInfo:
 
 
 @dataclass
-class AggregateInfo:
-    """Состав агрегата (блок/групповая упаковка) из True API cises/info.
+class CodeInfo:
+    """Сведения о КМ из True API (cises/info + aggregated/list).
 
-    package_type — generalPackageType из ЧЗ (GROUP=блок, UNIT=пачка, SET и т.д.).
-    children — КМ вложенных единиц (для блока это листовые пачки).
-    is_aggregate True, если это групповая упаковка с непустым составом."""
+    package_type — generalPackageType ЧЗ: UNIT=пачка, GROUP/LEVEL1=блок, BOX/LEVEL2=короб.
+    children — ЛИСТОВЫЕ КМ единиц (для блока/короба — пачки, рекурсивно развёрнуто).
+    Заполняется для любого найденного кода (в т.ч. обычной пачки — тогда children пуст),
+    чтобы показывать владельца/производителя по каждому скану.
+    is_aggregate True, если внутри есть единицы (блок/короб)."""
     cis: str
     package_type: Optional[str]
     children: list[str]
-    inner_unit_count: int
     gtin: Optional[str]
     product_name: Optional[str]
+    owner_name: Optional[str]
+    producer_name: Optional[str]
     product_group: Optional[str]
 
     @property
     def is_aggregate(self) -> bool:
-        return bool(self.children) and (self.package_type or "").upper() != "UNIT"
+        return bool(self.children)
+
+
+def _flatten_aggregate_leaves(node: Any) -> list[str]:
+    """Рекурсивно собрать листовые КМ из дерева cises/aggregated/list.
+    Узел = dict{код: поддерево} либо list[код]; лист = код с пустым поддеревом."""
+    out: list[str] = []
+    if isinstance(node, list):
+        for x in node:
+            if isinstance(x, str):
+                out.append(x)
+            else:
+                out.extend(_flatten_aggregate_leaves(x))
+    elif isinstance(node, dict):
+        for k, v in node.items():
+            if not v:  # [], {}, None → k это лист
+                out.append(k)
+            else:
+                out.extend(_flatten_aggregate_leaves(v))
+    return out
 
 
 # Путь метода ЧЗ «sscc_check» (право SSCC_CHECK). Точный префикс версии/группы
@@ -468,21 +490,25 @@ class ChestnyZnakService:
                 f"HTTP {e.response.status_code} при sscc_check: {e.response.text[:200]}"
             )
 
-    async def get_aggregate_info(self, code: str) -> Optional["AggregateInfo"]:
-        """Состав агрегата по КМ через True API ``POST /cises/info?pg=<group>``.
+    async def get_code_info(self, code: str) -> Optional["CodeInfo"]:
+        """Сведения о КМ через True API: владелец/производитель/товар + состав агрегата.
 
-        ``pg`` обязателен и зависит от товарной группы — перебираем
-        ``settings.cz_product_groups_list`` до первого ответа 200 с cisInfo без
-        errorCode. 403 (нет прав) / 404 / errorCode=404 (не та группа) → следующая.
-        Возвращает AggregateInfo (для блока — generalPackageType=GROUP + child[]),
-        либо None если код нигде не найден / ошибка. В mock не используется.
+        Сначала ``POST /cises/info?pg=<group>`` (перебор ``cz_product_groups_list``,
+        первый ответ 200 с cisInfo без errorCode). Код нормализуем — **убираем скобки**
+        AI-разделителей (сканер логистической упаковки даёт «(02)…(37)…»; ЧЗ требует
+        КИ без скобок). Если код — агрегат (есть child) — добиваем ``cises/aggregated/list``
+        для получения ВСЕХ листовых КМ (короб → блоки → пачки, рекурсивно).
+        Возвращает CodeInfo для любого найденного кода (для пачки children пуст),
+        либо None если код нигде не найден. В mock не используется.
         """
         if self.mock or not self.token:
             return None
 
         from app.services.cz_logger import log_cz_request
 
-        url = f"{self.base_url}/api/v3/true-api/cises/info"
+        cis = code.replace("(", "").replace(")", "").strip()
+        info_url = f"{self.base_url}/api/v3/true-api/cises/info"
+        agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
         headers = {
             "Authorization": f"Bearer {self.token}",
             "accept": "application/json",
@@ -493,54 +519,72 @@ class ChestnyZnakService:
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
                     resp = await client.post(
-                        url, params={"pg": pg}, headers=headers, json=[code]
+                        info_url, params={"pg": pg}, headers=headers, json=[cis]
                     )
-                    duration_ms = int((time.time() - start) * 1000)
                     body = resp.json() if resp.status_code == 200 else None
                     await log_cz_request(
                         method="POST",
-                        url=f"{url}?pg={pg}",
-                        request_body=[code],
+                        url=f"{info_url}?pg={pg}",
+                        request_body=[cis],
                         response_status=resp.status_code,
                         response_body=body,
-                        duration_ms=duration_ms,
+                        duration_ms=int((time.time() - start) * 1000),
                     )
             except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                logger.warning("cz.aggregate_info.http_error", pg=pg, error=str(exc))
+                logger.warning("cz.code_info.http_error", pg=pg, error=str(exc))
                 continue
 
             if resp.status_code != 200 or not isinstance(body, list) or not body:
                 continue
             entry = body[0] if isinstance(body[0], dict) else {}
             if entry.get("errorCode"):
-                # not found in this group → try next
-                continue
+                continue  # не та группа → следующая
             ci = entry.get("cisInfo") or {}
-            children = [c for c in (ci.get("child") or []) if isinstance(c, str)]
-            psi = ci.get("partialSaleInfo") or {}
-            inner = psi.get("innerUnitCount")
-            try:
-                inner = int(inner)
-            except (TypeError, ValueError):
-                inner = len(children)
-            info = AggregateInfo(
-                cis=ci.get("cis") or code,
+            first_layer = [c for c in (ci.get("child") or []) if isinstance(c, str)]
+
+            # Для агрегата (есть вложения) забираем ВСЕ листовые КМ рекурсивно.
+            children: list[str] = []
+            if first_layer:
+                try:
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        ar = await client.post(
+                            agg_url, params={"pg": pg}, headers=headers, json=[cis]
+                        )
+                        abody = ar.json() if ar.status_code == 200 else None
+                        await log_cz_request(
+                            method="POST",
+                            url=f"{agg_url}?pg={pg}",
+                            request_body=[cis],
+                            response_status=ar.status_code,
+                            response_body=abody if isinstance(abody, dict) else None,
+                            duration_ms=0,
+                        )
+                    if isinstance(abody, dict) and abody.get(cis):
+                        children = _flatten_aggregate_leaves(abody[cis])
+                except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                    logger.warning("cz.aggregated_list.http_error", pg=pg, error=str(exc))
+                if not children:
+                    children = first_layer  # фолбэк: хотя бы первый слой
+
+            info = CodeInfo(
+                cis=ci.get("cis") or cis,
                 package_type=ci.get("generalPackageType") or ci.get("packageType"),
                 children=children,
-                inner_unit_count=inner or len(children),
                 gtin=_digits_gtin14_from_value(ci.get("gtin")),
                 product_name=(ci.get("productName") or None),
+                owner_name=(ci.get("ownerName") or None),
+                producer_name=(ci.get("producerName") or ci.get("manufacturerName") or None),
                 product_group=ci.get("productGroup") or pg,
             )
             logger.info(
-                "cz.aggregate_info.ok",
+                "cz.code_info.ok",
                 pg=pg,
                 package_type=info.package_type,
                 children=len(info.children),
                 is_aggregate=info.is_aggregate,
             )
             return info
-        logger.info("cz.aggregate_info.not_found", groups=len(settings.cz_product_groups_list))
+        logger.info("cz.code_info.not_found", groups=len(settings.cz_product_groups_list))
         return None
 
     async def accept_batch(self, codes: list[str], document_id: str) -> bool:

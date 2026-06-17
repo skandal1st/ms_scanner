@@ -59,8 +59,9 @@ function ScanRow({
   onDelete: () => void
 }) {
   const cfg = STATUS_CONFIG[scan.status]
-  // Блок (групповая упаковка): развёрнут в единицы, box_quantity без is_box.
-  const isBlock = !scan.is_box && scan.box_quantity != null
+  // Агрегат (блок/короб): развёрнут в единицы — box_quantity/child_codes без is_box.
+  const childCount = scan.child_codes?.length ?? 0
+  const isAggregate = !scan.is_box && (childCount > 0 || scan.box_quantity != null)
 
   return (
     <>
@@ -69,7 +70,7 @@ function ScanRow({
         onClick={onToggle}
       >
         <td className="is-code">
-          {scan.is_box || isBlock ? '📦 ' : ''}
+          {scan.is_box || isAggregate ? '📦 ' : ''}
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
@@ -83,9 +84,9 @@ function ScanRow({
               Короб · {scan.box_quantity ?? '?'} шт.
             </div>
           ) : null}
-          {isBlock ? (
+          {isAggregate ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
-              Блок · {scan.box_quantity ?? '?'} шт.
+              Упаковка · {scan.box_quantity ?? childCount} шт.
             </div>
           ) : null}
           {scan.moysklad_product_id ? (
@@ -120,6 +121,28 @@ function ScanRow({
               <div className="scans-expanded__row">
                 <span className="scans-expanded__label">GTIN:</span>
                 <span>{scan.gtin}</span>
+              </div>
+            )}
+            {scan.owner_name && (
+              <div className="scans-expanded__row">
+                <span className="scans-expanded__label">Владелец:</span>
+                <span>{scan.owner_name}</span>
+              </div>
+            )}
+            {scan.producer_name && (
+              <div className="scans-expanded__row">
+                <span className="scans-expanded__label">Производитель:</span>
+                <span>{scan.producer_name}</span>
+              </div>
+            )}
+            {childCount > 0 && (
+              <div className="scans-expanded__row" style={{ alignItems: 'flex-start' }}>
+                <span className="scans-expanded__label">Коды внутри ({childCount}):</span>
+                <div style={{ maxHeight: 160, overflowY: 'auto', fontSize: 11, fontFamily: 'monospace' }}>
+                  {scan.child_codes!.map((cc, i) => (
+                    <div key={i}>{cc}</div>
+                  ))}
+                </div>
               </div>
             )}
             {scan.error_message && (
