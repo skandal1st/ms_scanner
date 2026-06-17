@@ -162,6 +162,25 @@ class MoySkladService:
             return s or None
         return str(raw).strip() or None
 
+    @staticmethod
+    def _scan_units(s: Dict[str, Any]) -> int:
+        """Сколько единиц товара представляет скан: короб = box_quantity, иначе 1."""
+        if s.get("is_box"):
+            return int(s.get("quantity") or 0) or 1
+        return 1
+
+    def _tracking_code_entry(
+        self, s: Dict[str, Any], ms_tracking_type: Optional[str]
+    ) -> Dict[str, str]:
+        """trackingCode для МС: короб → transportpack (cis = SSCC как есть, МС резолвит
+        состав через ЧЗ), штучный КМ → trackingcode (нормализованный cis)."""
+        if s.get("is_box"):
+            return {"cis": (s.get("code") or "").strip(), "type": "transportpack"}
+        return {
+            "cis": cis_string_for_moysklad_api(s["code"], ms_tracking_type),
+            "type": "trackingcode",
+        }
+
     def _position_put_payload(self, ms_row: Dict[str, Any]) -> Dict[str, Any]:
         """
         Тело позиции для PUT документа: без «тяжёлого» expand assortment,
@@ -280,20 +299,21 @@ class MoySkladService:
                     except (TypeError, ValueError):
                         row_cap = 0
                     if row_cap < 1:
-                        row_cap = len(remaining)
-                    take = remaining[:row_cap]
-                    del remaining[: len(take)]
+                        row_cap = sum(self._scan_units(s) for s in remaining)
+                    # Набираем сканы по единицам (короб атомарен — берём целиком,
+                    # даже если перешагнёт row_cap); quantity позиции = сумма единиц.
+                    take: List[Dict[str, Any]] = []
+                    units = 0
+                    while remaining and units < row_cap:
+                        nxt = remaining.pop(0)
+                        take.append(nxt)
+                        units += self._scan_units(nxt)
                     if take:
-                        payload["quantity"] = len(take)
+                        payload["quantity"] = units
                         if write_codes:
                             ms_tt = self._moysklad_tracking_type_from_position(row)
                             tc_batch = [
-                                {
-                                    "cis": cis_string_for_moysklad_api(
-                                        s["code"], ms_tt
-                                    ),
-                                    "type": "trackingcode",
-                                }
+                                self._tracking_code_entry(s, ms_tt)
                                 for s in take
                                 if s.get("code")
                             ]
@@ -324,14 +344,11 @@ class MoySkladService:
                             "mediaType": "application/json",
                         }
                     },
-                    "quantity": len(group),
+                    "quantity": sum(self._scan_units(s) for s in group),
                 }
                 if write_codes:
                     position["trackingCodes"] = [
-                        {
-                            "cis": cis_string_for_moysklad_api(s["code"]),
-                            "type": "trackingcode",
-                        }
+                        self._tracking_code_entry(s, None)
                         for s in group
                         if s.get("code")
                     ]
@@ -439,15 +456,18 @@ class MoySkladService:
         """Поиск товаров в каталоге МС по строке (name/article/code).
 
         Используется при ручном сопоставлении скана с неизвестным GTIN: кладовщик
-        вводит фрагмент названия, бэк отдаёт совпадения из `/entity/assortment`.
-        Возвращает только товары (type=product) — варианты/услуги отбрасываются.
+        вводит фрагмент названия, бэк отдаёт совпадения.
+
+        ВАЖНО: параметр `search` на агрегированном `/entity/assortment` МС молча
+        игнорирует (всегда отдаёт первую страницу без фильтрации). Полнотекстовый
+        поиск по словам работает на `/entity/product` — его и используем.
         """
         query = (query or "").strip()
         if not query:
             return []
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
-                f"{self.base_url}/entity/assortment",
+                f"{self.base_url}/entity/product",
                 headers=self.headers,
                 params={"search": query, "limit": limit},
             )
@@ -493,5 +513,57 @@ class MoySkladService:
                 return None
             resp.raise_for_status()
             return resp.json()
+
+    async def add_gtin_barcode_to_product(self, product_id: str, gtin: str) -> bool:
+        """Дописать GTIN в штрихкоды товара МС — чтобы будущие сканы этого GTIN
+        матчились автоматически через find_product_by_gtin (filter=barcode=...),
+        и кладовщику не приходилось сопоставлять повторно.
+
+        Идемпотентно: если штрихкод уже есть (с учётом ведущего нуля GTIN-14↔EAN-13),
+        ничего не делает. Best-effort — при ошибке возвращает False, не бросает.
+        PUT в МС — частичное обновление, но массив barcodes заменяется целиком,
+        поэтому отправляем существующие + новый.
+        """
+        g = (gtin or "").strip()
+        if not g or not g.isdigit():
+            return False
+        variants = {g}
+        if len(g) == 14 and g.startswith("0"):
+            variants.add(g[1:])
+        if len(g) == 13:
+            variants.add("0" + g)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/product/{product_id}",
+                headers=self.headers,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ms.add_barcode.get_failed",
+                    status=resp.status_code,
+                    product_id=product_id,
+                )
+                return False
+            barcodes = resp.json().get("barcodes") or []
+            for bc in barcodes:
+                if isinstance(bc, dict) and any(str(v) in variants for v in bc.values()):
+                    return True  # уже привязан
+            key = "gtin" if len(g) == 14 else "ean13"
+            new_barcodes = list(barcodes) + [{key: g}]
+            put = await client.put(
+                f"{self.base_url}/entity/product/{product_id}",
+                headers=self.headers,
+                json={"barcodes": new_barcodes},
+            )
+            if put.status_code not in (200, 201):
+                logger.warning(
+                    "ms.add_barcode.put_failed",
+                    status=put.status_code,
+                    body=put.text[:300],
+                    product_id=product_id,
+                )
+                return False
+            logger.info("ms.add_barcode.ok", product_id=product_id, gtin=g)
+            return True
 
     # --- Алиасы для backward-совместимости старого приёмочного кода ---

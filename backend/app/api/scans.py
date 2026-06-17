@@ -15,7 +15,12 @@ from cryptography.fernet import InvalidToken
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token
-from app.services.chestnyznak import ChestnyZnakService, extract_gtin, is_sscc
+from app.services.chestnyznak import (
+    ChestnyZnakService,
+    CZApiError,
+    extract_gtin,
+    is_sscc,
+)
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -30,6 +35,8 @@ class ScanResponse(BaseModel):
     moysklad_product_id: Optional[str] = None
     error_message: Optional[str] = None
     scanned_at: datetime
+    is_box: bool = False
+    box_quantity: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -47,6 +54,9 @@ class PatchScanBody(BaseModel):
 class CreateBoxRequest(BaseModel):
     document_id: UUID
     sscc: str
+    # True — раскрыть короб на штучные КМ (real → 501, пока работает только mock).
+    # False — сохранить короб целиком (transportpack): один скан, quantity из ЧЗ.
+    unpack: bool = True
 
 
 async def _ensure_document_owner(
@@ -84,13 +94,21 @@ async def _create_scan_record(
     code: str,
     current_user_id: UUID,
     moysklad_product_id: Optional[str] = None,
+    *,
+    is_box: bool = False,
+    box_quantity: Optional[int] = None,
+    gtin_override: Optional[str] = None,
 ) -> tuple[Scan, bool]:
     """
     Создаёт скан или возвращает существующий со статусом duplicate.
     Возвращает (scan, is_duplicate).
+
+    Для коробов «целиком» (``is_box=True``): ``code`` — это SSCC, GTIN берётся из
+    ``gtin_override`` (из ЧЗ sscc_check, у SSCC своего GTIN в коде нет), а проверку
+    делает ``verify_box_task`` вместо ``verify_code_task``.
     """
     code = code.strip()
-    gtin = extract_gtin(code)
+    gtin = gtin_override if is_box else extract_gtin(code)
 
     doc_row = await db.execute(select(Document).where(Document.id == document_id))
     doc_obj = doc_row.scalar_one()
@@ -109,6 +127,8 @@ async def _create_scan_record(
         moysklad_product_id=moysklad_product_id,
         status=ScanStatus.pending,
         product_name=initial_name,
+        is_box=is_box,
+        box_quantity=box_quantity,
     )
     db.add(scan)
     try:
@@ -137,16 +157,22 @@ async def _create_scan_record(
 
     await db.refresh(scan)
 
-    # Очередь Celery: проверка формата кода / mock ЧЗ
-    from app.worker.tasks import verify_code_task
+    # Очередь Celery: проверка формата кода / mock ЧЗ.
+    # Короб «целиком» проверяется отдельной задачей (агрегат уже подтверждён sscc_check).
     logger.info(
         "scan.created",
         document_id=str(document_id),
         scan_id=str(scan.id),
         gtin=scan.gtin,
+        is_box=is_box,
         user_id=str(current_user_id),
     )
-    verify_code_task.delay(str(scan.id), code, str(current_user_id))
+    if is_box:
+        from app.worker.tasks import verify_box_task
+        verify_box_task.delay(str(scan.id), str(current_user_id))
+    else:
+        from app.worker.tasks import verify_code_task
+        verify_code_task.delay(str(scan.id), code, str(current_user_id))
     return scan, False
 
 
@@ -180,18 +206,21 @@ async def create_box_scans(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Принять SSCC-код короба: распаковать на индивидуальные KM и создать по скану на каждый.
+    Принять SSCC-код короба.
+
+    ``unpack=True`` — раскрыть на индивидуальные KM (по скану на каждый). Реальное
+    раскрытие через ЧЗ пока не реализовано (501); работает только в mock.
+
+    ``unpack=False`` — сохранить короб целиком: один скан с ``is_box=True`` и
+    ``box_quantity`` из ЧЗ (``sscc_check``); в МС уйдёт одним ``transportpack``.
 
     В проде (CZ_MOCK_MODE=false) требуется включённый режим коробов в настройках и
     действующий вход в Честный Знак по УКЭП; в dev/mock — без ограничений.
     Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
     doc = await _ensure_document_owner(body.document_id, current_user, db)
-    raise HTTPException(
-        status_code=410,
-        detail="Сканирование коробов отключено. Сканируйте коды маркировки поштучно для отгрузки.",
-    )
-    if not is_sscc(body.sscc):
+    sscc = body.sscc.strip()
+    if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
     int_result = await db.execute(
@@ -203,7 +232,7 @@ async def create_box_scans(
         if not integration or not integration.cz_box_mode_enabled:
             raise HTTPException(
                 status_code=403,
-                detail="Распаковка коробов отключена. Включите режим в настройках и войдите через УКЭП.",
+                detail="Работа с коробами отключена. Включите режим в настройках и войдите через УКЭП.",
             )
         try:
             cz_token = (
@@ -223,7 +252,7 @@ async def create_box_scans(
         if not cz_token or expired:
             raise HTTPException(
                 status_code=403,
-                detail="Нужен действующий вход в Честный Знак (УКЭП) для распаковки коробов.",
+                detail="Нужен действующий вход в Честный Знак (УКЭП) для работы с коробами.",
             )
         cz = ChestnyZnakService(token=cz_token, mock=False)
     else:
@@ -235,12 +264,31 @@ async def create_box_scans(
         if isinstance(item, dict) and item.get("gtin")
     ]
 
+    # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
+    if not body.unpack:
+        try:
+            info = await cz.get_sscc_info(sscc, plan_gtins)
+        except CZApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        scan, _ = await _create_scan_record(
+            db,
+            body.document_id,
+            sscc,
+            current_user.id,
+            is_box=True,
+            box_quantity=info.quantity,
+            gtin_override=info.gtin,
+        )
+        return [ScanResponse.model_validate(scan)]
+
+    # Раскрытие на штучные КМ.
     try:
-        member_codes = await cz.unpack_box(body.sscc, plan_gtins)
+        member_codes = await cz.unpack_box(sscc, plan_gtins)
     except NotImplementedError:
         raise HTTPException(
             status_code=501,
-            detail="Распаковка SSCC через API Честного Знака на сервере пока не настроена.",
+            detail="Раскрытие SSCC через API Честного Знака пока не настроено. "
+            "Переключите тумблер на «целиком» или сканируйте коды поштучно.",
         )
 
     scans: List[Scan] = []

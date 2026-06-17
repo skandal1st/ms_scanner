@@ -67,6 +67,7 @@ function ScanRow({
         onClick={onToggle}
       >
         <td className="is-code">
+          {scan.is_box ? '📦 ' : ''}
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
@@ -75,6 +76,11 @@ function ScanRow({
           ) : (
             <span className="text-muted">—</span>
           )}
+          {scan.is_box ? (
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+              Короб · {scan.box_quantity ?? '?'} шт.
+            </div>
+          ) : null}
           {scan.moysklad_product_id ? (
             <div className="text-muted" style={{ fontSize: 10, marginTop: 2 }}>
               → товар МС {scan.moysklad_product_id.slice(0, 8)}…

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { czApi, integrationsApi } from '../api/client'
 import type { Integration } from '../api/client'
 import {
@@ -279,6 +279,11 @@ function ChestnyZnakSection({
   integration?: Integration | undefined
 }) {
   const qc = useQueryClient()
+  const boxModeMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      integrationsApi.update({ cz_box_mode_enabled: enabled }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
+  })
   const [pluginAvailable, setPluginAvailable] = useState<boolean | null>(null)
   const [certs, setCerts] = useState<CzCertificate[]>([])
   const [selectedThumbprint, setSelectedThumbprint] = useState('')
@@ -405,6 +410,36 @@ function ChestnyZnakSection({
               Выйти
             </button>
           </div>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 8,
+              cursor: 'pointer',
+              marginTop: 12,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={!!integration?.cz_box_mode_enabled}
+              disabled={boxModeMutation.isPending}
+              onChange={(e) => boxModeMutation.mutate(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Разрешить сканирование SSCC-коробов
+              <div className="hint" style={{ marginTop: 2 }}>
+                Короб целиком пишется в МойСклад как транспортная упаковка
+                (transportpack). Требует права SSCC_CHECK на сертификате.
+              </div>
+            </span>
+          </label>
+          {boxModeMutation.isError && (
+            <div className="alert alert--error mt-8">
+              Не удалось сохранить режим коробов
+            </div>
+          )}
         </div>
       )}
 

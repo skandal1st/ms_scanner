@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { scansApi } from '../api/client'
+import { scansApi, isSscc } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { decodeJwtSub } from '../lib/jwt'
 
@@ -130,6 +130,18 @@ export function useScanner(documentId: string | null) {
       }
 
       try {
+        // SSCC-короб идёт в отдельный эндпоинт: раскрыть на штучные КМ либо сохранить целиком.
+        if (isSscc(trimmed)) {
+          const { data: boxScans } = await scansApi.box(
+            documentId,
+            trimmed,
+            state.unpackBox,
+          )
+          boxScans.forEach((s) => addScan(s))
+          if (boxScans.some((s) => s.status === 'duplicate')) playBeep('error')
+          return
+        }
+
         const targetPid = state.targetProductId
         const { data: scan } = await scansApi.create(
           documentId,

@@ -200,9 +200,9 @@ export function ShipmentPage() {
                 type="button"
                 className="button button--success"
                 onClick={handleProcess}
-                disabled={stats.valid + stats.overflow === 0}
+                disabled={progress.total.addedTotal === 0}
               >
-                Отгрузить {stats.valid + stats.overflow}
+                Отгрузить {progress.total.addedTotal}
                 {stats.overflow > 0 ? ` (вкл. ${stats.overflow} сверх)` : ''}
               </button>
             </div>

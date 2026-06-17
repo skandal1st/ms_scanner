@@ -133,6 +133,11 @@ class Scan(Base):
     status = Column(Enum(ScanStatus), default=ScanStatus.pending, nullable=False)
     product_name = Column(String(500), nullable=True)
     error_message = Column(Text, nullable=True)
+    # Короб SSCC, сохранённый «целиком» (без раскрытия на штучные КМ).
+    # is_box=True → code хранит SSCC, box_quantity = число SGTIN внутри (из ЧЗ sscc_check).
+    # В МС такой скан пишется одним trackingCode type=transportpack с quantity=box_quantity.
+    is_box = Column(Boolean, nullable=False, default=False, server_default="false")
+    box_quantity = Column(Integer, nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
 

@@ -108,6 +108,27 @@ async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> 
         scan.product_name = row["name"]
 
 
+async def _count_valid_units_for_gtin(db, document_id, scan_key: str, exclude_id) -> int:
+    """Сколько единиц товара GTIN уже набрано валидными сканами документа.
+    Короб считается как box_quantity единиц, обычный скан — как 1. Нужно для overflow:
+    короб из N штук может перевести строку плана за лимит целиком."""
+    from sqlalchemy import select
+    from app.db.models import Scan, ScanStatus
+
+    rows = await db.execute(
+        select(Scan.gtin, Scan.is_box, Scan.box_quantity).where(
+            Scan.document_id == document_id,
+            Scan.status == ScanStatus.valid,
+            Scan.id != exclude_id,
+        )
+    )
+    total = 0
+    for g, is_box, bq in rows.all():
+        if g and normalize_gtin_key(g) == scan_key:
+            total += (int(bq or 0) if is_box else 1)
+    return total
+
+
 async def _enrich_scan_product_name_from_plan(db, scan) -> None:
     """Имя и product_id из плана документа — приоритетнее глобального поиска по GTIN."""
     from sqlalchemy import select
@@ -267,17 +288,8 @@ async def _verify_code_async(scan_id: str, user_id: str):
                 None,
             )
             if expected is not None and expected > 0:
-                prev_q = await db.execute(
-                    select(Scan.gtin).where(
-                        Scan.document_id == scan.document_id,
-                        Scan.status == ScanStatus.valid,
-                        Scan.id != scan.id,
-                    )
-                )
-                already = sum(
-                    1
-                    for (g,) in prev_q.all()
-                    if g and normalize_gtin_key(g) == scan_key
+                already = await _count_valid_units_for_gtin(
+                    db, scan.document_id, scan_key, scan.id
                 )
                 if already + 1 > expected:
                     # overflow — визуально красный, но при подтверждении
@@ -331,6 +343,104 @@ async def _verify_code_async(scan_id: str, user_id: str):
         )
 
         # Пуш через Redis pub/sub → WebSocket менеджер
+        await _push_ws_update(
+            user_id,
+            scan_id,
+            scan.status,
+            scan.product_name,
+            scan.error_message,
+            gtin=scan.gtin,
+            moysklad_product_id=scan.moysklad_product_id,
+        )
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_box")
+def verify_box_task(self, scan_id: str, user_id: str):
+    """Подтвердить скан-короб (SSCC «целиком»): агрегат уже проверен через sscc_check,
+    здесь только проставляем статус, считаем overflow по box_quantity, тянем имя товара."""
+    try:
+        _run(_verify_box_async(scan_id, user_id))
+    except Exception as exc:
+        logger.error("verify_box.error", scan_id=scan_id, error=str(exc))
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
+async def _verify_box_async(scan_id: str, user_id: str):
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Scan, ScanStatus, Document
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        scan_result = await db.execute(select(Scan).where(Scan.id == scan_id))
+        scan = scan_result.scalar_one_or_none()
+        if not scan:
+            logger.error("verify_box.scan_not_found", scan_id=scan_id)
+            return
+
+        scan.status = ScanStatus.valid
+        scan.verified_at = datetime.now(timezone.utc)
+        if scan.gtin:
+            gk = normalize_gtin_key(scan.gtin)
+            if gk:
+                scan.gtin = gk
+
+        qty = int(scan.box_quantity or 0) or 1
+        scan_key = normalize_gtin_key(scan.gtin) if scan.gtin else None
+
+        doc_q = await db.execute(
+            select(Document).where(Document.id == scan.document_id)
+        )
+        doc = doc_q.scalar_one_or_none()
+        plan_items = (doc.plan or []) if doc else []
+
+        # overflow: короб целиком может вывести строку плана за лимит.
+        if scan_key:
+            expected = next(
+                (
+                    int(p.get("expected_qty") or 0)
+                    for p in plan_items
+                    if isinstance(p, dict)
+                    and normalize_gtin_key(p.get("gtin")) == scan_key
+                ),
+                None,
+            )
+            if expected is not None and expected > 0:
+                already = await _count_valid_units_for_gtin(
+                    db, scan.document_id, scan_key, scan.id
+                )
+                if already + qty > expected:
+                    scan.status = ScanStatus.overflow
+                    scan.error_message = (
+                        f"Сверх плана: ожидалось {expected}, "
+                        f"в коробе {qty} (уже {already})"
+                    )
+
+        if scan.gtin or scan.moysklad_product_id:
+            await _enrich_scan_product_name_from_plan(db, scan)
+        if scan.gtin and not scan.moysklad_product_id:
+            await _enrich_scan_product_name_from_ms(db, user_id, scan)
+
+        # unknown_product: GTIN короба не в плане и не нашёлся в каталоге МС.
+        if scan.gtin and not scan.moysklad_product_id:
+            in_plan = any(
+                isinstance(p, dict)
+                and normalize_gtin_key(p.get("gtin")) == scan_key
+                for p in plan_items
+            )
+            if not in_plan:
+                scan.status = ScanStatus.unknown_product
+                scan.error_message = "Товар короба не найден в МС — сопоставьте вручную"
+
+        await db.commit()
+
+        logger.info(
+            "verify_box.done",
+            scan_id=scan_id,
+            status=scan.status,
+            gtin=scan.gtin,
+            box_quantity=scan.box_quantity,
+        )
+
         await _push_ws_update(
             user_id,
             scan_id,
@@ -484,6 +594,9 @@ async def _process_document_async(document_id: str, user_id: str):
                                 else None
                             )
                         ),
+                        "is_box": s.is_box,
+                        # Короб «целиком» = box_quantity единиц; обычный скан = 1.
+                        "quantity": (int(s.box_quantity or 0) or 1) if s.is_box else 1,
                     }
                     for s in remaining_scans
                 ]

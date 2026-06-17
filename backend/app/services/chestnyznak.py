@@ -24,6 +24,22 @@ class VerifyResult:
     error: Optional[str] = None
 
 
+@dataclass
+class SsccInfo:
+    """Сводка по SSCC-коробу из ЧЗ (метод sscc_check): товар + количество внутри.
+    Перечень самих КМ ЧЗ этим методом НЕ отдаёт — только GTIN, серию и число SGTIN."""
+    sscc: str
+    gtin: Optional[str]
+    series: Optional[str]
+    quantity: int
+
+
+# Путь метода ЧЗ «sscc_check» (право SSCC_CHECK). Точный префикс версии/группы
+# может отличаться — при 404 поправить здесь (доки ЧЗ давали относительный
+# `/reestr/sscc/{sscc}/sscc_check`). Базовый хост — settings.CZ_API_BASE_URL.
+CZ_SSCC_CHECK_PATH = "/api/v3/facade/reestr/sscc/{sscc}/sscc_check"
+
+
 def _random_gtin14_digits() -> str:
     """Случайный 14-значный GTIN с корректной контрольной цифрой (mock unpack без плана)."""
     body = "".join(str(random.randint(0, 9)) for _ in range(13))
@@ -143,9 +159,10 @@ MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE: dict[str, int] = {
     "MILK": 6,
     "FOOD_SUPPLEMENT": 6,
     "SANITIZER": 6,
-    # КИ 25 символов (01+14+21+7) — табачная группа
+    # Длина серии КИ — применяется ТОЛЬКО к «голым» кодам без разделителя GS (у кодов
+    # с GS серия берётся точно по GS). Подтверждено по ЧЗ cises/info: серия 7.
     "TOBACCO": 7,
-    "OTP": 7,  # альтернативная табачная продукция
+    "OTP": 7,  # альтернативная табачная продукция (кальянный табак)
     "NCP": 7,  # никотиносодержащая продукция
 }
 
@@ -212,40 +229,39 @@ def cis_string_for_moysklad_api(
         elif 0x20 <= o <= 0x7E:
             parts.append(ch)
     s = "".join(parts)
-    s = _normalize_bare_gtin_serial_to_gs1_element_string(s)
-
-    out = s
-    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit():
-        tail = s[16:]
-        while tail.startswith(_FNC1):
-            tail = tail[1:]
-        if tail.startswith("21"):
-            serial = tail[2:]
-            serial = re.sub(r"(?i)%c1", "", serial)
-            out = "01" + s[2:16] + "21" + serial
-    else:
-        marker = _FNC1 + "21"
-        pos = s.find(marker)
-        if pos != -1:
-            head = s[: pos + len(marker)]
-            serial = s[pos + len(marker) :]
-            serial = re.sub(r"(?i)%c1", "", serial)
-            out = head + serial
 
     tt = (moysklad_tracking_type or "").strip().upper()
     serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
-    if serial_len is not None:
-        short = cis_identification_document_code(out, serial_len)
-        if short != out:
-            logger.info(
-                "cis.moysklad_identification_short",
-                tracking_type=tt,
-                serial_len=serial_len,
-                len_before=len(out),
-                len_after=len(short),
-            )
-            return short
-    return out
+
+    def _trim_serial(serial: str, had_gs: bool) -> str:
+        serial = re.sub(r"(?i)%c1", "", serial)
+        # Серия отделена GS → точная граница, длину не трогаем. Иначе (голый код,
+        # криптохвост прилип без разделителя) — режем по длине типа маркировки.
+        if not had_gs and serial_len is not None and len(serial) > serial_len:
+            serial = serial[:serial_len]
+        return serial
+
+    # КЛЮЧЕВОЕ: сохраняем форму кода как он зарегистрирован в ЧЗ = как отсканирован.
+    # Структурный GS1 (01<GTIN>21<serial>) → cis С AI 01/21. «Голый» (<GTIN><serial>
+    # без AI) → cis БЕЗ 01/21. Навязывать 01/21 голым кодам НЕЛЬЗЯ — ЧЗ их в такой
+    # форме не находит (404 при проведении в МС). Проверено на проде 2026-06-16:
+    # МС и ЧЗ принимают `04660321208767Yi3P&E>` (голый КИ, серия 7), а `01…21…` — нет.
+
+    # 1) Структурный GS1-код: 01 + GTIN(14) + 21 + serial[ + GS + криптохвост ]
+    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
+        gtin = s[2:16]
+        cut = s[18:].split(_FNC1, 1)
+        serial = _trim_serial(cut[0], len(cut) > 1)
+        return "01" + gtin + "21" + serial
+
+    # 2) «Голый» код: GTIN(14) + serial[ + GS + криптохвост ], без AI 01/21
+    if len(s) >= 15 and s[:14].isdigit():
+        gtin = s[:14]
+        cut = s[14:].split(_FNC1, 1)
+        serial = _trim_serial(cut[0], len(cut) > 1)
+        return gtin + serial
+
+    return s
 
 
 class ChestnyZnakService:
@@ -381,6 +397,56 @@ class ChestnyZnakService:
         raise NotImplementedError(
             "Реальное раскрытие коробов в ЧЗ ещё не реализовано"
         )
+
+    async def get_sscc_info(
+        self, sscc: str, plan_gtins: Optional[list[str]] = None
+    ) -> SsccInfo:
+        """
+        Сводка по SSCC-коробу для сохранения «целиком» (без раскрытия): GTIN, серия,
+        число SGTIN внутри. Real-режим зовёт ЧЗ ``GET …/reestr/sscc/{sscc}/sscc_check``
+        (нужно право SSCC_CHECK на сертификате). Mock берёт GTIN из плана документа и
+        случайное количество, чтобы поток работал без реального ЧЗ.
+
+        Перечень индивидуальных КМ этот метод не возвращает — для «целиком» он и не
+        нужен: в МС уходит один transportpack-код, состав резолвит МС/ЧЗ.
+        """
+        if self.mock:
+            await asyncio.sleep(random.uniform(0.2, 0.5))
+            pool = list(plan_gtins or [])
+            gtin = normalize_gtin_key(pool[0]) if pool else _random_gtin14_digits()
+            quantity = random.randint(3, 5)
+            logger.info(
+                "cz.sscc_check.mock", sscc=sscc, gtin=gtin, quantity=quantity
+            )
+            return SsccInfo(sscc=sscc, gtin=gtin, series=None, quantity=quantity)
+
+        from app.services.cz_logger import log_cz_request
+
+        start = time.time()
+        url = f"{self.base_url}{CZ_SSCC_CHECK_PATH.format(sscc=quote(sscc, safe=''))}"
+        headers = {"Authorization": f"Bearer {self.token}"}
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, headers=headers)
+                duration_ms = int((time.time() - start) * 1000)
+                await log_cz_request(
+                    method="GET",
+                    url=url,
+                    request_body=None,
+                    response_status=resp.status_code,
+                    response_body=resp.json() if resp.status_code == 200 else None,
+                    duration_ms=duration_ms,
+                )
+                if resp.status_code == 404:
+                    raise CZApiError("SSCC-короб не найден в Честном Знаке")
+                resp.raise_for_status()
+                return _sscc_info_from_payload(sscc, resp.json())
+        except httpx.TimeoutException:
+            raise CZApiError("Таймаут запроса к Честный Знак (sscc_check)")
+        except httpx.HTTPStatusError as e:
+            raise CZApiError(
+                f"HTTP {e.response.status_code} при sscc_check: {e.response.text[:200]}"
+            )
 
     async def accept_batch(self, codes: list[str], document_id: str) -> bool:
         """Подтвердить приёмку партии кодов."""
@@ -535,6 +601,52 @@ def _product_name_from_cz_facade_payload(data: dict) -> Optional[str]:
             s = str(v).strip()
             return s[:500] if len(s) > 500 else s
     return None
+
+
+def _sscc_info_from_payload(sscc: str, data: Any) -> "SsccInfo":
+    """Разобрать ответ ЧЗ sscc_check в SsccInfo. Имена полей у ЧЗ возможны разные —
+    берём наиболее вероятные варианты (gtin, серия, количество SGTIN)."""
+    obj: Any = data
+    if isinstance(obj, dict) and isinstance(obj.get("data"), (dict, list)):
+        obj = obj["data"]
+    if isinstance(obj, list):
+        obj = obj[0] if obj else {}
+    if not isinstance(obj, dict):
+        obj = {}
+
+    gtin = None
+    for key in ("gtin", "GTIN", "gtin14", "gtin13"):
+        gtin = _digits_gtin14_from_value(obj.get(key))
+        if gtin:
+            break
+
+    series = None
+    for key in ("series", "seriesNumber", "batch", "batchNumber", "production"):
+        v = obj.get(key)
+        if v is not None and str(v).strip():
+            series = str(v).strip()
+            break
+
+    quantity = 0
+    for key in (
+        "quantity",
+        "count",
+        "sgtinCount",
+        "countSgtin",
+        "sgtins",
+        "sgtinsCount",
+        "amount",
+    ):
+        v = obj.get(key)
+        if v is None:
+            continue
+        try:
+            quantity = int(v)
+            break
+        except (TypeError, ValueError):
+            continue
+
+    return SsccInfo(sscc=sscc, gtin=gtin, series=series, quantity=quantity)
 
 
 def _gs1_check_digit_ok(gtin14: str) -> bool:

@@ -173,4 +173,16 @@ async def link_gtin_to_product(
             product_id=pid,
             updated=updated,
         )
+
+    # Закрепляем GTIN за товаром в МС — чтобы следующие сканы этого GTIN
+    # матчились автоматически (find_product_by_gtin) и не требовали ручного
+    # сопоставления повторно. Best-effort: не ломаем ответ при сбое МС.
+    try:
+        ms = await _get_ms_service(current_user, db)
+        await ms.add_gtin_barcode_to_product(pid, body.gtin)
+    except HTTPException:
+        pass  # МС не подключён — само сопоставление сканов уже выполнено
+    except Exception as e:
+        logger.warning("products.link_gtin.barcode_persist_failed", error=str(e))
+
     return LinkGtinResponse(updated_count=updated)

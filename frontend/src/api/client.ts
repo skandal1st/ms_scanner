@@ -94,6 +94,10 @@ export interface Scan {
   moysklad_product_id?: string | null
   error_message: string | null
   scanned_at: string
+  /** Короб SSCC, сохранённый целиком (transportpack). */
+  is_box?: boolean
+  /** Число SGTIN внутри короба (из ЧЗ sscc_check). */
+  box_quantity?: number | null
 }
 
 export const scansApi = {
@@ -103,6 +107,9 @@ export const scansApi = {
       code,
       ...(moysklad_product_id ? { moysklad_product_id } : {}),
     }),
+  /** Принять SSCC-короб. unpack=true — раскрыть на штучные КМ; false — целиком (transportpack). */
+  box: (document_id: string, sscc: string, unpack: boolean) =>
+    api.post<Scan[]>('/scans/box', { document_id, sscc, unpack }),
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
@@ -146,7 +153,7 @@ export interface Integration {
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
-  update: (data: { moysklad_token?: string }) =>
+  update: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean }) =>
     api.put<Integration>('/integrations/', data),
 }
 

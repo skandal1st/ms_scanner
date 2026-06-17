@@ -48,6 +48,9 @@ interface ScanStore {
   /** Режим удаления: следующий отсканированный код будет удалён из списка, а не добавлен. */
   deleteMode: boolean
   setDeleteMode: (v: boolean) => void
+  /** Как обрабатывать SSCC-короб: true — раскрывать на штучные КМ, false — целиком (transportpack). */
+  unpackBox: boolean
+  setUnpackBox: (v: boolean) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -93,6 +96,16 @@ export function effectiveGtinKey(scan: Scan): string | null {
   return null
 }
 
+/** Сколько единиц товара представляет скан: короб = box_quantity, обычный = 1. */
+export function scanUnits(scan: Scan): number {
+  if (scan.is_box) return scan.box_quantity || 0
+  return 1
+}
+
+function sumUnits(scans: Scan[]): number {
+  return scans.reduce((a, s) => a + scanUnits(s), 0)
+}
+
 function scanMatchesPlanRow(
   scan: Scan,
   planKey: string | null,
@@ -117,15 +130,19 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       const gtin = (p.gtin as string) || ''
       const planKey = p.gtin ? normalizeGtinKey(p.gtin) : null
       const planProductId = (p.product_id as string) || null
-      const addedTotal = scans.filter(
-        (s) =>
-          (s.status === 'valid' || s.status === 'overflow') &&
-          scanMatchesPlanRow(s, planKey, planProductId),
-      ).length
-      const scanned = scans.filter(
-        (s) =>
-          s.status === 'valid' && scanMatchesPlanRow(s, planKey, planProductId),
-      ).length
+      const addedTotal = sumUnits(
+        scans.filter(
+          (s) =>
+            (s.status === 'valid' || s.status === 'overflow') &&
+            scanMatchesPlanRow(s, planKey, planProductId),
+        ),
+      )
+      const scanned = sumUnits(
+        scans.filter(
+          (s) =>
+            s.status === 'valid' && scanMatchesPlanRow(s, planKey, planProductId),
+        ),
+      )
       return {
         gtin: gtin || planProductId || '—',
         product_id: planProductId,
@@ -167,9 +184,11 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 
   const rows: ProgressRow[] = Array.from(groups.values())
     .map((g) => {
-      const addedTotal = g.list.filter((s) => s.status === 'valid' || s.status === 'overflow').length
+      const addedTotal = sumUnits(
+        g.list.filter((s) => s.status === 'valid' || s.status === 'overflow'),
+      )
       const scanned = addedTotal
-      const pendingCount = g.list.filter((s) => s.status === 'pending').length
+      const pendingCount = sumUnits(g.list.filter((s) => s.status === 'pending'))
       const displayName = g.productNames[0] || g.gtin || 'Без GTIN'
       return {
         gtin: g.gtin,
@@ -205,9 +224,11 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
   targetProductId: null,
   deleteMode: false,
+  unpackBox: true,
 
   setTargetProductId: (id) => set({ targetProductId: id }),
   setDeleteMode: (v) => set({ deleteMode: v }),
+  setUnpackBox: (v) => set({ unpackBox: v }),
 
   setDocument: (doc) => set({ document: doc, targetProductId: null, deleteMode: false }),
 

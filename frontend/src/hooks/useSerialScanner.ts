@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { SerialLineBuffer } from '../lib/serialLineBuffer'
+import { SerialLineBuffer, normalizeGs } from '../lib/serialLineBuffer'
 import { isWebSerialSupported } from '../lib/scannerMode'
 
 // Хардкод параметров порта: дефолт большинства промышленных сканеров (Honeywell/Datalogic/Zebra).
@@ -80,7 +80,9 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     readerRef.current = reader
     aliveRef.current = true
     const buffer = new SerialLineBuffer()
-    const decoder = new TextDecoder()
+    // latin1, НЕ utf-8: сканер шлёт байты GS1 DataMatrix как есть (включая GS-подмену
+    // 0xF8). UTF-8 ломал бы невалидные байты на U+FFFD; latin1 маппит байт↔кодпоинт 1:1.
+    const decoder = new TextDecoder('latin1')
 
     try {
       while (aliveRef.current) {
@@ -90,7 +92,8 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         const text = decoder.decode(value, { stream: true })
         const lines = buffer.feed(text)
         for (const line of lines) {
-          const code = line.trim()
+          // normalizeGs: подменный GS-байт сканера (0xF8) → каноничный 0x1D.
+          const code = normalizeGs(line).trim()
           if (code) onCodeRef.current(code)
         }
       }

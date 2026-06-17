@@ -48,6 +48,8 @@ export function ScanInput({ documentId }: Props) {
   const isComMode = mode === 'com'
   const deleteMode = useScanStore((s) => s.deleteMode)
   const setDeleteMode = useScanStore((s) => s.setDeleteMode)
+  const unpackBox = useScanStore((s) => s.unpackBox)
+  const setUnpackBox = useScanStore((s) => s.setUnpackBox)
 
   const handleScannedCode = useCallback(
     async (code: string) => {
@@ -163,6 +165,19 @@ export function ScanInput({ documentId }: Props) {
           }
         >
           {deleteMode ? '✕ Удаление' : '🗑 Удалить'}
+        </button>
+        <button
+          type="button"
+          className="button scan-input__camera"
+          disabled={!documentId}
+          onClick={() => setUnpackBox(!unpackBox)}
+          title={
+            unpackBox
+              ? 'Короб раскрывается на штучные КМ. Нажмите, чтобы сохранять короб целиком (transportpack).'
+              : 'Короб сохраняется целиком (transportpack). Нажмите, чтобы раскрывать на штучные КМ.'
+          }
+        >
+          {unpackBox ? '📦 Короб: раскрывать' : '📦 Короб: целиком'}
         </button>
         <button
           type="button"
