@@ -11,7 +11,7 @@ import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
-  const { document, setDocument, stats, scans, getProgress } = useScanStore()
+  const { document, setDocument, stats, scans, getProgress, czTokenExpired, setCzTokenExpired } = useScanStore()
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -55,6 +55,40 @@ export function ShipmentPage() {
           {document?.name ?? 'Документ не выбран'}
         </span>
       </header>
+
+      {czTokenExpired && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            margin: '0 0 12px',
+            padding: '10px 14px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 8,
+            color: '#b91c1c',
+            fontSize: 13,
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            Войдите в Честный Знак — без авторизации коды не распознаются (блоки и
+            короба не разворачиваются).
+          </span>
+          <a href="/settings" className="button" style={{ whiteSpace: 'nowrap' }}>
+            Войти в ЧЗ
+          </a>
+          <button
+            type="button"
+            className="button"
+            onClick={() => setCzTokenExpired(false)}
+            aria-label="Скрыть"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <div className="acc-body">
         <div className="acc-left">

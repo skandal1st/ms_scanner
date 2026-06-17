@@ -51,7 +51,13 @@ export function useScanner(documentId: string | null) {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
+      if (data.type === 'cz_token_expired') {
+        useScanStore.getState().setCzTokenExpired(true)
+        return
+      }
       if (data.type === 'scan_update') {
+        // ЧЗ вернул данные (владелец) → токен рабочий, снимаем баннер.
+        if (data.owner_name) useScanStore.getState().setCzTokenExpired(false)
         updateScan(data.scan_id, {
           status: data.status,
           product_name: data.product_name,

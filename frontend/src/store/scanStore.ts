@@ -51,6 +51,9 @@ interface ScanStore {
   /** Как обрабатывать SSCC-короб: true — раскрывать на штучные КМ, false — целиком (transportpack). */
   unpackBox: boolean
   setUnpackBox: (v: boolean) => void
+  /** Истёк/отсутствует токен ЧЗ — нужен вход для распознавания кодов (баннер). */
+  czTokenExpired: boolean
+  setCzTokenExpired: (v: boolean) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -225,10 +228,12 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   targetProductId: null,
   deleteMode: false,
   unpackBox: true,
+  czTokenExpired: false,
 
   setTargetProductId: (id) => set({ targetProductId: id }),
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),
+  setCzTokenExpired: (v) => set({ czTokenExpired: v }),
 
   setDocument: (doc) => set({ document: doc, targetProductId: null, deleteMode: false }),
 

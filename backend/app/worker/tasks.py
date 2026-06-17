@@ -295,6 +295,10 @@ async def _verify_code_async(scan_id: str, user_id: str):
         # Короб (02/37) приходит со status=invalid (не КИ) — проверяем независимо от статуса.
         if not settings.CZ_MOCK_MODE and not scan.is_box and not scan.child_codes:
             cz_token2 = await _get_cz_token(db, user_id)
+            if not cz_token2:
+                # Нет/истёк токен ЧЗ — коды не распознаём через ЧЗ (блоки/короба
+                # не развернутся). Сообщаем фронту (баннер «войдите в ЧЗ»).
+                await _push_cz_token_expired(user_id)
             if cz_token2:
                 info = None
                 try:
@@ -562,6 +566,17 @@ async def _push_ws_update(
         "child_codes": child_codes,
     })
     await r.publish(f"ws:{user_id}", message)
+    await r.aclose()
+
+
+async def _push_cz_token_expired(user_id: str):
+    """Сообщить фронту, что нужен вход в ЧЗ (баннер «войдите для распознавания кодов»)."""
+    import redis.asyncio as aioredis
+    import json
+    from app.core.config import settings
+
+    r = aioredis.from_url(settings.REDIS_URL)
+    await r.publish(f"ws:{user_id}", json.dumps({"type": "cz_token_expired"}))
     await r.aclose()
 
 
