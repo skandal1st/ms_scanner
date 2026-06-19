@@ -12,6 +12,24 @@ const PORT_OPTIONS: SerialOptions = {
   flowControl: 'none',
 }
 
+// Распознаём типовые ошибки открытия порта и даём кладовщику понятный русский текст.
+// Chrome при занятом порте: DOMException NetworkError "Failed to open serial port."
+export function humanizeSerialOpenError(e: unknown): string {
+  const name = e instanceof DOMException ? e.name : ''
+  const msg = e instanceof Error ? e.message : String(e)
+  const low = msg.toLowerCase()
+  if (
+    name === 'NetworkError' ||
+    low.includes('failed to open serial port') ||
+    low.includes('already open') ||
+    low.includes('access is denied') ||
+    low.includes('access denied')
+  ) {
+    return 'COM-порт занят другой программой или вкладкой. Закройте другие окна приложения и программы, использующие сканер, затем подключитесь снова.'
+  }
+  return `Не удалось открыть COM-порт: ${msg}`
+}
+
 interface UseSerialScannerArgs {
   enabled: boolean
   onCode: (code: string) => void
@@ -119,11 +137,10 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         try {
           await port.open(PORT_OPTIONS)
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
           console.error('[useSerialScanner] port.open failed:', e)
           // InvalidStateError — порт уже открыт другим контекстом. Если readable есть — продолжаем.
           if (port.readable === null) {
-            setError(`Не удалось открыть COM-порт: ${msg}`)
+            setError(humanizeSerialOpenError(e))
             setConnected(false)
             return
           }
@@ -150,7 +167,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
       const msg = e instanceof Error ? e.message : String(e)
       // NotFoundError — пользователь закрыл диалог выбора порта, не показываем как ошибку.
       if (!msg.toLowerCase().includes('no port selected') && !msg.includes('NotFoundError')) {
-        setError(`Не удалось подключить COM-порт: ${msg}`)
+        setError(humanizeSerialOpenError(e))
       }
     }
   }, [supported, closePort, openAndRead])

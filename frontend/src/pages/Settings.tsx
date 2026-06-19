@@ -7,6 +7,7 @@ import {
   setScannerMode,
   useScannerMode,
 } from '../lib/scannerMode'
+import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import {
   diagnosePlugin,
   isPluginAvailable,
@@ -66,7 +67,7 @@ function ScannerSection() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (!msg.toLowerCase().includes('no port selected') && !msg.includes('NotFoundError')) {
-        setError(`Не удалось подключить порт: ${msg}`)
+        setError(humanizeSerialOpenError(e))
       }
     }
   }
