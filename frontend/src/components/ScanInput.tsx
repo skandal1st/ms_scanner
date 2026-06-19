@@ -5,6 +5,7 @@ import { normalizeScannerInput } from '../lib/scannerLayout'
 import { useScannerMode } from '../lib/scannerMode'
 import { useScanStore } from '../store/scanStore'
 import { CameraScanModal } from './CameraScanModal'
+import { CodeSearchModal } from './CodeSearchModal'
 
 interface Props {
   documentId: string | null
@@ -42,6 +43,7 @@ export function ScanInput({ documentId }: Props) {
   const [value, setValue] = useState('')
   const [lastCode, setLastCode] = useState('')
   const [cameraOpen, setCameraOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { submitCode } = useScanner(documentId)
   const mode = useScannerMode()
@@ -187,6 +189,14 @@ export function ScanInput({ documentId }: Props) {
         >
           Камера
         </button>
+        <button
+          type="button"
+          className="button scan-input__camera"
+          onClick={() => setSearchOpen(true)}
+          title="Найти, в каком документе уже есть марка"
+        >
+          🔍 Поиск марки
+        </button>
       </div>
       {deleteMode && (
         <div className="alert alert--error" style={{ marginTop: 8 }}>
@@ -207,6 +217,7 @@ export function ScanInput({ documentId }: Props) {
         onClose={() => setCameraOpen(false)}
         onCode={handleScannedCode}
       />
+      <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   )
 }

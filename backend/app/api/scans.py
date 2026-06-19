@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -8,7 +8,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus, Integration
+from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration
 from app.api.deps import get_current_user
 from cryptography.fernet import InvalidToken
 
@@ -40,8 +40,23 @@ class ScanResponse(BaseModel):
     owner_name: Optional[str] = None
     producer_name: Optional[str] = None
     child_codes: Optional[List[str]] = None
+    # Повторный скан кода, уже присутствующего в ЭТОМ документе. Строка в БД одна
+    # (unique document_id+code), статус существующей не меняется — фронт подсвечивает.
+    duplicate: bool = False
 
     model_config = {"from_attributes": True}
+
+
+class CodeSearchHit(BaseModel):
+    """Один документ, в котором встречается искомый код маркировки."""
+    document_id: UUID
+    document_name: str
+    document_kind: DocumentKind
+    scan_id: UUID
+    code: str
+    status: ScanStatus
+    product_name: Optional[str] = None
+    scanned_at: datetime
 
 
 class CreateScanRequest(BaseModel):
@@ -103,8 +118,12 @@ async def _create_scan_record(
     gtin_override: Optional[str] = None,
 ) -> tuple[Scan, bool]:
     """
-    Создаёт скан или возвращает существующий со статусом duplicate.
-    Возвращает (scan, is_duplicate).
+    Создаёт скан. Возвращает (scan, is_duplicate).
+
+    Если код уже есть в ЭТОМ документе — возвращает существующий скан как есть
+    (статус не меняется) с ``is_duplicate=True`` (фронт подсветит строку, новую не
+    добавляет). Если код есть в ДРУГОМ документе того же типа — новый скан получает
+    статус ``used_in_other_doc`` и в ЧЗ/МС не проверяется.
 
     Для коробов «целиком» (``is_box=True``): ``code`` — это SSCC, GTIN берётся из
     ``gtin_override`` (из ЧЗ sscc_check, у SSCC своего GTIN в коде нет), а проверку
@@ -123,13 +142,45 @@ async def _create_scan_record(
                 initial_name = (p.get("product_name") or "").strip() or None
                 break
 
+    # Конфликт: код уже есть в ДРУГОМ документе ТОГО ЖЕ типа (приёмка↔приёмка /
+    # отгрузка↔отгрузка). Движение приёмка→отгрузка — норма, поэтому фильтр по kind.
+    conflict_q = await db.execute(
+        select(Document.name)
+        .join(Scan, Scan.document_id == Document.id)
+        .where(
+            Scan.code == code,
+            Document.user_id == current_user_id,
+            Document.id != document_id,
+            Document.kind == doc_obj.kind,
+            Scan.status.in_(
+                [
+                    ScanStatus.valid,
+                    ScanStatus.overflow,
+                    ScanStatus.pending,
+                    ScanStatus.unknown_product,
+                ]
+            ),
+        )
+        .limit(1)
+    )
+    conflict_doc_name = conflict_q.scalar_one_or_none()
+
     scan = Scan(
         document_id=document_id,
         code=code,
         gtin=gtin,
         moysklad_product_id=moysklad_product_id,
-        status=ScanStatus.pending,
+        status=(
+            ScanStatus.used_in_other_doc
+            if conflict_doc_name is not None
+            else ScanStatus.pending
+        ),
         product_name=initial_name,
+        error_message=(
+            f"Код уже используется в документе «{conflict_doc_name}»"
+            if conflict_doc_name is not None
+            else None
+        ),
         is_box=is_box,
         box_quantity=box_quantity,
     )
@@ -137,7 +188,8 @@ async def _create_scan_record(
     try:
         await db.commit()
     except IntegrityError:
-        # Дубль по unique (document_id, code) — берём существующий, помечаем duplicate.
+        # Повторный скан того же кода в ЭТОМ документе. Строку не добавляем и НЕ
+        # меняем статус существующей (она может быть valid) — фронт подсветит её.
         await db.rollback()
         existing_q = await db.execute(
             select(Scan).where(
@@ -146,10 +198,6 @@ async def _create_scan_record(
             )
         )
         existing = existing_q.scalar_one()
-        existing.status = ScanStatus.duplicate
-        existing.error_message = "Дубль: код уже сканировался в этом документе"
-        await db.commit()
-        await db.refresh(existing)
         logger.info(
             "scan.duplicate",
             document_id=str(document_id),
@@ -159,6 +207,19 @@ async def _create_scan_record(
         return existing, True
 
     await db.refresh(scan)
+
+    # Код-конфликт уже в финальном статусе used_in_other_doc — проверять в ЧЗ/МС
+    # не нужно (в документ при проведении он всё равно не уйдёт).
+    if conflict_doc_name is not None:
+        logger.info(
+            "scan.used_in_other_doc",
+            document_id=str(document_id),
+            scan_id=str(scan.id),
+            gtin=scan.gtin,
+            conflict_doc=conflict_doc_name,
+            user_id=str(current_user_id),
+        )
+        return scan, False
 
     # Очередь Celery: проверка формата кода / mock ЧЗ.
     # Короб «целиком» проверяется отдельной задачей (агрегат уже подтверждён sscc_check).
@@ -192,14 +253,16 @@ async def create_scan(
             400,
             "Это код короба (SSCC). Используйте /scans/box.",
         )
-    scan, _ = await _create_scan_record(
+    scan, is_dup = await _create_scan_record(
         db,
         body.document_id,
         body.code,
         current_user.id,
         _normalize_moysklad_product_id(body.moysklad_product_id),
     )
-    return ScanResponse.model_validate(scan)
+    resp = ScanResponse.model_validate(scan)
+    resp.duplicate = is_dup
+    return resp
 
 
 @router.post("/box", response_model=List[ScanResponse], status_code=201)
@@ -273,7 +336,7 @@ async def create_box_scans(
             info = await cz.get_sscc_info(sscc, plan_gtins)
         except CZApiError as exc:
             raise HTTPException(status_code=502, detail=str(exc))
-        scan, _ = await _create_scan_record(
+        scan, is_dup = await _create_scan_record(
             db,
             body.document_id,
             sscc,
@@ -282,7 +345,9 @@ async def create_box_scans(
             box_quantity=info.quantity,
             gtin_override=info.gtin,
         )
-        return [ScanResponse.model_validate(scan)]
+        resp = ScanResponse.model_validate(scan)
+        resp.duplicate = is_dup
+        return [resp]
 
     # Раскрытие на штучные КМ.
     try:
@@ -294,14 +359,16 @@ async def create_box_scans(
             "Переключите тумблер на «целиком» или сканируйте коды поштучно.",
         )
 
-    scans: List[Scan] = []
+    responses: List[ScanResponse] = []
     for code in member_codes:
-        scan, _ = await _create_scan_record(
+        scan, is_dup = await _create_scan_record(
             db, body.document_id, code, current_user.id
         )
-        scans.append(scan)
+        resp = ScanResponse.model_validate(scan)
+        resp.duplicate = is_dup
+        responses.append(resp)
 
-    return [ScanResponse.model_validate(s) for s in scans]
+    return responses
 
 
 @router.patch("/item/{scan_id}", response_model=ScanResponse)
@@ -342,6 +409,44 @@ async def patch_scan_product(
     await db.commit()
     await db.refresh(scan)
     return ScanResponse.model_validate(scan)
+
+
+@router.get("/search", response_model=List[CodeSearchHit])
+async def search_scans_by_code(
+    code: str = Query(..., min_length=1, description="Код маркировки (KM или SSCC)"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Найти все документы пользователя, в которых уже есть указанный код маркировки.
+
+    Совпадение по точному коду скана либо по вхождению кода в состав короба
+    (``child_codes``). Объявлен ВЫШЕ ``/{document_id}``, иначе FastAPI распарсит
+    «search» как UUID документа.
+    """
+    code = code.strip()
+    result = await db.execute(
+        select(Scan, Document)
+        .join(Document, Scan.document_id == Document.id)
+        .where(
+            Document.user_id == current_user.id,
+            (Scan.code == code) | (Scan.child_codes.contains([code])),
+        )
+        .order_by(Scan.scanned_at.desc())
+    )
+    return [
+        CodeSearchHit(
+            document_id=doc.id,
+            document_name=doc.name,
+            document_kind=doc.kind,
+            scan_id=scan.id,
+            code=scan.code,
+            status=scan.status,
+            product_name=scan.product_name,
+            scanned_at=scan.scanned_at,
+        )
+        for scan, doc in result.all()
+    ]
 
 
 @router.get("/{document_id}", response_model=List[ScanResponse])

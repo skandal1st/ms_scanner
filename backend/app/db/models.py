@@ -47,6 +47,7 @@ class ScanStatus(str, PyEnum):
     duplicate = "duplicate"
     overflow = "overflow"  # сверх плана: визуально красный, но идёт в отгрузку
     unknown_product = "unknown_product"  # КМ валидна, но GTIN не найден ни в плане, ни в каталоге МС — нужно ручное сопоставление
+    used_in_other_doc = "used_in_other_doc"  # код уже есть в другом документе того же типа — предупреждение, в МС не уходит
 
 
 class User(Base):

@@ -86,6 +86,7 @@ export type ScanStatus =
   | 'duplicate'
   | 'overflow'
   | 'unknown_product'
+  | 'used_in_other_doc'
 
 export interface Scan {
   id: string
@@ -106,6 +107,20 @@ export interface Scan {
   producer_name?: string | null
   /** Состав агрегата (блок/короб): КМ вложенных пачек из ЧЗ. */
   child_codes?: string[] | null
+  /** Повторный скан кода, уже присутствующего в этом документе (строка не добавляется). */
+  duplicate?: boolean
+}
+
+/** Документ, в котором найдена искомая марка (ответ /scans/search). */
+export interface CodeSearchHit {
+  document_id: string
+  document_name: string
+  document_kind: string
+  scan_id: string
+  code: string
+  status: ScanStatus
+  product_name: string | null
+  scanned_at: string
 }
 
 export const scansApi = {
@@ -122,6 +137,9 @@ export const scansApi = {
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
+  /** Найти документы пользователя, где уже есть указанный код маркировки. */
+  searchByCode: (code: string) =>
+    api.get<CodeSearchHit[]>('/scans/search', { params: { code } }),
 }
 
 export interface ProductSearchItem {

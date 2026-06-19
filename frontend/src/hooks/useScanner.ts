@@ -32,7 +32,7 @@ function resolveWsUserId(): string | null {
 }
 
 export function useScanner(documentId: string | null) {
-  const { addScan, updateScan } = useScanStore()
+  const { addScan, updateScan, flashScan } = useScanStore()
   const wsRef = useRef<WebSocket | null>(null)
 
   const hasPending = useScanStore((s) => {
@@ -154,8 +154,18 @@ export function useScanner(documentId: string | null) {
             trimmed,
             state.unpackBox,
           )
-          boxScans.forEach((s) => addScan(s))
-          if (boxScans.some((s) => s.status === 'duplicate')) playBeep('error')
+          let hadError = false
+          boxScans.forEach((s) => {
+            if (s.duplicate) {
+              // Повторный скан в этом документе — строку не добавляем, подсвечиваем существующую.
+              flashScan(s.id)
+              hadError = true
+            } else {
+              addScan(s)
+              if (s.status === 'used_in_other_doc') hadError = true
+            }
+          })
+          if (hadError) playBeep('error')
           return
         }
 
@@ -165,10 +175,14 @@ export function useScanner(documentId: string | null) {
           trimmed,
           targetPid || undefined
         )
-        if (scan.status === 'duplicate') {
+        if (scan.duplicate) {
+          // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
+          flashScan(scan.id)
           playBeep('error')
+          return
         }
         addScan(scan)
+        if (scan.status === 'used_in_other_doc') playBeep('error')
       } catch (err: unknown) {
         playBeep('error')
         const ax = err as { response?: { data?: { detail?: unknown } } }
@@ -177,7 +191,7 @@ export function useScanner(documentId: string | null) {
         console.error('Scan error:', err)
       }
     },
-    [documentId, addScan]
+    [documentId, addScan, flashScan]
   )
 
   return { submitCode }

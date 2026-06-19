@@ -3,16 +3,17 @@ import { useScanStore } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 
 const STATUS_CONFIG = {
-  pending:         { label: 'Проверяется',  cls: 'badge--pending' },
-  valid:           { label: 'Валиден',      cls: 'badge--ok' },
-  invalid:         { label: 'Ошибка',       cls: 'badge--error' },
-  duplicate:       { label: 'Дубль',        cls: 'badge--warn' },
-  overflow:        { label: 'Сверх плана',  cls: 'badge--error' },
-  unknown_product: { label: 'Нет товара',   cls: 'badge--warn' },
+  pending:           { label: 'Проверяется',       cls: 'badge--pending' },
+  valid:             { label: 'Валиден',           cls: 'badge--ok' },
+  invalid:           { label: 'Ошибка',            cls: 'badge--error' },
+  duplicate:         { label: 'Дубль',             cls: 'badge--warn' },
+  overflow:          { label: 'Сверх плана',       cls: 'badge--error' },
+  unknown_product:   { label: 'Нет товара',        cls: 'badge--warn' },
+  used_in_other_doc: { label: 'В другом документе', cls: 'badge--warn' },
 } as const
 
 export function CodesTable() {
-  const { scans, removeScan } = useScanStore()
+  const { scans, removeScan, flashScanId } = useScanStore()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (scans.length === 0) {
@@ -35,6 +36,7 @@ export function CodesTable() {
             key={scan.id}
             scan={scan}
             isExpanded={expanded === scan.id}
+            isFlash={flashScanId === scan.id}
             onToggle={() => setExpanded(expanded === scan.id ? null : scan.id)}
             onDelete={async () => {
               await scansApi.delete(scan.id)
@@ -50,11 +52,13 @@ export function CodesTable() {
 function ScanRow({
   scan,
   isExpanded,
+  isFlash,
   onToggle,
   onDelete,
 }: {
   scan: Scan
   isExpanded: boolean
+  isFlash: boolean
   onToggle: () => void
   onDelete: () => void
 }) {
@@ -66,7 +70,7 @@ function ScanRow({
   return (
     <>
       <tr
-        className={`scans-row ${isExpanded ? 'is-expanded' : ''}`}
+        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''}`}
         onClick={onToggle}
       >
         <td className="is-code">

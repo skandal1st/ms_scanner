@@ -8,6 +8,7 @@ interface Stats {
   pending: number
   overflow: number
   unknown_product: number
+  used_in_other_doc: number
 }
 
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
@@ -54,6 +55,10 @@ interface ScanStore {
   /** Истёк/отсутствует токен ЧЗ — нужен вход для распознавания кодов (баннер). */
   czTokenExpired: boolean
   setCzTokenExpired: (v: boolean) => void
+  /** id строки для кратковременной подсветки (повторный скан существующего кода). */
+  flashScanId: string | null
+  /** Подсветить строку скана: выставить id и через ~1.2с сбросить. */
+  flashScan: (id: string) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -70,7 +75,7 @@ function calcStats(scans: Scan[]): Stats {
       acc[s.status] = (acc[s.status] || 0) + 1
       return acc
     },
-    { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 } as Stats
+    { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
   )
 }
 
@@ -224,16 +229,24 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
-  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
+  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
   targetProductId: null,
   deleteMode: false,
   unpackBox: true,
   czTokenExpired: false,
+  flashScanId: null,
 
   setTargetProductId: (id) => set({ targetProductId: id }),
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),
   setCzTokenExpired: (v) => set({ czTokenExpired: v }),
+  flashScan: (id) => {
+    set({ flashScanId: id })
+    setTimeout(() => {
+      // Сбрасываем только если за это время не подсветили другую строку.
+      if (get().flashScanId === id) set({ flashScanId: null })
+    }, 1200)
+  },
 
   setDocument: (doc) => set({ document: doc, targetProductId: null, deleteMode: false }),
 
@@ -261,7 +274,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     set({
       document: null,
       scans: [],
-      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0 },
+      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
       targetProductId: null,
       deleteMode: false,
     }),

@@ -339,6 +339,12 @@ html, body, #root { height: 100%; }
 /* ---------- Таблица сканов ---------- */
 .scans-table .scans-row { cursor: pointer; }
 .scans-table .scans-row.is-expanded > td { background: #f7fbfe; }
+/* Повторный скан существующего кода: строка кратко вспыхивает жёлтым. */
+.scans-table .scans-row.is-flash > td { animation: scan-flash 1.2s ease-out; }
+@keyframes scan-flash {
+  0%   { background: #fde68a; }
+  100% { background: transparent; }
+}
 .scans-table td.is-code {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 11px;
