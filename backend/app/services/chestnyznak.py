@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import random
 import re
 import time
@@ -12,6 +13,19 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import logger
+
+
+# Причины списания (вывод из оборота ЧЗ): код для UI/БД → {action True API, человекочитаемая метка}.
+# Причины без прямого кода в True API кодируются как OWN_USE, метка дублируется в
+# primary_document_custom_name (решение пользователя). См. справочник «Причины выбытия».
+WRITEOFF_REASONS: dict[str, dict[str, str]] = {
+    "spoilage": {"action": "UTILIZATION", "label": "Порча, утилизация"},
+    "own_use": {"action": "OWN_USE", "label": "Собственные нужды предприятия"},
+    "demo": {"action": "OWN_USE", "label": "Демонстрационные образцы"},
+    "general_business": {"action": "OWN_USE", "label": "Списание на общехозяйственные расходы"},
+    "production": {"action": "PRODUCTION_USE", "label": "Списание на производственные расходы"},
+    "non_commercial": {"action": "OWN_USE", "label": "Списание на общехоз. некоммерческую деятельность"},
+}
 
 
 @dataclass
@@ -665,6 +679,179 @@ class ChestnyZnakService:
             raise CZApiError("Таймаут запроса к Честный Знак (cert exchange)")
         except httpx.HTTPStatusError as e:
             raise CZApiError(f"HTTP {e.response.status_code} при cert exchange: {e.response.text[:200]}")
+
+    # ── Вывод из оборота (списание) ────────────────────────────────────────────
+
+    async def detect_product_group(self, cis: str) -> Optional[str]:
+        """Определить товарную группу (pg) кода через cises/info (перебор cz_product_groups_list).
+
+        В mock возвращает первую сконфигурированную группу.
+        """
+        if self.mock or not self.token:
+            groups = settings.cz_product_groups_list
+            return groups[0] if groups else None
+
+        from app.services.cz_logger import log_cz_request
+
+        code = cis.replace("(", "").replace(")", "").strip()
+        info_url = f"{self.base_url}/api/v3/true-api/cises/info"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        for pg in settings.cz_product_groups_list:
+            start = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=10) as client:
+                    resp = await client.post(
+                        info_url, params={"pg": pg}, headers=headers, json=[code]
+                    )
+                    body = resp.json() if resp.status_code == 200 else None
+                    await log_cz_request(
+                        method="POST",
+                        url=f"{info_url}?pg={pg}",
+                        request_body=[code],
+                        response_status=resp.status_code,
+                        response_body=body if isinstance(body, list) else None,
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                logger.warning("cz.detect_pg.http_error", pg=pg, error=str(exc))
+                continue
+            if resp.status_code != 200 or not isinstance(body, list) or not body:
+                continue
+            entry = body[0] if isinstance(body[0], dict) else {}
+            if entry.get("errorCode"):
+                continue
+            return pg
+        return None
+
+    @staticmethod
+    def build_writeoff_document(
+        *,
+        inn: str,
+        action: str,
+        action_date: str,
+        cises: list[str],
+        custom_name: Optional[str] = None,
+        basis_type: str = "OTHER",
+        basis_number: Optional[str] = None,
+        basis_date: Optional[str] = None,
+    ) -> dict:
+        """Собрать тело документа «Вывод из оборота» (LK_RECEIPT, формат MANUAL)."""
+        doc: dict[str, Any] = {
+            "inn": inn,
+            "action": action,
+            "action_date": action_date,
+            "products": [{"cis": c} for c in cises],
+        }
+        if custom_name:
+            doc["primary_document_custom_name"] = custom_name
+        if basis_number or basis_date:
+            doc["document_type"] = basis_type
+            if basis_number:
+                doc["document_number"] = basis_number
+            if basis_date:
+                doc["document_date"] = basis_date
+        return doc
+
+    @staticmethod
+    def encode_product_document(doc: dict) -> str:
+        """base64(UTF-8 JSON) — то, что подписывается и кладётся в product_document."""
+        raw = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+        return base64.b64encode(raw).decode("ascii")
+
+    async def submit_document(
+        self,
+        pg: str,
+        product_document_b64: str,
+        signature_b64: str,
+        doc_type: str = "LK_RECEIPT",
+    ) -> str:
+        """POST .../lk/documents/create — подать подписанный документ. Возвращает id ГИС МТ."""
+        if self.mock:
+            await asyncio.sleep(0.3)
+            return f"mock-doc-{uuid_lib.uuid4()}"
+
+        from app.services.cz_logger import log_cz_request
+
+        start = time.time()
+        url = f"{self.base_url}/api/v3/true-api/lk/documents/create"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "document_format": "MANUAL",
+            "product_document": product_document_b64,
+            "type": doc_type,
+            "signature": signature_b64,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, params={"pg": pg}, headers=headers, json=payload)
+                duration_ms = int((time.time() - start) * 1000)
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = resp.text
+                await log_cz_request(
+                    method="POST",
+                    url=f"{url}?pg={pg}",
+                    # product_document/signature длинные и чувствительные — не логируем целиком.
+                    request_body={"document_format": "MANUAL", "type": doc_type,
+                                  "product_document": "<base64>", "signature": "<base64>"},
+                    response_status=resp.status_code,
+                    response_body=body if isinstance(body, dict) else {"raw": str(body)[:500]},
+                    duration_ms=duration_ms,
+                )
+                resp.raise_for_status()
+                if isinstance(body, str):
+                    return body
+                if isinstance(body, dict):
+                    return str(body.get("value") or body.get("id") or body.get("documentId") or body)
+                return str(body)
+        except httpx.TimeoutException:
+            raise CZApiError("Таймаут запроса к Честный Знак (documents/create)")
+        except httpx.HTTPStatusError as e:
+            raise CZApiError(
+                f"Честный Знак отклонил документ (HTTP {e.response.status_code}): {e.response.text[:300]}"
+            )
+
+    async def get_document_status(self, pg: str, doc_id: str) -> Optional[str]:
+        """GET .../doc/{docId}/info — текущий статус документа (успех = CHECKED_OK)."""
+        if self.mock:
+            await asyncio.sleep(0.2)
+            return "CHECKED_OK"
+
+        from app.services.cz_logger import log_cz_request
+
+        start = time.time()
+        url = f"{self.base_url}/api/v4/true-api/doc/{quote(doc_id, safe='')}/info"
+        headers = {"Authorization": f"Bearer {self.token}", "accept": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url, params={"pg": pg}, headers=headers)
+                body = resp.json() if resp.status_code == 200 else None
+                await log_cz_request(
+                    method="GET",
+                    url=f"{url}?pg={pg}",
+                    request_body=None,
+                    response_status=resp.status_code,
+                    response_body=body if isinstance(body, dict) else None,
+                    duration_ms=int((time.time() - start) * 1000),
+                )
+                resp.raise_for_status()
+                if isinstance(body, dict):
+                    return body.get("status")
+                return None
+        except httpx.TimeoutException:
+            raise CZApiError("Таймаут запроса к Честный Знак (doc/info)")
+        except httpx.HTTPStatusError as e:
+            raise CZApiError(
+                f"HTTP {e.response.status_code} при опросе статуса документа: {e.response.text[:300]}"
+            )
 
 
 class CZApiError(Exception):

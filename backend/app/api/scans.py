@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
 from typing import List, Optional
@@ -462,6 +462,25 @@ async def list_scans(
         .order_by(Scan.scanned_at.desc())
     )
     return [ScanResponse.model_validate(s) for s in result.scalars().all()]
+
+
+@router.delete("/by-document/{document_id}", status_code=204)
+async def delete_document_scans(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить все марки (сканы) документа из БД."""
+    await _ensure_document_owner(document_id, current_user, db)
+    result = await db.execute(
+        delete(Scan).where(Scan.document_id == document_id)
+    )
+    await db.commit()
+    logger.info(
+        "scans.cleared",
+        document_id=str(document_id),
+        count=result.rowcount,
+    )
 
 
 @router.delete("/{scan_id}", status_code=204)

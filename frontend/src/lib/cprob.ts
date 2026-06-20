@@ -242,3 +242,59 @@ export async function signDataCadesBes(
     throw new Error(formatCadesError(e))
   }
 }
+
+/**
+ * Подписать ОТКРЕПЛЁННОЙ (detached) подписью контент, уже представленный как base64.
+ *
+ * Для документов True API (вывод из оборота): бэк отдаёт product_document = base64(UTF-8 JSON),
+ * фронт подписывает именно его. Передаём base64 как есть (БЕЗ повторного btoa — иначе сломается на
+ * кириллице в JSON) и ставим ContentEncoding=BASE64_TO_BINARY, чтобы КриптоПро подписала декодированные
+ * байты JSON. SignCades(..., true) = detached. Из результата убираем переносы строк (требование ЧЗ).
+ */
+export async function signDetachedBase64(
+  thumbprint: string,
+  contentBase64: string,
+): Promise<string> {
+  await ensurePluginReady()
+  const cp = getPlugin()
+  try {
+    const store = await cp.CreateObjectAsync('CAPICOM.Store')
+    await store.Open(
+      cp.CAPICOM_CURRENT_USER_STORE,
+      cp.CAPICOM_MY_STORE,
+      cp.CAPICOM_STORE_OPEN_MAXIMUM_ALLOWED,
+    )
+    try {
+      const certs = await store.Certificates
+      const found = await certs.Find(cp.CAPICOM_CERTIFICATE_FIND_SHA1_HASH, thumbprint)
+      const cnt = await found.Count
+      if (cnt < 1) {
+        throw new Error('Сертификат с указанным отпечатком не найден в хранилище')
+      }
+      const cert = await found.Item(1)
+
+      const signer = await cp.CreateObjectAsync('CAdESCOM.CPSigner')
+      await signer.propset_Certificate(cert)
+
+      const signedData = await cp.CreateObjectAsync('CAdESCOM.CadesSignedData')
+      await signedData.propset_ContentEncoding(cp.CADESCOM_BASE64_TO_BINARY)
+      await signedData.propset_Content(contentBase64)
+
+      const signature: string = await signedData.SignCades(
+        signer,
+        cp.CADESCOM_CADES_BES,
+        true, // detached
+      )
+      return signature.replace(/\r?\n/g, '')
+    } finally {
+      try {
+        await store.Close()
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch (e) {
+    console.warn('[cprob] signDetachedBase64 failed:', e)
+    throw new Error(formatCadesError(e))
+  }
+}

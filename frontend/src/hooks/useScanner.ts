@@ -55,6 +55,13 @@ export function useScanner(documentId: string | null) {
         useScanStore.getState().setCzTokenExpired(true)
         return
       }
+      if (data.type === 'writeoff_status') {
+        useScanStore.getState().setWriteoffResult({
+          status: data.status,
+          error: data.error_message ?? null,
+        })
+        return
+      }
       if (data.type === 'scan_update') {
         // ЧЗ вернул данные (владелец) → токен рабочий, снимаем баннер.
         if (data.owner_name) useScanStore.getState().setCzTokenExpired(false)

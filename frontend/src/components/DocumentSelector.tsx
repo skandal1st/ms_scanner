@@ -10,6 +10,7 @@ interface Props {
 
 const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'отгрузку',
+  loss: 'списание',
 }
 
 /** Отображаемое имя МС-отгрузки: "00123 — ООО Покупатель (#00045)". */

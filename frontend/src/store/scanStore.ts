@@ -59,6 +59,9 @@ interface ScanStore {
   flashScanId: string | null
   /** Подсветить строку скана: выставить id и через ~1.2с сбросить. */
   flashScan: (id: string) => void
+  /** Результат списания (вывод из оборота ЧЗ): приходит по WS после опроса статуса. */
+  writeoffResult: { status: 'done' | 'error'; error?: string | null } | null
+  setWriteoffResult: (v: { status: 'done' | 'error'; error?: string | null } | null) => void
 
   setDocument: (doc: Document | null) => void
   setScans: (scans: Scan[]) => void
@@ -235,7 +238,9 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   unpackBox: true,
   czTokenExpired: false,
   flashScanId: null,
+  writeoffResult: null,
 
+  setWriteoffResult: (v) => set({ writeoffResult: v }),
   setTargetProductId: (id) => set({ targetProductId: id }),
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),

@@ -33,7 +33,7 @@ export const authApi = {
     api.post<{ access_token: string; refresh_token: string }>('/auth/register', { email, password }),
 }
 
-export type DocumentKind = 'demand'
+export type DocumentKind = 'demand' | 'loss'
 
 export interface MsDocument {
   id: string
@@ -58,6 +58,7 @@ export interface Document {
   status: 'draft' | 'processing' | 'accepted'
   scan_count: number
   plan: PlanItem[]
+  writeoff_reason?: string | null
   created_at: string
 }
 
@@ -137,6 +138,8 @@ export const scansApi = {
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
+  /** Удалить все марки документа из БД. */
+  clearDocument: (document_id: string) => api.delete(`/scans/by-document/${document_id}`),
   /** Найти документы пользователя, где уже есть указанный код маркировки. */
   searchByCode: (code: string) =>
     api.get<CodeSearchHit[]>('/scans/search', { params: { code } }),
@@ -175,11 +178,12 @@ export interface Integration {
   cz_cert_subject: string | null
   cz_auth_method: string
   cz_box_mode_enabled: boolean
+  cz_inn: string | null
 }
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
-  update: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean }) =>
+  update: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean; cz_inn?: string }) =>
     api.put<Integration>('/integrations/', data),
 }
 
@@ -193,6 +197,25 @@ export interface CzLoginResult {
   cz_cert_subject: string | null
 }
 
+export interface WriteoffPart {
+  pg: string
+  product_document_b64: string
+}
+
+export interface WriteoffPrepareResult {
+  writeoff_token: string
+  parts: WriteoffPart[]
+}
+
+export const WRITEOFF_REASONS: { value: string; label: string }[] = [
+  { value: 'spoilage', label: 'Порча, утилизация' },
+  { value: 'own_use', label: 'Собственные нужды предприятия' },
+  { value: 'demo', label: 'Демонстрационные образцы' },
+  { value: 'general_business', label: 'Списание на общехозяйственные расходы' },
+  { value: 'production', label: 'Списание на производственные расходы' },
+  { value: 'non_commercial', label: 'Списание на общехоз. некоммерческую деятельность' },
+]
+
 export const czApi = {
   challenge: () => api.post<CzChallenge>('/integrations/cz/challenge'),
   login: (body: {
@@ -202,4 +225,14 @@ export const czApi = {
     cert_subject?: string
   }) => api.post<CzLoginResult>('/integrations/cz/login', body),
   logout: () => api.delete<Integration>('/integrations/cz'),
+  writeoffPrepare: (body: {
+    document_id: string
+    reason: string
+    basis_number?: string
+    basis_date?: string
+  }) => api.post<WriteoffPrepareResult>('/integrations/cz/writeoff/prepare', body),
+  writeoffSubmit: (body: {
+    writeoff_token: string
+    signatures: { pg: string; signature: string }[]
+  }) => api.post<{ doc_ids: string[] }>('/integrations/cz/writeoff/submit', body),
 }

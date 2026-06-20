@@ -78,6 +78,7 @@ class Integration(Base):
     cz_cert_subject = Column(String(500), nullable=True)
     cz_auth_method = Column(String(16), nullable=False, default="mock", server_default="mock")
     cz_box_mode_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    cz_inn = Column(String(12), nullable=True)           # ИНН участника оборота для тела документов ЧЗ
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")
@@ -111,6 +112,9 @@ class Document(Base):
     # План сборки: массив объектов {gtin, product_id, product_name, expected_qty}.
     # Пустой массив = режим без плана (произвольная сборка).
     plan = Column(JSONB, nullable=False, default=list, server_default="[]")
+    # Списание (loss): код выбранной причины вывода из оборота и id поданных в ЧЗ документов.
+    writeoff_reason = Column(String(64), nullable=True)
+    cz_doc_ids = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

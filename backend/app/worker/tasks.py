@@ -580,6 +580,29 @@ async def _push_cz_token_expired(user_id: str):
     await r.aclose()
 
 
+async def _push_writeoff_status(
+    user_id: str, document_id: str, status: str, error: Optional[str]
+):
+    """Сообщить фронту результат списания: status='done'|'error'."""
+    import redis.asyncio as aioredis
+    import json
+    from app.core.config import settings
+
+    r = aioredis.from_url(settings.REDIS_URL)
+    await r.publish(
+        f"ws:{user_id}",
+        json.dumps(
+            {
+                "type": "writeoff_status",
+                "document_id": document_id,
+                "status": status,
+                "error_message": error,
+            }
+        ),
+    )
+    await r.aclose()
+
+
 @celery_app.task(name="process_document")
 def process_document_task(document_id: str, user_id: str):
     """
@@ -810,3 +833,88 @@ async def _process_document_async(document_id: str, user_id: str):
             kind=kind,
             valid_count=len(valid_scans),
         )
+
+
+# Терминальные статусы документа ГИС МТ (см. справочник «Статусы документов»).
+_WRITEOFF_OK = {"CHECKED_OK"}
+_WRITEOFF_PENDING = {None, "", "IN_PROGRESS", "PENDING", "CHECKED", "NEW", "PROCESSING"}
+
+
+@celery_app.task(name="poll_writeoff_status")
+def poll_writeoff_status_task(document_id: str, user_id: str):
+    """Опросить статус поданных в ЧЗ документов вывода из оборота и финализировать."""
+    _run(_poll_writeoff_async(document_id, user_id))
+
+
+async def _poll_writeoff_async(document_id: str, user_id: str):
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Document, DocumentStatus, Integration
+    from app.services.chestnyznak import ChestnyZnakService, CZApiError
+    from app.core.security import decrypt_token
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        doc_result = await db.execute(select(Document).where(Document.id == document_id))
+        doc = doc_result.scalar_one_or_none()
+        if not doc or not doc.cz_doc_ids:
+            logger.warning("writeoff.poll.no_doc_ids", document_id=document_id)
+            return
+
+        int_result = await db.execute(
+            select(Integration).where(Integration.user_id == user_id)
+        )
+        integration = int_result.scalar_one_or_none()
+        if not integration or not integration.cz_token:
+            logger.warning("writeoff.poll.no_token", document_id=document_id)
+            return
+
+        cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
+        items = list(doc.cz_doc_ids)
+        statuses: dict[str, Optional[str]] = {}
+        error: Optional[str] = None
+
+        # Несколько попыток с задержкой: ждём перехода всех документов в терминальный статус.
+        for _attempt in range(15):
+            all_terminal = True
+            for item in items:
+                doc_id = item["doc_id"]
+                if statuses.get(doc_id) in _WRITEOFF_OK:
+                    continue
+                try:
+                    status = await cz.get_document_status(item["pg"], doc_id)
+                except CZApiError as e:
+                    error = str(e)
+                    all_terminal = False
+                    continue
+                statuses[doc_id] = status
+                if status in _WRITEOFF_PENDING:
+                    all_terminal = False
+                elif status not in _WRITEOFF_OK:
+                    error = f"Документ {doc_id}: статус {status}"
+            if all_terminal:
+                break
+            await asyncio.sleep(4)
+
+        all_ok = bool(statuses) and all(
+            statuses.get(i["doc_id"]) in _WRITEOFF_OK for i in items
+        )
+        if all_ok:
+            doc.status = DocumentStatus.accepted
+            await db.commit()
+            logger.info("writeoff.poll.done", document_id=document_id)
+            await _push_writeoff_status(str(user_id), str(document_id), "done", None)
+        else:
+            # Не финализируем как accepted; возвращаем в draft, чтобы можно было повторить.
+            doc.status = DocumentStatus.draft
+            await db.commit()
+            logger.warning(
+                "writeoff.poll.error",
+                document_id=document_id,
+                statuses={i["doc_id"]: statuses.get(i["doc_id"]) for i in items},
+            )
+            await _push_writeoff_status(
+                str(user_id),
+                str(document_id),
+                "error",
+                error or "Не все документы обработаны Честным Знаком",
+            )

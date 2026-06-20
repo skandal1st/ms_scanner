@@ -7,7 +7,7 @@ import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { useScanStore } from '../store/scanStore'
-import { useLoadDocument, useProcessDocument } from '../hooks/useDocuments'
+import { useLoadDocument, useProcessDocument, useClearDocumentScans } from '../hooks/useDocuments'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
@@ -15,9 +15,11 @@ export function ShipmentPage() {
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
 
   const processMutation = useProcessDocument()
+  const clearMutation = useClearDocumentScans()
 
   useLoadDocument(pendingDoc?.id ?? null)
 
@@ -115,9 +117,10 @@ export function ShipmentPage() {
         <button
           type="button"
           className="button"
-          onClick={() => useScanStore.getState().reset()}
+          disabled={!document || scans.length === 0 || clearMutation.isPending}
+          onClick={() => setShowClearConfirm(true)}
         >
-          Очистить
+          {clearMutation.isPending ? 'Очистка…' : 'Очистить'}
         </button>
         <div className="acc-footer__spacer" />
         <button
@@ -238,6 +241,50 @@ export function ShipmentPage() {
               >
                 Отгрузить {progress.total.addedTotal}
                 {stats.overflow > 0 ? ` (вкл. ${stats.overflow} сверх)` : ''}
+              </button>
+            </div>
+          </dialog>
+        </div>
+      )}
+
+      {showClearConfirm && (
+        <div className="popup">
+          <div className="popup__overlay" onClick={() => setShowClearConfirm(false)} />
+          <dialog className="popup__body" open>
+            <button
+              type="button"
+              className="popup__close"
+              onClick={() => setShowClearConfirm(false)}
+              aria-label="Закрыть"
+            />
+            <div className="popup__title">Удалить все марки?</div>
+            <div className="popup__content">
+              <p className="hint">
+                Из документа будут безвозвратно удалены все отсканированные марки ({scans.length} шт.).
+                Документ останется выбранным — можно сканировать заново.
+              </p>
+            </div>
+            <div className="buttons" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
+              <button type="button" className="button" onClick={() => setShowClearConfirm(false)}>
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="button"
+                style={{
+                  color: '#ffffff',
+                  border: '1px solid var(--ms-error)',
+                  backgroundImage: 'none',
+                  background: 'var(--ms-error)',
+                }}
+                disabled={clearMutation.isPending}
+                onClick={async () => {
+                  if (!document) return
+                  await clearMutation.mutateAsync(document.id)
+                  setShowClearConfirm(false)
+                }}
+              >
+                {clearMutation.isPending ? 'Удаление…' : 'Удалить'}
               </button>
             </div>
           </dialog>

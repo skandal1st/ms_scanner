@@ -10,10 +10,11 @@ from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin
 # МойСклад сам валидирует CIS; отдельный ввод в оборот через API ЧЗ в приложении не делаем.
 WRITE_TRACKING_CODES_KINDS = {"demand"}
 
-# Все типы МС-документов, поддерживаемые приложением.
+# Типы документов, которые приложение умеет вести (создавать/листать как Document).
+# demand — отгрузка (коды в МС). loss — списание (вывод из оборота через ЧЗ, МС не пишем).
 # move (Перемещение) исключён: XSD-схема дескриптора не разрешает update
 # для move через scope=custom — мы не можем записать trackingCodes в позиции.
-SUPPORTED_KINDS = {"demand"}
+SUPPORTED_KINDS = {"demand", "loss"}
 
 
 class MoySkladService:

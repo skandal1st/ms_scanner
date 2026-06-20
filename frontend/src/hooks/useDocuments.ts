@@ -59,3 +59,15 @@ export function useProcessDocument() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
   })
 }
+
+export function useClearDocumentScans() {
+  const qc = useQueryClient()
+  const setScans = useScanStore((s) => s.setScans)
+  return useMutation({
+    mutationFn: (id: string) => scansApi.clearDocument(id),
+    onSuccess: (_data, id) => {
+      setScans([]) // очищаем локально, документ остаётся выбранным
+      qc.invalidateQueries({ queryKey: ['document', id] })
+    },
+  })
+}

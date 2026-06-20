@@ -285,6 +285,15 @@ function ChestnyZnakSection({
       integrationsApi.update({ cz_box_mode_enabled: enabled }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
   })
+  const innMutation = useMutation({
+    mutationFn: (cz_inn: string) =>
+      integrationsApi.update({ cz_inn }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
+  })
+  const [innDraft, setInnDraft] = useState('')
+  useEffect(() => {
+    setInnDraft(integration?.cz_inn ?? '')
+  }, [integration?.cz_inn])
   const [pluginAvailable, setPluginAvailable] = useState<boolean | null>(null)
   const [certs, setCerts] = useState<CzCertificate[]>([])
   const [selectedThumbprint, setSelectedThumbprint] = useState('')
@@ -440,6 +449,38 @@ function ChestnyZnakSection({
             <div className="alert alert--error mt-8">
               Не удалось сохранить режим коробов
             </div>
+          )}
+
+          <label className="field-label" style={{ marginTop: 12 }}>
+            ИНН участника оборота (для списания)
+          </label>
+          <div className="hint" style={{ marginBottom: 4 }}>
+            Обычно подставляется из сертификата при входе. Заполните вручную, если поле пустое.
+          </div>
+          <div className="flex-row gap-8">
+            <input
+              value={innDraft}
+              onChange={(e) => setInnDraft(e.target.value.replace(/\D/g, '').slice(0, 12))}
+              placeholder="ИНН"
+              className="ui-input"
+              style={{ flex: 1 }}
+              inputMode="numeric"
+            />
+            <button
+              type="button"
+              className="button"
+              disabled={
+                innMutation.isPending ||
+                innDraft === (integration?.cz_inn ?? '') ||
+                (innDraft !== '' && innDraft.length < 10)
+              }
+              onClick={() => innMutation.mutate(innDraft)}
+            >
+              {innMutation.isPending ? 'Сохраняю…' : 'Сохранить'}
+            </button>
+          </div>
+          {innMutation.isError && (
+            <div className="alert alert--error mt-8">Не удалось сохранить ИНН</div>
           )}
         </div>
       )}

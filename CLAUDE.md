@@ -35,14 +35,18 @@ ssh root@92.118.113.252 'cd /root/ms_scanner && git pull --ff-only origin main \
 
 ## Architecture
 
-### Единый поток для приёмки и отгрузки (`Document.kind`)
-`Document.kind` — enum `supply | demand | loss | salesreturn` (`move` исключён: XSD-схема дескриптора v2 не разрешает `<update/>` для перемещений через `scope=custom`).
+### Потоки по `Document.kind`
+`Document.kind` — enum `supply | demand | loss | salesreturn` (`move` исключён: XSD-схема дескриптора v2 не разрешает `<update/>` для перемещений через `scope=custom`). Приложение **ведёт** типы из `SUPPORTED_KINDS` в `backend/app/services/moysklad.py` — сейчас `{"demand", "loss"}` (создание/листинг `Document` этих типов).
 
-Все типы документов идут через один endpoint `POST /documents/{id}/process` и одну Celery-задачу `process_document_task`. Внутри ветка по `kind`:
-- `supply` (приёмка) → `cz.accept_batch()` + `MoySkladService.update_document("supply", ...)`. Маркировка вводится в оборот через ЧЗ; в МС-документе `trackingCodes` не пишутся.
-- `demand | loss | salesreturn` (отгрузка) → только `MoySkladService.update_document(kind, ...)`. ЧЗ-API не вызывается; КМ в МС: при существующих позициях — `POST .../positions/{id}/trackingCodes`, иначе вложенно в `PUT` документа. См. `WRITE_TRACKING_CODES_KINDS` в `backend/app/services/moysklad.py` и `Markirovka.md` в корне репозитория.
+Два независимых потока завершения документа:
 
-`/documents/{id}/accept` оставлен как backward-совместимый alias на `/process`.
+**Отгрузка (`demand`) → endpoint `POST /documents/{id}/process` + Celery `process_document_task`.**
+- Задача обрабатывает **только `kind == "demand"`** (на остальных — `return` с `unsupported_kind`).
+- Пишет КМ в МС-документ: при существующих позициях — `POST .../positions/{id}/trackingCodes`, иначе вложенно в `PUT`. См. `WRITE_TRACKING_CODES_KINDS` (`{"demand"}`) в `moysklad.py` и `Markirovka.md`. ЧЗ-API не вызывается.
+- `/documents/{id}/accept` — backward-совместимый alias на `/process`.
+- `supply` (приёмка) и `salesreturn` в текущем коде через `/process` не идут (исторический `cz.accept_batch` — `NotImplementedError`).
+
+**Списание (`loss`) → вывод из оборота через ЧЗ, отдельный УКЭП-флоу (МС не трогаем).** См. раздел «Честный Знак: списание (вывод из оборота)».
 
 ### Сквозной поток сканирования
 1. Frontend (`hooks/useScanner.ts`) парсит код. SSCC-короб (20 цифр на `00`) → `POST /scans/box`; обычный KM (`01`+GTIN) → `POST /scans/`.
@@ -85,7 +89,20 @@ OAuth-флоу `/auth/moysklad/login` + `LoginPage` оставлены как fa
 
 Воркер при истёкшем токене **не обновляет токен сам** (для нового нужна свежая подпись из браузера) — шлёт WS-событие `cz_token_expired`, фронт показывает баннер «Войдите заново» (см. Layout в `App.tsx`). Не добавлять рефреш на бэке.
 
+При входе ИНН участника парсится из субъекта сертификата (`_parse_inn_from_subject`) в `Integration.cz_inn` (есть ручной fallback-инпут в Settings) — нужен для тела документов вывода из оборота.
+
 Все запросы к ЧЗ логируются в `cz_logs` (`backend/app/services/cz_logger.py`); `_redact()` вырезает `signed_data` из тел `/auth/cert/`.
+
+### Честный Знак: списание (вывод из оборота)
+Списание = вывод КМ из оборота через True API документом `LK_RECEIPT` (формат MANUAL), **реальный** флоу (не mock на проде). МойСклад не задействован. Страница — `/writeoff` (`frontend/src/pages/Writeoff.tsx`).
+
+Причины (`WRITEOFF_REASONS` в `chestnyznak.py`): фикс-список из 6 пунктов UI → `action` ЧЗ. Причины без прямого кода (`Демонстрационные образцы`, `Общехозяйственные/некоммерческие расходы`) → `action=OWN_USE`, человекочитаемая метка дублируется в `primary_document_custom_name`.
+
+УКЭП round-trip (приватный ключ остаётся в CSP браузера, зеркалит challenge-flow):
+1. `POST /integrations/cz/writeoff/prepare {document_id, reason, basis_*}` — берёт сканы `valid+overflow`, разворачивает агрегаты в листовые КМ (`child_codes`), группирует по товарной группе (`detect_product_group`), на каждую строит тело `LK_RECEIPT` и `product_document=base64(utf8 JSON)`, кладёт в Redis под одноразовым `writeoff_token` (TTL 120с). Отдаёт фронту массив `parts:[{pg, product_document_b64}]`.
+2. Фронт подписывает каждый `product_document_b64` **открепленной** подписью `signDetachedBase64` (`lib/cprob.ts`) — `BASE64_TO_BINARY`, `SignCades(..., true)`, **без повторного `btoa`** (иначе ломается на кириллице в JSON).
+3. `POST /integrations/cz/writeoff/submit {writeoff_token, signatures}` — атомарный `GETDEL`, на каждую группу `POST .../lk/documents/create?pg=`, id документов → `Document.cz_doc_ids`, статус → `processing`, кикает `poll_writeoff_status_task`.
+4. Воркер опрашивает `GET .../api/v4/.../doc/{id}/info` до `CHECKED_OK`; по успеху — `Document.status=accepted`, WS-событие `writeoff_status` (`done|error`), фронт показывает «Списано ✓» / ошибку.
 
 ### Шифрование секретов
 Все внешние токены (`Integration.moysklad_token`, `Integration.cz_token`, `Integration.moysklad_app_token` из Vendor API) хранятся под Fernet (`backend/app/core/security.py`: `encrypt_token` / `decrypt_token`). Никогда не писать plaintext-токен в БД и не возвращать наружу из API — `IntegrationResponse` отдаёт только булевы `has_*` и метаданные.
@@ -94,9 +111,10 @@ OAuth-флоу `/auth/moysklad/login` + `LoginPage` оставлены как fa
 React 18 + Vite + TS SPA, без CSS-фреймворка — стили inline через `style={...}` или CSS-классы из `index.css`. Состояние: **Zustand** для скан-сессии (`store/scanStore.ts`), **React Query** для серверных данных (`hooks/useDocuments.ts`). Vite dev-сервер проксирует `/api` → backend:8000 и `/ws` → ws://backend:8000. JWT в `localStorage.access_token`; axios-interceptor (`api/client.ts`) при 401 чистит токен и редиректит на `/login`.
 
 Роуты:
-- `/` → `AcceptancePage` (приёмка, kind=supply)
-- `/shipment` → `ShipmentPage` (переключатель demand/loss/salesreturn)
-- `/settings` → `SettingsPage` (привязка МС/ЧЗ)
+- `/` → редирект на `/shipment`
+- `/shipment` → `ShipmentPage` (отгрузка, kind=demand)
+- `/writeoff` → `WriteoffPage` (списание, kind=loss — вывод из оборота через ЧЗ)
+- `/settings` → `SettingsPage` (привязка МС/ЧЗ, ИНН для списания)
 - `/login` → `LoginPage` (fallback OAuth)
 - `/ms` → `MsIframePage` (лаунчер для iframe МС, использует embedded Settings)
 - `/launch` → `LaunchPage` (обмен `?t=launch_token` на JWT)
