@@ -36,17 +36,21 @@ ssh root@92.118.113.252 'cd /root/ms_scanner && git pull --ff-only origin main \
 ## Architecture
 
 ### Потоки по `Document.kind`
-`Document.kind` — enum `supply | demand | loss | salesreturn` (`move` исключён: XSD-схема дескриптора v2 не разрешает `<update/>` для перемещений через `scope=custom`). Приложение **ведёт** типы из `SUPPORTED_KINDS` в `backend/app/services/moysklad.py` — сейчас `{"demand", "loss"}` (создание/листинг `Document` этих типов).
+`Document.kind` — enum `supply | demand | loss | salesreturn` (`move` исключён: XSD-схема дескриптора v2 не разрешает `<update/>` для перемещений через `scope=custom`). Приложение **ведёт** типы из `SUPPORTED_KINDS` в `backend/app/services/moysklad.py` — сейчас `{"demand", "loss", "supply"}` (создание/листинг `Document` этих типов).
 
 Два независимых потока завершения документа:
 
-**Отгрузка (`demand`) → endpoint `POST /documents/{id}/process` + Celery `process_document_task`.**
-- Задача обрабатывает **только `kind == "demand"`** (на остальных — `return` с `unsupported_kind`).
-- Пишет КМ в МС-документ: при существующих позициях — `POST .../positions/{id}/trackingCodes`, иначе вложенно в `PUT`. См. `WRITE_TRACKING_CODES_KINDS` (`{"demand"}`) в `moysklad.py` и `Markirovka.md`. ЧЗ-API не вызывается.
+**Запись КМ в МС (`demand` — отгрузка, `supply` — приёмка по УПД) → endpoint `POST /documents/{id}/process` + Celery `process_document_task`.**
+- Задача обрабатывает `kind in {"demand", "supply"}` (на остальных — `return` с `unsupported_kind`).
+- Пишет КМ в МС-документ: при существующих позициях — `POST .../positions/{id}/trackingCodes`, иначе вложенно в `PUT`. См. `WRITE_TRACKING_CODES_KINDS` (`{"demand", "supply"}`) в `moysklad.py` и `Markirovka.md`. ЧЗ-API не вызывается.
 - `/documents/{id}/accept` — backward-совместимый alias на `/process`.
-- `supply` (приёмка) и `salesreturn` в текущем коде через `/process` не идут (исторический `cz.accept_batch` — `NotImplementedError`).
+- `salesreturn` в текущем коде через `/process` не идёт (исторический `cz.accept_batch` — `NotImplementedError`).
+- **Приёмка** (`supply`) собирает КМ не сканированием, а импортом УПД (см. «Приёмка по УПД»). Документ создаётся через `/acceptance/documents` с привязкой к существующему поступлению МС (`moysklad_id` → `build_plan("supply", …)`); затем КМ пишутся в позиции этого поступления тем же `process_document_task`. Требует `<supply><update/></supply>` в `moysklad-descriptor.xml` (см. ниже).
 
 **Списание (`loss`) → вывод из оборота через ЧЗ, отдельный УКЭП-флоу (МС не трогаем).** См. раздел «Честный Знак: списание (вывод из оборота)».
+
+### Приёмка по УПД (`supply`)
+Страница `/acceptance` (`frontend/src/pages/Acceptance.tsx`), роутер `backend/app/api/acceptance.py`. Кладовщик выбирает товарную группу + **существующее поступление МС** (`UpdImportBar`, серверный поиск по `useMsDocuments('supply')`) и загружает XML УПД (ФНС 5.03). `POST /acceptance/documents {name, product_group, moysklad_id}` создаёт `Document(kind=supply, moysklad_id, plan=build_plan("supply", …))`; `POST .../import-upd` парсит позиции (`upd_parser`) и резолвит товар по GTIN в порядке: **позиции привязанного поступления (`plan`) → `GtinProductMap` → каталог МС**. КМ сохраняются как сканы (`valid`/`unknown_product`). Несопоставленные GTIN сопоставляются вручную через видимую панель подбора (`/products/link-gtin`). Кнопка «Отправить приёмку в МС» зовёт общий `POST /documents/{id}/process` → `process_document_task` пишет `trackingCodes` в позиции поступления (как у `demand`). Фронт без WS — опрашивает `getDoc` до `status=accepted`. Если поступление не выбрано — приёмка работает как «только проверка» (КМ в МС не уходят).
 
 ### Сквозной поток сканирования
 1. Frontend (`hooks/useScanner.ts`) парсит код. SSCC-короб (20 цифр на `00`) → `POST /scans/box`; обычный KM (`01`+GTIN) → `POST /scans/`.
@@ -132,6 +136,7 @@ Celery-задачи синхронные, но внутри запускают a
 - Имена тегов permissions — **camelCase**: `<salesReturn>`, `<purchaseReturn>`, `<invoiceIn>`. Не путать с lowercase URL-сегментами в МС API (`/entity/salesreturn`).
 - У каждого типа свой набор разрешённых действий. У `move` нет `<update/>` через `scope=custom` — поэтому `move` исключён из `SUPPORTED_KINDS` в `moysklad.py` и из `DocumentKind` на фронте.
 - `<scope>custom</scope>` — обязательно. `admin` нарушает п.5 регламента модерации (минимум прав).
+- Тег `<supply>` (поступление, lowercase в этой схеме — `operationPermission`) стоит **до** `<demand>` в `<permissions>` (порядок `xs:sequence` в XSD). Добавлен с `<view/><update/>` для записи `trackingCodes` при приёмке по УПД. **После изменения дескриптора — перезалить XML в `dev.moysklad.ru` и переустановить решение**, иначе Vendor API не выдаст MC-токен с правом на поступления и запись приёмки в МС упадёт.
 
 Регламент полностью — `Downloads/apps-regulations.pdf`. Закрытые пункты: 1, 2, 5, 6 (Settings внутри iframe), 7, 11, 12. Открытые: 4в (инструкция), 9 (кнопки «Отвязать МС/ЧЗ» в Settings), 10 (прогон ошибок на русском), карточка решения (описание, тариф, триал).
 

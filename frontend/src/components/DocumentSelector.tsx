@@ -11,14 +11,18 @@ interface Props {
 const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'отгрузку',
   loss: 'списание',
+  supply: 'поступление',
 }
 
-/** Отображаемое имя МС-отгрузки: "00123 — ООО Покупатель (#00045)". */
+/** Отображаемое имя МС-отгрузки: "00123 — (00045) — (ООО Покупатель)".
+ * Номер отгрузки, затем номер привязанного заказа, затем контрагент.
+ * Отсутствующие части пропускаются. */
 function msDocLabel(m: MsDocument): string {
   const number = m.name || `Без имени · ${m.id.slice(0, 8)}`
-  let label = m.agent_name ? `${number} — ${m.agent_name}` : number
-  if (m.customer_order_name) label += ` (#${m.customer_order_name})`
-  return label
+  const parts = [number]
+  if (m.customer_order_name) parts.push(`(${m.customer_order_name})`)
+  if (m.agent_name) parts.push(`(${m.agent_name})`)
+  return parts.join(' — ')
 }
 
 export function DocumentSelector({ kind, onSelect, selected }: Props) {

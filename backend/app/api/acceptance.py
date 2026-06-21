@@ -26,6 +26,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
+from app.services.chestnyznak import normalize_gtin_key
 from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition
 
 router = APIRouter(prefix="/acceptance", tags=["acceptance"])
@@ -60,6 +61,8 @@ class ProductGroup(BaseModel):
 class CreateAcceptanceDocRequest(BaseModel):
     name: str
     product_group: str
+    # Привязка к существующему поступлению МС: КМ будут записаны в его позиции.
+    moysklad_id: Optional[str] = None
 
 
 class AcceptanceDocResponse(BaseModel):
@@ -68,7 +71,10 @@ class AcceptanceDocResponse(BaseModel):
     kind: DocumentKind
     status: DocumentStatus
     product_group: Optional[str] = None
+    moysklad_id: Optional[str] = None
     scan_count: int = 0
+    # Сколько позиций поступления МС подтянуто в план (для UI «привязано к МС»).
+    plan_count: int = 0
 
 
 class ImportPositionResult(BaseModel):
@@ -138,18 +144,41 @@ async def create_acceptance_document(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Создать документ приёмки (kind=supply) с выбранной товарной группой."""
+    """Создать документ приёмки (kind=supply) с выбранной товарной группой.
+
+    Если передан moysklad_id — документ привязывается к существующему поступлению
+    МС, его позиции подтягиваются в план (gtin→товар), и при загрузке УПД коды
+    сопоставляются именно с этими позициями. Иначе — автономная приёмка без записи
+    в МС (только сохранение кодов как сканов)."""
     pg = (body.product_group or "").strip()
     if pg not in _PRODUCT_GROUP_CODES:
         raise HTTPException(status_code=400, detail="Неизвестная товарная группа")
     name = (body.name or "").strip() or "Приёмка"
+
+    moysklad_id = (body.moysklad_id or "").strip() or None
+    plan: list[dict] = []
+    if moysklad_id:
+        # План из позиций поступления МС: gtin/product_id/expected_qty. Best-effort —
+        # при сбое МС оставляем план пустым (резолв уйдёт в GtinProductMap/каталог).
+        ms = await _maybe_ms_service(current_user, db)
+        if ms is not None:
+            try:
+                plan = await ms.build_plan("supply", moysklad_id)
+            except Exception as exc:
+                logger.warning(
+                    "acceptance.build_plan_failed",
+                    moysklad_id=moysklad_id,
+                    error=str(exc),
+                )
+
     doc = Document(
         user_id=current_user.id,
         name=name,
         kind=DocumentKind.supply,
         status=DocumentStatus.draft,
         product_group=pg,
-        plan=[],
+        moysklad_id=moysklad_id,
+        plan=plan,
     )
     db.add(doc)
     await db.commit()
@@ -158,6 +187,8 @@ async def create_acceptance_document(
         "acceptance.doc_created",
         document_id=str(doc.id),
         product_group=pg,
+        moysklad_id=moysklad_id,
+        plan_count=len(plan),
         user_id=str(current_user.id),
     )
     return AcceptanceDocResponse(
@@ -166,7 +197,9 @@ async def create_acceptance_document(
         kind=doc.kind,
         status=doc.status,
         product_group=doc.product_group,
+        moysklad_id=doc.moysklad_id,
         scan_count=0,
+        plan_count=len(plan),
     )
 
 
@@ -176,12 +209,22 @@ async def _resolve_product(
     ms: Optional[MoySkladService],
     db: AsyncSession,
     cache: dict[str, tuple[Optional[str], Optional[str]]],
+    plan_map: dict[str, tuple[str, Optional[str]]],
 ) -> tuple[Optional[str], Optional[str]]:
-    """(product_id, product_name) по GTIN: сначала запомненная связка, затем каталог МС."""
+    """(product_id, product_name) по GTIN: сначала позиции привязанного поступления
+    МС (plan_map), затем запомненная связка, затем каталог МС."""
     if not gtin:
         return (None, None)
     if gtin in cache:
         return cache[gtin]
+
+    # 0. Позиция привязанного поступления МС — приоритетнее всего: КМ должны лечь
+    #    именно в товар из этого документа.
+    gk = normalize_gtin_key(gtin)
+    if gk and gk in plan_map:
+        result = plan_map[gk]
+        cache[gtin] = result
+        return result
 
     # 1. Запомненное ручное соответствие.
     map_row = (
@@ -236,6 +279,19 @@ async def import_upd(
 
     ms = await _maybe_ms_service(current_user, db)
 
+    # План привязанного поступления МС: gtin → (product_id, product_name).
+    # Позиции УПД сопоставляются по GTIN именно с этими товарами.
+    plan_map: dict[str, tuple[str, Optional[str]]] = {}
+    for p in doc.plan or []:
+        if not isinstance(p, dict):
+            continue
+        g = normalize_gtin_key(p.get("gtin"))
+        pid = p.get("product_id")
+        if g and pid and isinstance(pid, str):
+            plan_map.setdefault(
+                g, (pid, (p.get("product_name") or "").strip() or None)
+            )
+
     # Уже имеющиеся коды документа — чтобы не плодить дубли при повторной загрузке.
     existing_codes = set(
         (
@@ -253,7 +309,7 @@ async def import_upd(
 
     for pos in positions:
         product_id, product_name = await _resolve_product(
-            pos.gtin, current_user.id, ms, db, resolve_cache
+            pos.gtin, current_user.id, ms, db, resolve_cache, plan_map
         )
         matched = product_id is not None
         if pos.gtin and not matched:
@@ -355,5 +411,7 @@ async def get_acceptance_document(
         kind=doc.kind,
         status=doc.status,
         product_group=doc.product_group,
+        moysklad_id=doc.moysklad_id,
         scan_count=count,
+        plan_count=len(doc.plan or []),
     )

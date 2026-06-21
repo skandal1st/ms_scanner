@@ -8,6 +8,7 @@ import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument, useClearDocumentScans } from '../hooks/useDocuments'
+import { useResizableWidth } from '../hooks/useResizableWidth'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
@@ -20,6 +21,13 @@ export function ShipmentPage() {
 
   const processMutation = useProcessDocument()
   const clearMutation = useClearDocumentScans()
+
+  // Ширина левой панели (документы/сканирование) — тянется мышью за разделитель.
+  const { width: leftWidth, startResize } = useResizableWidth(
+    'shipment_left_width',
+    440,
+    { min: 300, max: 900 },
+  )
 
   useLoadDocument(pendingDoc?.id ?? null)
 
@@ -93,12 +101,20 @@ export function ShipmentPage() {
       )}
 
       <div className="acc-body">
-        <div className="acc-left">
+        <div className="acc-left" style={{ width: leftWidth }}>
           <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
         </div>
+
+        <div
+          className="acc-split"
+          onMouseDown={startResize}
+          role="separator"
+          aria-orientation="vertical"
+          title="Потяните, чтобы изменить ширину панелей"
+        />
 
         <div className="acc-right">
           <UnknownProductsPicker />

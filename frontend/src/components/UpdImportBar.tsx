@@ -1,19 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import { acceptanceApi } from '../api/client'
-import type { ProductGroup } from '../api/client'
+import type { ProductGroup, MsDocument } from '../api/client'
+import { useMsDocuments } from '../hooks/useDocuments'
 
 interface UpdImportBarProps {
   busy: boolean
-  onSubmit: (file: File, productGroup: string) => void
+  onSubmit: (file: File, productGroup: string, moyskladId: string) => void
+}
+
+/** Отображаемое имя поступления МС: "00123 — ООО Поставщик". */
+function msSupplyLabel(m: MsDocument): string {
+  const number = m.name || `Без имени · ${m.id.slice(0, 8)}`
+  return m.agent_name ? `${number} — ${m.agent_name}` : number
 }
 
 /**
- * Панель загрузки УПД: выбор товарной группы (обязателен) + выбор XML-файла +
- * кнопка «Загрузить». Сам импорт выполняет родитель через onSubmit.
+ * Панель загрузки УПД: товарная группа (обязательна) + поступление МС (опционально —
+ * куда писать КМ) + XML-файл + кнопка «Загрузить». Сам импорт выполняет родитель
+ * через onSubmit.
  */
 export function UpdImportBar({ busy, onSubmit }: UpdImportBarProps) {
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [group, setGroup] = useState('')
+  const [moyskladId, setMoyskladId] = useState('')
+  const [search, setSearch] = useState('')
+  const [debounced, setDebounced] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -24,9 +35,23 @@ export function UpdImportBar({ busy, onSubmit }: UpdImportBarProps) {
       .catch(() => setGroups([]))
   }, [])
 
+  // Серверный поиск поступлений в МС: дебаунс 300мс.
+  useEffect(() => {
+    const trimmed = search.trim()
+    const handle = window.setTimeout(() => {
+      setDebounced(trimmed.length >= 2 ? trimmed : '')
+    }, 300)
+    return () => window.clearTimeout(handle)
+  }, [search])
+
+  const { data: supplies, isLoading: suppliesLoading } = useMsDocuments(
+    'supply',
+    debounced || undefined,
+  )
+
   const submit = () => {
     if (!group || !file || busy) return
-    onSubmit(file, group)
+    onSubmit(file, group, moyskladId)
   }
 
   return (
@@ -46,6 +71,38 @@ export function UpdImportBar({ busy, onSubmit }: UpdImportBarProps) {
           {groups.map((g) => (
             <option key={g.code} value={g.code}>
               {g.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="upd-bar__field">
+        <label className="field-label" htmlFor="upd-supply">
+          Поступление в МойСклад (куда записать КМ)
+        </label>
+        <input
+          className="ui-input ui-input--block"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск по номеру или поставщику…"
+          disabled={busy}
+          style={{ marginBottom: 6 }}
+        />
+        <select
+          id="upd-supply"
+          className="ui-select"
+          value={moyskladId}
+          onChange={(e) => setMoyskladId(e.target.value)}
+          disabled={busy}
+        >
+          <option value="">
+            {suppliesLoading
+              ? 'Загружаю поступления…'
+              : '— без записи в МС (только проверка) —'}
+          </option>
+          {(supplies ?? []).map((m) => (
+            <option key={m.id} value={m.id}>
+              {msSupplyLabel(m)}
             </option>
           ))}
         </select>

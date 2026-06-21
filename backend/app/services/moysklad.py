@@ -8,13 +8,16 @@ from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin
 
 # Для каких МС-документов в позиции пишем коды маркировки (trackingCodes).
 # МойСклад сам валидирует CIS; отдельный ввод в оборот через API ЧЗ в приложении не делаем.
-WRITE_TRACKING_CODES_KINDS = {"demand"}
+# supply — приёмка по УПД: КМ пишутся в позиции поступления (требует <supply><update/>
+# в дескрипторе, см. moysklad-descriptor.xml).
+WRITE_TRACKING_CODES_KINDS = {"demand", "supply"}
 
 # Типы документов, которые приложение умеет вести (создавать/листать как Document).
-# demand — отгрузка (коды в МС). loss — списание (вывод из оборота через ЧЗ, МС не пишем).
+# demand — отгрузка (коды в МС). supply — приёмка по УПД (коды в МС).
+# loss — списание (вывод из оборота через ЧЗ, МС не пишем).
 # move (Перемещение) исключён: XSD-схема дескриптора не разрешает update
 # для move через scope=custom — мы не можем записать trackingCodes в позиции.
-SUPPORTED_KINDS = {"demand", "loss"}
+SUPPORTED_KINDS = {"demand", "loss", "supply"}
 
 
 class MoySkladService:
@@ -45,11 +48,20 @@ class MoySkladService:
         документ за пределами 50 последних.
         """
         self._validate_kind(kind)
+        # expand зависит от типа: поле customerOrder есть только у отгрузки (demand);
+        # у поступления (supply) есть agent (поставщик), но нет customerOrder; у
+        # списания (loss) нет ни того, ни другого. Лишний expand МС отклоняет (400).
+        expand_by_kind = {
+            "demand": "customerOrder,agent",
+            "supply": "agent",
+        }
         params: Dict[str, Any] = {
             "limit": limit,
             "order": "moment,desc",
-            "expand": "customerOrder,agent",
         }
+        expand = expand_by_kind.get(kind)
+        if expand:
+            params["expand"] = expand
         if search and search.strip():
             params["search"] = search.strip()
         async with httpx.AsyncClient(timeout=15) as client:

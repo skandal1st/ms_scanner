@@ -606,8 +606,9 @@ async def _push_writeoff_status(
 @celery_app.task(name="process_document")
 def process_document_task(document_id: str, user_id: str):
     """
-    Завершить документ: обновление МС с trackingCodes (supply и отгрузочные типы),
-    поиск product_id по GTIN на лету. API Честного Знака не вызывается.
+    Завершить документ: обновление МС с trackingCodes (demand — отгрузка,
+    supply — приёмка по УПД), поиск product_id по GTIN на лету.
+    API Честного Знака не вызывается.
     """
     try:
         _run(_process_document_async(document_id, user_id))
@@ -638,7 +639,9 @@ async def _process_document_async(document_id: str, user_id: str):
             return
 
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
-        if kind != "demand":
+        # demand — отгрузка, supply — приёмка по УПД. Обе ветки пишут trackingCodes
+        # в позиции МС-документа одним и тем же механизмом (update_document).
+        if kind not in ("demand", "supply"):
             logger.warning(
                 "process_document.unsupported_kind",
                 document_id=document_id,

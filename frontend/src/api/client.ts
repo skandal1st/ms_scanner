@@ -33,7 +33,7 @@ export const authApi = {
     api.post<{ access_token: string; refresh_token: string }>('/auth/register', { email, password }),
 }
 
-export type DocumentKind = 'demand' | 'loss'
+export type DocumentKind = 'demand' | 'loss' | 'supply'
 
 export interface MsDocument {
   id: string
@@ -183,7 +183,11 @@ export interface AcceptanceDoc {
   kind: string
   status: 'draft' | 'processing' | 'accepted'
   product_group: string | null
+  /** Привязанное поступление МС (если выбрано) — куда пишутся КМ. */
+  moysklad_id: string | null
   scan_count: number
+  /** Кол-во позиций поступления МС, подтянутых в план. */
+  plan_count: number
 }
 
 export interface ImportPositionResult {
@@ -208,8 +212,12 @@ export interface ImportUpdResult {
 
 export const acceptanceApi = {
   productGroups: () => api.get<ProductGroup[]>('/acceptance/product-groups'),
-  createDoc: (name: string, product_group: string) =>
-    api.post<AcceptanceDoc>('/acceptance/documents', { name, product_group }),
+  createDoc: (name: string, product_group: string, moysklad_id?: string) =>
+    api.post<AcceptanceDoc>('/acceptance/documents', {
+      name,
+      product_group,
+      ...(moysklad_id ? { moysklad_id } : {}),
+    }),
   getDoc: (id: string) => api.get<AcceptanceDoc>(`/acceptance/documents/${id}`),
   importUpd: (documentId: string, file: File) => {
     const form = new FormData()

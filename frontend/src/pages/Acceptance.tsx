@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { acceptanceApi, scansApi, productsApi } from '../api/client'
+import { acceptanceApi, scansApi, productsApi, documentsApi } from '../api/client'
 import type {
+  AcceptanceDoc,
   ImportUpdResult,
   ImportPositionResult,
   Scan,
@@ -15,27 +16,39 @@ function errorDetail(e: unknown): string | null {
   return ax?.response?.data?.detail ?? null
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 export function AcceptancePage() {
-  const [docId, setDocId] = useState<string | null>(null)
+  const [doc, setDoc] = useState<AcceptanceDoc | null>(null)
   const [result, setResult] = useState<ImportUpdResult | null>(null)
   const [scans, setScans] = useState<Scan[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = async (file: File, group: string) => {
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
+  const [sendDone, setSendDone] = useState(false)
+
+  const docId = doc?.id ?? null
+
+  const handleSubmit = async (file: File, group: string, moyskladId: string) => {
     setBusy(true)
     setError(null)
     setResult(null)
     setScans([])
+    setDoc(null)
+    setSendError(null)
+    setSendDone(false)
     try {
-      const { data: doc } = await acceptanceApi.createDoc(
+      const { data: created } = await acceptanceApi.createDoc(
         `Приёмка — ${file.name}`,
         group,
+        moyskladId || undefined,
       )
-      setDocId(doc.id)
-      const { data: imp } = await acceptanceApi.importUpd(doc.id, file)
+      setDoc(created)
+      const { data: imp } = await acceptanceApi.importUpd(created.id, file)
       setResult(imp)
-      const { data: sc } = await scansApi.list(doc.id)
+      const { data: sc } = await scansApi.list(created.id)
       setScans(sc)
     } catch (e) {
       setError(errorDetail(e) ?? 'Не удалось загрузить файл')
@@ -80,6 +93,48 @@ export function AcceptancePage() {
           }
         : r,
     )
+  }
+
+  // Несопоставленные позиции — наверх списка (их нужно разобрать в первую очередь),
+  // внутри групп сохраняем исходный порядок УПД (стабильная сортировка).
+  const positions = useMemo(() => {
+    const src = result?.positions ?? []
+    return [...src].sort((a, b) => Number(a.matched) - Number(b.matched))
+  }, [result])
+  const unmatched = positions.filter((p) => !p.matched && p.gtin)
+  const linkedToMs = !!doc?.moysklad_id
+  const alreadyAccepted = doc?.status === 'accepted'
+
+  const handleSend = async () => {
+    if (!docId) return
+    setSending(true)
+    setSendError(null)
+    try {
+      await documentsApi.process(docId)
+      // Запись в МС идёт в Celery; опрашиваем статус документа до accepted.
+      let finalStatus = 'processing'
+      for (let i = 0; i < 20; i++) {
+        await sleep(1500)
+        const { data: fresh } = await acceptanceApi.getDoc(docId)
+        finalStatus = fresh.status
+        setDoc(fresh)
+        if (fresh.status === 'accepted') break
+      }
+      if (finalStatus === 'accepted') {
+        setSendDone(true)
+        if (window.opener && !window.opener.closed) {
+          setTimeout(() => window.close(), 1500)
+        }
+      } else {
+        setSendError(
+          'МойСклад ещё обрабатывает документ. Обновите страницу позже, чтобы увидеть результат.',
+        )
+      }
+    } catch (e) {
+      setSendError(errorDetail(e) ?? 'Не удалось отправить в МойСклад')
+    } finally {
+      setSending(false)
+    }
   }
 
   const columns: ColumnDef<ImportPositionResult>[] = useMemo(
@@ -140,8 +195,6 @@ export function AcceptancePage() {
     [],
   )
 
-  const positions = result?.positions ?? []
-
   return (
     <div className="acc-page">
       <header className="acc-header">
@@ -174,9 +227,56 @@ export function AcceptancePage() {
                 </span>
               </>
             )}
+            {linkedToMs ? (
+              <> · привязано к поступлению МС</>
+            ) : (
+              <> · <span style={{ color: '#9a3412' }}>без записи в МС</span></>
+            )}
           </div>
         )}
       </div>
+
+      {/* Видимая панель сопоставления: подбор товара для несопоставленных GTIN
+          без необходимости разворачивать строку таблицы. */}
+      {result && unmatched.length > 0 && (
+        <div style={{ padding: '12px 16px 0' }}>
+          <div
+            style={{
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: 8,
+              padding: 12,
+            }}
+          >
+            <div
+              className="field-label"
+              style={{ margin: 0, marginBottom: 8, color: '#92400e' }}
+            >
+              Сопоставьте товары МойСклад ({unmatched.length}) — без этого приёмку
+              нельзя отправить в МС
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {unmatched.map((p) => (
+                <div key={`${p.gtin}|${p.name}`}>
+                  <div style={{ fontSize: 13, marginBottom: 4 }}>
+                    <b>{p.name}</b>{' '}
+                    <span className="text-muted" style={{ fontSize: 11 }}>
+                      GTIN {p.gtin}
+                    </span>
+                  </div>
+                  {docId && p.gtin && (
+                    <InlineProductPicker
+                      documentId={docId}
+                      gtin={p.gtin}
+                      onLinked={refreshAfterLink}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="acc-body" style={{ display: 'block', padding: '12px 16px' }}>
         {result ? (
@@ -190,70 +290,113 @@ export function AcceptancePage() {
               rowClassName={(p) => (p.matched ? undefined : 'is-unmatched')}
               renderExpanded={(p) => (
                 <ExpandedPosition
-                  position={p}
                   codes={p.gtin ? codesByGtin.get(p.gtin) ?? [] : []}
-                  documentId={docId}
-                  onLinked={refreshAfterLink}
                 />
               )}
             />
           </div>
         ) : (
           <p className="text-muted" style={{ fontSize: 13 }}>
-            Выберите товарную группу и загрузите файл УПД (XML формата ФНС 5.03) —
-            система распознает позиции и коды маркировки и сопоставит их с товарами
-            МойСклад по GTIN.
+            Выберите товарную группу, поступление МойСклад (куда записать коды) и
+            загрузите файл УПД (XML формата ФНС 5.03) — система распознает позиции и
+            коды маркировки и сопоставит их с товарами поступления по GTIN.
           </p>
         )}
       </div>
+
+      {result && (
+        <footer className="acc-footer">
+          {!linkedToMs && (
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              Поступление МС не выбрано — отправка в МС недоступна.
+            </span>
+          )}
+          {sendError && (
+            <span style={{ fontSize: 12, color: '#b91c1c' }}>{sendError}</span>
+          )}
+          <div className="acc-footer__spacer" />
+          <button
+            type="button"
+            className="button button--success"
+            disabled={
+              !linkedToMs ||
+              scans.length === 0 ||
+              unmatched.length > 0 ||
+              sending ||
+              alreadyAccepted
+            }
+            title={
+              !linkedToMs
+                ? 'Выберите поступление МойСклад при загрузке УПД'
+                : unmatched.length > 0
+                  ? `Сначала сопоставьте товары (${unmatched.length})`
+                  : undefined
+            }
+            onClick={handleSend}
+          >
+            {alreadyAccepted
+              ? 'Отправлено в МС ✓'
+              : sending
+                ? 'Отправка в МС…'
+                : unmatched.length > 0
+                  ? `Сопоставьте товары (${unmatched.length})`
+                  : 'Отправить приёмку в МС'}
+          </button>
+        </footer>
+      )}
+
+      {sendDone && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(255,255,255,0.92)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+          }}
+        >
+          <div style={{ textAlign: 'center', color: '#1f2937' }}>
+            <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
+              Приёмка отправлена в МойСклад ✓
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280' }}>
+              Коды маркировки записаны в позиции поступления.
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-function ExpandedPosition({
-  position,
-  codes,
-  documentId,
-  onLinked,
-}: {
-  position: ImportPositionResult
-  codes: string[]
-  documentId: string | null
-  onLinked: () => void
-}) {
+function ExpandedPosition({ codes }: { codes: string[] }) {
   const shown = codes.slice(0, 50)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {!position.matched && position.gtin && documentId && (
-        <InlineProductPicker
-          documentId={documentId}
-          gtin={position.gtin}
-          onLinked={onLinked}
-        />
-      )}
-      <div>
-        <div className="field-label" style={{ marginBottom: 4 }}>
-          Коды маркировки {codes.length > 0 ? `(${codes.length})` : ''}
-        </div>
-        {codes.length === 0 ? (
-          <span className="text-muted" style={{ fontSize: 12 }}>
-            Нет кодов для этой позиции
-          </span>
-        ) : (
-          <ul className="upd-codes">
-            {shown.map((c) => (
-              <li key={c} className="code">
-                {c}
-              </li>
-            ))}
-            {codes.length > shown.length && (
-              <li className="text-muted" style={{ fontSize: 11, listStyle: 'none' }}>
-                …и ещё {codes.length - shown.length}
-              </li>
-            )}
-          </ul>
-        )}
+    <div>
+      <div className="field-label" style={{ marginBottom: 4 }}>
+        Коды маркировки {codes.length > 0 ? `(${codes.length})` : ''}
       </div>
+      {codes.length === 0 ? (
+        <span className="text-muted" style={{ fontSize: 12 }}>
+          Нет кодов для этой позиции
+        </span>
+      ) : (
+        <ul className="upd-codes">
+          {shown.map((c) => (
+            <li key={c} className="code">
+              {c}
+            </li>
+          ))}
+          {codes.length > shown.length && (
+            <li className="text-muted" style={{ fontSize: 11, listStyle: 'none' }}>
+              …и ещё {codes.length - shown.length}
+            </li>
+          )}
+        </ul>
+      )}
     </div>
   )
 }
@@ -313,9 +456,6 @@ function InlineProductPicker({
 
   return (
     <div className="upd-picker">
-      <div className="upd-picker__head">
-        Сопоставьте GTIN <code>{gtin}</code> с товаром МойСклад:
-      </div>
       <input
         type="text"
         className="ui-input ui-input--block"
