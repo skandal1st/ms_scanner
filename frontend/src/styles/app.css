@@ -194,6 +194,124 @@ html, body, #root { height: 100%; }
 }
 .acc-footer__spacer { flex: 1; }
 
+/* ---------- Таблица с изменяемой шириной столбцов (приёмка) ---------- */
+.resizable-table {
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.resizable-table thead th {
+  position: relative;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  user-select: none;
+  padding: 8px 10px;
+}
+.resizable-table thead th .rt-th-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resizable-table tbody td {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  padding: 7px 10px;
+}
+.resizable-table .col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+}
+.resizable-table .col-resize-handle:hover {
+  background: var(--ms-link);
+  opacity: 0.35;
+}
+.resizable-table .rt-row-clickable { cursor: pointer; }
+.resizable-table .rt-row-clickable:hover > td { background: #f7fbfe; }
+.resizable-table .rt-empty {
+  text-align: center;
+  color: var(--ms-text-muted);
+  padding: 18px;
+  white-space: normal;
+}
+.resizable-table .rt-expanded > td {
+  background: #f7fbfe;
+  white-space: normal;
+  overflow: visible;
+}
+.resizable-table tr.is-unmatched > td { background: #fff7ed; }
+.resizable-table tr.is-unmatched.rt-row-clickable:hover > td { background: #ffedd5; }
+
+/* ---------- Панель загрузки УПД и сводка ---------- */
+.upd-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.upd-bar__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.upd-summary {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--ms-text);
+}
+.upd-codes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.upd-codes .code { word-break: break-all; }
+.upd-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  max-width: 560px;
+}
+.upd-picker__head { font-size: 12px; color: #9a3412; }
+.upd-picker__results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.upd-picker__result {
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.upd-picker__result:hover { background: #f1f5f9; }
+
 /* ---------- Сканер ---------- */
 .scan-input {
   display: flex;
@@ -339,6 +457,9 @@ html, body, #root { height: 100%; }
 /* ---------- Таблица сканов ---------- */
 .scans-table .scans-row { cursor: pointer; }
 .scans-table .scans-row.is-expanded > td { background: #f7fbfe; }
+/* Коды выбранной позиции: синяя заливка + акцентная левая граница. */
+.scans-table .scans-row.is-selected > td { background: #eff6ff; }
+.scans-table .scans-row.is-selected > td.is-code { box-shadow: inset 3px 0 0 #2563eb; }
 /* Повторный скан существующего кода: строка кратко вспыхивает жёлтым. */
 .scans-table .scans-row.is-flash > td { animation: scan-flash 1.2s ease-out; }
 @keyframes scan-flash {

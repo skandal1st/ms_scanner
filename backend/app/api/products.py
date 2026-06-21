@@ -6,7 +6,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus, Integration
+from app.db.models import User, Scan, Document, ScanStatus, Integration, GtinProductMap
 from app.api.deps import get_current_user
 from app.core.logging import logger
 from app.core.security import decrypt_token
@@ -149,8 +149,34 @@ async def link_gtin_to_product(
         valid_count += 1
         updated += 1
 
+    # Запоминаем соответствие GTIN→товар локально — чтобы следующие загрузки УПД
+    # резолвили его без МС (find_product_by_gtin может быть недоступен / товар без
+    # штрихкода). Дополняет МС-персистенцию ниже (add_gtin_barcode_to_product).
+    map_row = (
+        await db.execute(
+            select(GtinProductMap).where(
+                GtinProductMap.user_id == current_user.id,
+                GtinProductMap.gtin == target_key,
+            )
+        )
+    ).scalar_one_or_none()
+    if map_row:
+        map_row.product_id = pid
+        map_row.product_name = name
+    else:
+        db.add(
+            GtinProductMap(
+                user_id=current_user.id,
+                gtin=target_key,
+                product_id=pid,
+                product_name=name,
+            )
+        )
+
+    # Коммитим всегда — связка GtinProductMap должна сохраниться даже если
+    # подходящих unknown_product сканов в этом документе не оказалось.
+    await db.commit()
     if updated:
-        await db.commit()
         for s in matched:
             await db.refresh(s)
         # WS-пуш по каждому скану, чтобы фронт мгновенно перерисовал.

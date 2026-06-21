@@ -115,6 +115,8 @@ class Document(Base):
     # Списание (loss): код выбранной причины вывода из оборота и id поданных в ЧЗ документов.
     writeoff_reason = Column(String(64), nullable=True)
     cz_doc_ids = Column(JSONB, nullable=True)
+    # Приёмка (supply через загрузку УПД): выбранная товарная группа (молоко/табак/…).
+    product_group = Column(String(64), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -154,6 +156,27 @@ class Scan(Base):
     verified_at = Column(DateTime(timezone=True), nullable=True)
 
     document = relationship("Document", back_populates="scans")
+
+
+class GtinProductMap(Base):
+    """Запоминание соответствия GTIN → товар МС для приёмки по УПД.
+
+    При ручном сопоставлении несмаппленного GTIN кладовщик выбирает товар —
+    связка сохраняется здесь и применяется при следующих загрузках УПД того же
+    пользователя (автоматический резолв до похода в каталог МС).
+    """
+    __tablename__ = "gtin_product_map"
+    __table_args__ = (
+        UniqueConstraint("user_id", "gtin", name="ix_gtin_product_map_user_gtin"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    gtin = Column(String(14), nullable=False)
+    product_id = Column(String(64), nullable=False)
+    product_name = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class CzLog(Base):

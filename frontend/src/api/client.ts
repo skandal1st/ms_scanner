@@ -170,6 +170,58 @@ export const productsApi = {
     }),
 }
 
+// ---------- Приёмка по УПД (XML 5.03) ----------
+
+export interface ProductGroup {
+  code: string
+  label: string
+}
+
+export interface AcceptanceDoc {
+  id: string
+  name: string
+  kind: string
+  status: 'draft' | 'processing' | 'accepted'
+  product_group: string | null
+  scan_count: number
+}
+
+export interface ImportPositionResult {
+  name: string
+  gtin: string | null
+  article: string | null
+  quantity: number | null
+  codes_count: number
+  packages_count: number
+  product_id: string | null
+  product_name: string | null
+  matched: boolean
+}
+
+export interface ImportUpdResult {
+  document_id: string
+  positions: ImportPositionResult[]
+  created_scans: number
+  skipped_duplicates: number
+  unmatched_gtins: string[]
+}
+
+export const acceptanceApi = {
+  productGroups: () => api.get<ProductGroup[]>('/acceptance/product-groups'),
+  createDoc: (name: string, product_group: string) =>
+    api.post<AcceptanceDoc>('/acceptance/documents', { name, product_group }),
+  getDoc: (id: string) => api.get<AcceptanceDoc>(`/acceptance/documents/${id}`),
+  importUpd: (documentId: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post<ImportUpdResult>(
+      `/acceptance/documents/${documentId}/import-upd`,
+      form,
+      { headers: { 'Content-Type': 'multipart/form-data' } },
+    )
+  },
+}
+
 export interface Integration {
   has_moysklad: boolean
   moysklad_account_name: string | null
