@@ -1,5 +1,9 @@
 import { useState } from 'react'
-import { useScanStore } from '../store/scanStore'
+import {
+  useScanStore,
+  effectiveGtinKey,
+  selectionMatchesScan,
+} from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 
 const STATUS_CONFIG = {
@@ -13,7 +17,7 @@ const STATUS_CONFIG = {
 } as const
 
 export function CodesTable() {
-  const { scans, removeScan, flashScanId } = useScanStore()
+  const { scans, removeScan, flashScanId, selection, togglePositionSelection } = useScanStore()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (scans.length === 0) {
@@ -37,7 +41,14 @@ export function CodesTable() {
             scan={scan}
             isExpanded={expanded === scan.id}
             isFlash={flashScanId === scan.id}
-            onToggle={() => setExpanded(expanded === scan.id ? null : scan.id)}
+            isSelected={Boolean(selection && selectionMatchesScan(selection, scan))}
+            onToggle={() => {
+              setExpanded(expanded === scan.id ? null : scan.id)
+              togglePositionSelection({
+                productId: scan.moysklad_product_id ?? null,
+                gtinKey: effectiveGtinKey(scan),
+              })
+            }}
             onDelete={async () => {
               await scansApi.delete(scan.id)
               removeScan(scan.id)
@@ -53,12 +64,14 @@ function ScanRow({
   scan,
   isExpanded,
   isFlash,
+  isSelected,
   onToggle,
   onDelete,
 }: {
   scan: Scan
   isExpanded: boolean
   isFlash: boolean
+  isSelected: boolean
   onToggle: () => void
   onDelete: () => void
 }) {
@@ -70,7 +83,7 @@ function ScanRow({
   return (
     <>
       <tr
-        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''}`}
+        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''}`}
         onClick={onToggle}
       >
         <td className="is-code">

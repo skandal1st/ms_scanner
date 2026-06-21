@@ -26,6 +26,12 @@ export interface ProgressRow {
   pendingCount?: number
 }
 
+/** Выбранная позиция для взаимной подсветки позиция↔коды (по product_id и/или GTIN). */
+export interface PositionSelection {
+  productId: string | null
+  gtinKey: string | null
+}
+
 export interface PlanProgress {
   /** Есть план из МС (ожидаемые количества по GTIN). */
   hasPlan: boolean
@@ -46,6 +52,11 @@ interface ScanStore {
   /** Явный товар МС для следующих сканов (UUID); null = только авто по GTIN/плану. */
   targetProductId: string | null
   setTargetProductId: (id: string | null) => void
+  /** Активная позиция для взаимной подсветки позиция↔коды; объединена с targetProductId. */
+  selection: PositionSelection | null
+  setSelection: (sel: PositionSelection | null) => void
+  /** Переключить выбор позиции: повторный клик по той же позиции снимает подсветку. */
+  togglePositionSelection: (sel: PositionSelection) => void
   /** Режим удаления: следующий отсканированный код будет удалён из списка, а не добавлен. */
   deleteMode: boolean
   setDeleteMode: (v: boolean) => void
@@ -126,6 +137,26 @@ function scanMatchesPlanRow(
     Boolean(planProductId && scan.moysklad_product_id) &&
     scan.moysklad_product_id === planProductId
   const byGtin = Boolean(planKey && effectiveGtinKey(scan) === planKey)
+  return byPid || byGtin
+}
+
+/** Скан принадлежит выбранной позиции (для подсветки кодов). */
+export function selectionMatchesScan(sel: PositionSelection, scan: Scan): boolean {
+  return scanMatchesPlanRow(scan, sel.gtinKey, sel.productId)
+}
+
+/** Строка прогресса соответствует выбранной позиции (для подсветки позиции). */
+export function selectionMatchesRow(sel: PositionSelection, row: ProgressRow): boolean {
+  const byPid = Boolean(sel.productId && row.product_id) && row.product_id === sel.productId
+  const byGtin = Boolean(sel.gtinKey && normalizeGtinKey(row.gtin) === sel.gtinKey)
+  return byPid || byGtin
+}
+
+/** Две позиции — одна и та же (по product_id или по GTIN). */
+function sameSelection(a: PositionSelection | null, b: PositionSelection): boolean {
+  if (!a) return false
+  const byPid = Boolean(a.productId && b.productId) && a.productId === b.productId
+  const byGtin = Boolean(a.gtinKey && b.gtinKey) && a.gtinKey === b.gtinKey
   return byPid || byGtin
 }
 
@@ -234,6 +265,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   scans: [],
   stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
   targetProductId: null,
+  selection: null,
   deleteMode: false,
   unpackBox: true,
   czTokenExpired: false,
@@ -242,6 +274,13 @@ export const useScanStore = create<ScanStore>((set, get) => ({
 
   setWriteoffResult: (v) => set({ writeoffResult: v }),
   setTargetProductId: (id) => set({ targetProductId: id }),
+  setSelection: (sel) => set({ selection: sel }),
+  togglePositionSelection: (sel) =>
+    set((state) =>
+      sameSelection(state.selection, sel)
+        ? { selection: null, targetProductId: null }
+        : { selection: sel, targetProductId: sel.productId },
+    ),
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),
   setCzTokenExpired: (v) => set({ czTokenExpired: v }),
@@ -253,7 +292,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     }, 1200)
   },
 
-  setDocument: (doc) => set({ document: doc, targetProductId: null, deleteMode: false }),
+  setDocument: (doc) => set({ document: doc, targetProductId: null, selection: null, deleteMode: false }),
 
   setScans: (scans) => set({ scans, stats: calcStats(scans) }),
 
@@ -281,6 +320,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       scans: [],
       stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
       targetProductId: null,
+      selection: null,
       deleteMode: false,
     }),
 

@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import { useScanStore, buildProgress } from '../store/scanStore'
+import {
+  useScanStore,
+  buildProgress,
+  normalizeGtinKey,
+  selectionMatchesRow,
+} from '../store/scanStore'
 import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
@@ -10,6 +15,9 @@ export function ProgressTable() {
   const overflow = useScanStore((s) => s.stats.overflow)
   const targetProductId = useScanStore((s) => s.targetProductId)
   const setTargetProductId = useScanStore((s) => s.setTargetProductId)
+  const selection = useScanStore((s) => s.selection)
+  const setSelection = useScanStore((s) => s.setSelection)
+  const togglePositionSelection = useScanStore((s) => s.togglePositionSelection)
   const progress = buildProgress(plan, scans)
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(COLLAPSE_KEY) === '1',
@@ -86,7 +94,10 @@ export function ProgressTable() {
                 ? { background: '#eff6ff', borderColor: '#93c5fd', color: '#1e40af' }
                 : {}),
             }}
-            onClick={() => setTargetProductId(null)}
+            onClick={() => {
+              setTargetProductId(null)
+              setSelection(null)
+            }}
           >
             Авто (по GTIN / плану)
           </button>
@@ -115,29 +126,34 @@ export function ProgressTable() {
             ? `Добавлено ${item.addedTotal}${item.expected > 0 ? ` из ${item.expected}` : ''}`
             : `Добавлено: ${item.addedTotal}`
 
+          const gtinKey = normalizeGtinKey(item.gtin)
+          const selectable = Boolean(item.product_id || gtinKey)
           const isTarget = Boolean(item.product_id && targetProductId === item.product_id)
+          const isSelected = Boolean(selection && selectionMatchesRow(selection, item))
+          const select = () =>
+            togglePositionSelection({ productId: item.product_id, gtinKey })
           const rowStyle: CSSProperties = {
             ...styles.row,
-            cursor: item.product_id ? 'pointer' : 'default',
-            outline: isTarget ? '2px solid #2563eb' : undefined,
+            cursor: selectable ? 'pointer' : 'default',
+            outline: isTarget || isSelected ? '2px solid #2563eb' : undefined,
             outlineOffset: 2,
             borderRadius: 6,
-            padding: item.product_id ? '2px 4px' : undefined,
-            margin: item.product_id ? '-2px -4px' : undefined,
+            padding: selectable ? '2px 4px' : undefined,
+            margin: selectable ? '-2px -4px' : undefined,
           }
 
           return (
             <div
               key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}
               style={rowStyle}
-              role={item.product_id ? 'button' : undefined}
-              tabIndex={item.product_id ? 0 : undefined}
-              onClick={() => item.product_id && setTargetProductId(item.product_id)}
+              role={selectable ? 'button' : undefined}
+              tabIndex={selectable ? 0 : undefined}
+              onClick={() => selectable && select()}
               onKeyDown={(e) => {
-                if (!item.product_id) return
+                if (!selectable) return
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  setTargetProductId(item.product_id)
+                  select()
                 }
               }}
             >
