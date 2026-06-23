@@ -105,10 +105,28 @@ class MoySkladService:
             resp.raise_for_status()
             return resp.json()
 
+    @staticmethod
+    def _gtin_from_barcode_obj(bc: Any) -> Optional[str]:
+        """barcode-объект МС ({gtin|ean13|ean8: ...}) → нормализованный GTIN-14 key или None.
+
+        Нормализуем до GTIN-14: сканер DataMatrix шлёт `01<14цифр>`. Если в МС товар
+        с EAN-13 (13 цифр) — добавляем ведущий 0 (стандарт GS1), иначе скан не сматчится.
+        """
+        if not isinstance(bc, dict):
+            return None
+        raw = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
+        if raw is None or str(raw).strip() == "":
+            return None
+        raw_str = str(raw).strip()
+        if raw_str.isdigit() and len(raw_str) <= 14:
+            return normalize_gtin_key(raw_str.zfill(14))
+        return normalize_gtin_key(raw_str)
+
     async def build_plan(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
         """
         Построить план сборки из позиций МС-документа.
-        Возвращает [{gtin, product_id, product_name, expected_qty}].
+        Возвращает [{gtin, product_id, product_name, expected_qty, pack_gtins}].
+        `pack_gtins` — GTIN'ы упаковок товара (блок/короб) для резолва на тот же товар.
         Использует expand=positions.assortment чтобы получить товары вместе
         с позициями — избегаем N+1 запросов.
         """
@@ -123,23 +141,21 @@ class MoySkladService:
                 # пропускаем услуги/неопределённые позиции
                 continue
             product_name = asrt.get("name") or ""
-            barcodes = asrt.get("barcodes") or []
-            # Ищем GTIN среди штрихкодов товара (поле gtin или ean13).
-            # Нормализуем до GTIN-14: сканер DataMatrix шлёт `01<14цифр>`,
-            # extract_gtin извлекает 14 цифр после AI 01. Если в МС товар
-            # с EAN-13 (13 цифр) — добавляем ведущий 0 (стандарт GS1).
-            # Иначе план не сматчится с реальным сканом.
+            # Ищем GTIN среди штрихкодов базовой единицы товара (поле gtin или ean13).
             gtin = None
-            for bc in barcodes:
-                if isinstance(bc, dict):
-                    raw = bc.get("gtin") or bc.get("ean13") or bc.get("ean8")
-                    if raw is not None and str(raw).strip() != "":
-                        raw_str = str(raw).strip()
-                        if raw_str.isdigit() and len(raw_str) <= 14:
-                            gtin = normalize_gtin_key(raw_str.zfill(14))
-                        else:
-                            gtin = normalize_gtin_key(raw_str)
-                        break
+            for bc in (asrt.get("barcodes") or []):
+                gtin = self._gtin_from_barcode_obj(bc)
+                if gtin:
+                    break
+            # Штрихкоды упаковок товара (раздел «Упаковки» в МС: блок/короб со своим
+            # GTIN). Их КМ в УПД должны лечь в тот же товар — индексируем как доп.
+            # ключи резолва. Структура МС: packs:[{id, quantity, uom, barcodes:[{...}]}].
+            pack_gtins: List[str] = []
+            for pk in (asrt.get("packs") or []):
+                for bc in (pk.get("barcodes") or []):
+                    g = self._gtin_from_barcode_obj(bc)
+                    if g and g != gtin and g not in pack_gtins:
+                        pack_gtins.append(g)
             qty = pos.get("quantity") or 0
             try:
                 expected_qty = int(qty)
@@ -153,6 +169,7 @@ class MoySkladService:
                     "product_id": product_id,
                     "product_name": product_name,
                     "expected_qty": expected_qty,
+                    "pack_gtins": pack_gtins,
                 }
             )
         return plan

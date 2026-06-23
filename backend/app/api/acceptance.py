@@ -285,12 +285,19 @@ async def import_upd(
     for p in doc.plan or []:
         if not isinstance(p, dict):
             continue
-        g = normalize_gtin_key(p.get("gtin"))
         pid = p.get("product_id")
-        if g and pid and isinstance(pid, str):
-            plan_map.setdefault(
-                g, (pid, (p.get("product_name") or "").strip() or None)
-            )
+        if not (pid and isinstance(pid, str)):
+            continue
+        name = (p.get("product_name") or "").strip() or None
+        g = normalize_gtin_key(p.get("gtin"))
+        if g:
+            plan_map.setdefault(g, (pid, name))
+        # GTIN упаковок (блок/короб) → тот же товар: КМ блока резолвятся в позицию
+        # поступления, иначе помечаются «нужен товар».
+        for pg in p.get("pack_gtins") or []:
+            pgk = normalize_gtin_key(pg)
+            if pgk:
+                plan_map.setdefault(pgk, (pid, name))
 
     # Уже имеющиеся коды документа — чтобы не плодить дубли при повторной загрузке.
     existing_codes = set(
