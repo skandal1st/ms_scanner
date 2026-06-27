@@ -31,8 +31,19 @@ class ParsedPosition:
     quantity: Optional[float]
     # Листовые КИЗ (коды маркировки единиц товара).
     codes: list[str] = field(default_factory=list)
-    # Номера упаковок (НомУпак): SSCC/агрегаты — в v1 храним как есть, без разворота.
+    # Номера упаковок (НомУпак/ИдентТрансУпак): SSCC/агрегаты/короба — храним как есть.
     packages: list[str] = field(default_factory=list)
+    # Цена за единицу (ЦенаТов, руб.) и ставка НДС (НалСт, напр. 20 из «20%»).
+    price: Optional[float] = None
+    vat: Optional[int] = None
+
+
+@dataclass
+class ParsedUpd:
+    """Результат разбора УПД: позиции + реквизиты счёта-фактуры (шапка)."""
+    positions: list[ParsedPosition]
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
 
 
 class UpdParseError(Exception):
@@ -114,6 +125,19 @@ def _quantity(raw: Optional[str]) -> Optional[float]:
         return None
 
 
+def _vat_rate(raw: Optional[str]) -> Optional[int]:
+    """Ставка НДС из НалСт: «20%» → 20, «без НДС» → None. Берём целое число процентов."""
+    if not raw:
+        return None
+    digits = "".join(c for c in raw if c.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
 def _info_gtin(tov: ET.Element) -> Optional[str]:
     """GTIN из ``<ИнфПолФХЖ2 Идентиф="GTIN" Значен="…"/>`` (прямой потомок СведТов)."""
     for el in _iter_by_localname(tov, "ИнфПолФХЖ2"):
@@ -140,13 +164,19 @@ def _gtin_for_position(
             return normalize_gtin_key(gtin)
     if info_gtin and info_gtin.isdigit():
         return normalize_gtin_key(info_gtin)
-    if article and article.strip().isdigit() and 8 <= len(article.strip()) <= 14:
-        return normalize_gtin_key(article.strip())
+    # Фолбэк для позиций без GTIN (короба SSCC/ИдентТрансУпак не несут GTIN):
+    # стабильный ключ из цифр артикула поставщика (КодТов). Каталожный поиск по
+    # нему не сработает → позиция уйдёт в ручное сопоставление, но связка
+    # GtinProductMap(ключ→товар) запомнится и резолвится при повторной загрузке.
+    if article:
+        art_digits = "".join(c for c in article if c.isdigit())
+        if len(art_digits) >= 6:
+            return normalize_gtin_key(art_digits)
     return None
 
 
-def parse_upd_503(xml_bytes: bytes) -> list[ParsedPosition]:
-    """Распарсить УПД 5.03 → список товарных позиций с КМ.
+def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
+    """Распарсить УПД 5.03 → позиции с КМ + реквизиты счёта-фактуры.
 
     Бросает UpdParseError, если файл не XML или не содержит товарных позиций (СведТов).
     """
@@ -154,6 +184,14 @@ def parse_upd_503(xml_bytes: bytes) -> list[ParsedPosition]:
         root = ET.fromstring(_decode_xml(xml_bytes))
     except ET.ParseError as exc:
         raise UpdParseError(f"Файл не является корректным XML: {exc}") from exc
+
+    # Реквизиты счёта-фактуры из шапки (СвСчФакт): номер и дата документа.
+    invoice_number: Optional[str] = None
+    invoice_date: Optional[str] = None
+    schf = next(_iter_by_localname(root, "СвСчФакт"), None)
+    if schf is not None:
+        invoice_number = (schf.get("НомерДок") or "").strip() or None
+        invoice_date = (schf.get("ДатаДок") or "").strip() or None
 
     positions: list[ParsedPosition] = []
     for tov in _iter_by_localname(root, "СведТов"):
@@ -165,12 +203,21 @@ def parse_upd_503(xml_bytes: bytes) -> list[ParsedPosition]:
         if dop is not None:
             article = (dop.get("КодТов") or dop.get("Артикул") or "").strip() or None
 
-        # КИЗ (листовые КМ) и НомУпак (агрегаты) внутри НомСредИдентТов.
+        # Коды в НомСредИдентТов лежат либо текстом дочернего тега (КИЗ/НомУпак),
+        # либо в атрибуте самого тега (вариант 1С: <НомСредИдентТов ИдентТрансУпак="00…"/>
+        # — короб SSCC). КИЗ → штучные, НомУпак/ИдентТрансУпак → агрегаты/короба.
         codes: list[str] = []
         packages: list[str] = []
         for ident in _iter_by_localname(tov, "НомСредИдентТов"):
             codes.extend(_text_codes(ident, ("КИЗ",)))
             packages.extend(_text_codes(ident, ("НомУпак",)))
+            kiz_attr = (ident.get("КИЗ") or "").strip()
+            if kiz_attr:
+                codes.append(kiz_attr)
+            for attr in ("НомУпак", "ИдентТрансУпак"):
+                v = (ident.get(attr) or "").strip()
+                if v:
+                    packages.append(v)
 
         # Позиции без маркировки (КИЗ/НомУпак) для приёмки нам неинтересны, но
         # позицию всё равно отдаём — фронт покажет «без марок».
@@ -185,6 +232,8 @@ def parse_upd_503(xml_bytes: bytes) -> list[ParsedPosition]:
                 quantity=quantity,
                 codes=codes,
                 packages=packages,
+                price=_quantity(tov.get("ЦенаТов")),
+                vat=_vat_rate(tov.get("НалСт")),
             )
         )
 
@@ -199,5 +248,10 @@ def parse_upd_503(xml_bytes: bytes) -> list[ParsedPosition]:
         positions=len(positions),
         codes=sum(len(p.codes) for p in positions),
         packages=sum(len(p.packages) for p in positions),
+        invoice_number=invoice_number,
     )
-    return positions
+    return ParsedUpd(
+        positions=positions,
+        invoice_number=invoice_number,
+        invoice_date=invoice_date,
+    )

@@ -685,9 +685,10 @@ async def _process_document_async(document_id: str, user_id: str):
             }
             unique_gtins.discard(None)
             gtin_to_product_id: dict[str, str] = {}
-            # Кол-во позиции из плана (для supply — КолТов УПД): product_id → qty.
+            # Кол-во/цена/НДС позиции из плана (для supply — из УПД): product_id → …
             # Используется при создании новых позиций поступления в МС.
             product_qty: dict[str, int] = {}
+            product_price: dict[str, dict] = {}
             for p in doc.plan or []:
                 if not isinstance(p, dict):
                     continue
@@ -702,6 +703,25 @@ async def _process_document_async(document_id: str, user_id: str):
                         q = 0
                     if q > 0:
                         product_qty[pid] = q
+                    pr: dict = {}
+                    if p.get("price") is not None:
+                        pr["price"] = p.get("price")
+                    if p.get("vat") is not None:
+                        pr["vat"] = p.get("vat")
+                    if pr:
+                        product_price[pid] = pr
+
+            # Комментарий поступления: «Импорт с ЭДО» + реквизиты счёта-фактуры из УПД.
+            ms_description: Optional[str] = None
+            if kind == "supply":
+                meta = doc.upd_meta or {}
+                inv_no = (meta.get("invoice_number") or "").strip()
+                inv_dt = (meta.get("invoice_date") or "").strip()
+                ms_description = "Импорт с ЭДО"
+                if inv_no:
+                    ms_description += f". Счёт-фактура № {inv_no}"
+                    if inv_dt:
+                        ms_description += f" от {inv_dt}"
 
             for gtin in unique_gtins:
                 if not gtin or gtin in gtin_to_product_id:
@@ -763,7 +783,12 @@ async def _process_document_async(document_id: str, user_id: str):
                     )
                     break
                 result = await ms.update_document(
-                    kind, doc.moysklad_id, scans_data, position_quantities=product_qty
+                    kind,
+                    doc.moysklad_id,
+                    scans_data,
+                    position_quantities=product_qty,
+                    position_prices=product_price,
+                    description=ms_description,
                 )
                 if isinstance(result, dict) and result.get("__moysklad_412__") is True:
                     body = result.get("body") or ""

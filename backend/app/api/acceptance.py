@@ -27,7 +27,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
 from app.services.chestnyznak import normalize_gtin_key, parse_gs1_km_gtin_serial
-from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition
+from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition, ParsedUpd
 
 router = APIRouter(prefix="/acceptance", tags=["acceptance"])
 
@@ -286,9 +286,17 @@ async def import_upd(
     if not raw:
         raise HTTPException(status_code=400, detail="Пустой файл")
     try:
-        positions: list[ParsedPosition] = parse_upd_503(raw)
+        parsed: ParsedUpd = parse_upd_503(raw)
     except UpdParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    positions: list[ParsedPosition] = parsed.positions
+
+    # Реквизиты счёта-фактуры из шапки УПД → для комментария поступления МС.
+    if parsed.invoice_number or parsed.invoice_date:
+        doc.upd_meta = {
+            "invoice_number": parsed.invoice_number,
+            "invoice_date": parsed.invoice_date,
+        }
 
     ms = await _maybe_ms_service(current_user, db)
 
@@ -393,11 +401,17 @@ async def import_upd(
                         "expected_qty": 0,
                     },
                 )
-                if g == order[0] and pos.quantity:
-                    try:
-                        entry["expected_qty"] += int(pos.quantity)
-                    except (TypeError, ValueError):
-                        pass
+                if g == order[0]:
+                    if pos.quantity:
+                        try:
+                            entry["expected_qty"] += int(pos.quantity)
+                        except (TypeError, ValueError):
+                            pass
+                    # Цена/НДS из УПД — на «основную» группу позиции.
+                    if pos.price is not None:
+                        entry["price"] = pos.price
+                    if pos.vat is not None:
+                        entry["vat"] = pos.vat
 
             for code in bucket["codes"]:
                 if code in existing_codes:

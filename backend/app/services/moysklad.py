@@ -274,6 +274,8 @@ class MoySkladService:
         doc_id: str,
         scans: List[Dict],
         position_quantities: Optional[Dict[str, int]] = None,
+        position_prices: Optional[Dict[str, Dict[str, Any]]] = None,
+        description: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Обновить позиции МС-документа на основе сканов.
@@ -399,6 +401,19 @@ class MoySkladService:
                     },
                     "quantity": qty,
                 }
+                # Цена (МС хранит в копейках) и НДС из УПД.
+                pp = (position_prices or {}).get(product_id) or {}
+                if pp.get("price") is not None:
+                    try:
+                        position["price"] = int(round(float(pp["price"]) * 100))
+                    except (TypeError, ValueError):
+                        pass
+                if pp.get("vat") is not None:
+                    try:
+                        position["vat"] = int(pp["vat"])
+                        position["vatEnabled"] = True
+                    except (TypeError, ValueError):
+                        pass
                 if write_codes:
                     position["trackingCodes"] = [
                         self._tracking_code_entry(s, None)
@@ -407,11 +422,14 @@ class MoySkladService:
                     ]
                 positions.append(position)
 
+        put_body: Dict[str, Any] = {"positions": positions}
+        if description:
+            put_body["description"] = description
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.put(
                 f"{self.base_url}/entity/{kind}/{doc_id}",
                 headers=self.headers,
-                json={"positions": positions},
+                json=put_body,
             )
             if resp.status_code >= 400:
                 # raise_for_status() прячет тело ответа МС с реальной причиной.

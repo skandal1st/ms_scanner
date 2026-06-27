@@ -117,6 +117,8 @@ class Document(Base):
     cz_doc_ids = Column(JSONB, nullable=True)
     # Приёмка (supply через загрузку УПД): выбранная товарная группа (молоко/табак/…).
     product_group = Column(String(64), nullable=True)
+    # Реквизиты из шапки УПД для комментария поступления МС: {invoice_number, invoice_date}.
+    upd_meta = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
