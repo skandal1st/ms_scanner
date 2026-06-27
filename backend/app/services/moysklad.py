@@ -125,8 +125,9 @@ class MoySkladService:
     async def build_plan(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
         """
         Построить план сборки из позиций МС-документа.
-        Возвращает [{gtin, product_id, product_name, expected_qty, pack_gtins}].
+        Возвращает [{gtin, article, code, product_id, product_name, expected_qty, pack_gtins}].
         `pack_gtins` — GTIN'ы упаковок товара (блок/короб) для резолва на тот же товар.
+        `article`/`code` — для сопоставления коробных (SSCC) позиций УПД по КодТов.
         Использует expand=positions.assortment чтобы получить товары вместе
         с позициями — избегаем N+1 запросов.
         """
@@ -166,6 +167,10 @@ class MoySkladService:
             plan.append(
                 {
                     "gtin": gtin,
+                    # Артикул/код товара МС — для сопоставления коробных (SSCC)
+                    # позиций УПД по КодТов, когда у позиции нет своего GTIN.
+                    "article": (asrt.get("article") or "").strip() or None,
+                    "code": (asrt.get("code") or "").strip() or None,
                     "product_id": product_id,
                     "product_name": product_name,
                     "expected_qty": expected_qty,

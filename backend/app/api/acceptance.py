@@ -216,57 +216,93 @@ def _code_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
     return fallback
 
 
+def _package_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
+    """GTIN агрегатной упаковки. Фолбэк — GTIN позиции.
+
+    Блок (``НомУпак``) несёт свой ``01``+GTIN — выделяем его. Транспортная
+    упаковка (``ИдентТрансУпак``, SSCC с AI ``00``) GTIN НЕ несёт: её первые 14
+    цифр — это префикс компании + серийный номер короба, **одинаковый у разных
+    товаров** одной поставки. Извлекать из неё «GTIN» нельзя (иначе все позиции
+    схлопнутся в один фантомный GTIN) — относим короб к товару позиции (fallback).
+    """
+    if code.startswith("01"):
+        gtin, _ = parse_gs1_km_gtin_serial(code)
+        if gtin:
+            return normalize_gtin_key(gtin)
+    return fallback
+
+
+def _norm_article(v: Optional[str]) -> Optional[str]:
+    """Нормализованный ключ артикула/КодТов для сопоставления УПД ↔ позиции МС."""
+    if not v:
+        return None
+    s = str(v).strip().upper()
+    return s or None
+
+
 async def _resolve_product(
     gtin: Optional[str],
+    article: Optional[str],
     user_id: UUID,
     ms: Optional[MoySkladService],
     db: AsyncSession,
     cache: dict[str, tuple[Optional[str], Optional[str]]],
     plan_map: dict[str, tuple[str, Optional[str]]],
+    article_map: dict[str, tuple[str, Optional[str]]],
 ) -> tuple[Optional[str], Optional[str]]:
-    """(product_id, product_name) по GTIN: сначала позиции привязанного поступления
-    МС (plan_map), затем запомненная связка, затем каталог МС."""
-    if not gtin:
-        return (None, None)
-    if gtin in cache:
-        return cache[gtin]
+    """(product_id, product_name) для группы кодов: сначала позиции привязанного
+    поступления МС по GTIN (plan_map), затем запомненная связка, затем каталог МС,
+    и наконец — по КодТов/артикулу против позиций поступления (article_map).
 
-    # 0. Позиция привязанного поступления МС — приоритетнее всего: КМ должны лечь
-    #    именно в товар из этого документа.
-    gk = normalize_gtin_key(gtin)
-    if gk and gk in plan_map:
-        result = plan_map[gk]
-        cache[gtin] = result
+    Резолв по артикулу нужен для коробных (SSCC/ИдентТрансУпак) позиций без штучных
+    КМ: собственного GTIN у них нет, единственный надёжный идентификатор — КодТов."""
+    cache_key = gtin or (f"art:{_norm_article(article)}" if article else None)
+    if cache_key and cache_key in cache:
+        return cache[cache_key]
+
+    def _done(result: tuple[Optional[str], Optional[str]]) -> tuple[Optional[str], Optional[str]]:
+        if cache_key:
+            cache[cache_key] = result
         return result
 
-    # 1. Запомненное ручное соответствие.
-    map_row = (
-        await db.execute(
-            select(GtinProductMap).where(
-                GtinProductMap.user_id == user_id,
-                GtinProductMap.gtin == gtin,
+    if gtin:
+        # 0. Позиция привязанного поступления МС — приоритетнее всего: КМ должны лечь
+        #    именно в товар из этого документа.
+        gk = normalize_gtin_key(gtin)
+        if gk and gk in plan_map:
+            return _done(plan_map[gk])
+
+        # 1. Запомненное ручное соответствие.
+        map_row = (
+            await db.execute(
+                select(GtinProductMap).where(
+                    GtinProductMap.user_id == user_id,
+                    GtinProductMap.gtin == gtin,
+                )
             )
-        )
-    ).scalar_one_or_none()
-    if map_row:
-        result = (map_row.product_id, map_row.product_name)
-        cache[gtin] = result
-        return result
+        ).scalar_one_or_none()
+        if map_row:
+            return _done((map_row.product_id, map_row.product_name))
 
-    # 2. Поиск в каталоге МС по штрихкоду.
-    if ms is not None:
-        try:
-            product = await ms.find_product_by_gtin(gtin)
-        except Exception as exc:
-            logger.warning("acceptance.find_product_failed", gtin=gtin, error=str(exc))
-            product = None
-        if product:
-            result = (product.get("id"), (product.get("name") or "").strip() or None)
-            cache[gtin] = result
-            return result
+        # 2. Поиск в каталоге МС по штрихкоду.
+        if ms is not None:
+            try:
+                product = await ms.find_product_by_gtin(gtin)
+            except Exception as exc:
+                logger.warning("acceptance.find_product_failed", gtin=gtin, error=str(exc))
+                product = None
+            if product:
+                return _done(
+                    (product.get("id"), (product.get("name") or "").strip() or None)
+                )
 
-    cache[gtin] = (None, None)
-    return (None, None)
+    # 3. По КодТов/артикулу против позиций привязанного поступления МС. Для коробных
+    #    позиций (только SSCC, без штучных КМ) это единственный путь к товару.
+    art = _norm_article(article)
+    if art and art in article_map:
+        return _done(article_map[art])
+
+    return _done((None, None))
 
 
 @router.post(
@@ -300,9 +336,11 @@ async def import_upd(
 
     ms = await _maybe_ms_service(current_user, db)
 
-    # План привязанного поступления МС: gtin → (product_id, product_name).
-    # Позиции УПД сопоставляются по GTIN именно с этими товарами.
+    # План привязанного поступления МС: gtin → (product_id, product_name) и
+    # КодТов/артикул → (product_id, product_name). Позиции УПД сопоставляются с
+    # этими товарами по GTIN, а коробные (SSCC) позиции без GTIN — по артикулу.
     plan_map: dict[str, tuple[str, Optional[str]]] = {}
+    article_map: dict[str, tuple[str, Optional[str]]] = {}
     for p in doc.plan or []:
         if not isinstance(p, dict):
             continue
@@ -319,6 +357,11 @@ async def import_upd(
             pgk = normalize_gtin_key(pg)
             if pgk:
                 plan_map.setdefault(pgk, (pid, name))
+        # Артикул и код товара МС → тот же товар. КодТов из УПД совпадает с одним
+        # из них для поступления, созданного из того же каталога поставщика.
+        for a in (_norm_article(p.get("article")), _norm_article(p.get("code"))):
+            if a:
+                article_map.setdefault(a, (pid, name))
 
     # Уже имеющиеся коды документа — чтобы не плодить дубли при повторной загрузке.
     existing_codes = set(
@@ -356,11 +399,13 @@ async def import_upd(
             code = code.strip()
             if code:
                 _bucket(_code_gtin(code, pos.gtin))["codes"].append(code)
-        # НомУпак — агрегаты/блоки/SSCC: сохраняем целиком (без разворота).
-        for sscc in pos.packages:
-            sscc = sscc.strip()
-            if sscc:
-                _bucket(_code_gtin(sscc, pos.gtin))["packages"].append(sscc)
+        # Агрегаты/упаковки — сохраняем целиком (без разворота). Блок (НомУпак)
+        # несёт свой 01+GTIN; транспортная упаковка (ИдентТрансУпак, SSCC) GTIN не
+        # несёт → её первые 14 цифр НЕ GTIN, относим к товару позиции.
+        for pkg in pos.packages:
+            pkg = pkg.strip()
+            if pkg:
+                _bucket(_package_gtin(pkg, pos.gtin))["packages"].append(pkg)
 
         # Позиция без кодов — показываем строку «без марок» (как раньше).
         if not order:
@@ -382,7 +427,7 @@ async def import_upd(
         for g in order:
             bucket = groups[g]
             product_id, product_name = await _resolve_product(
-                g, current_user.id, ms, db, resolve_cache, plan_map
+                g, pos.article, current_user.id, ms, db, resolve_cache, plan_map, article_map
             )
             matched = product_id is not None
             if g and not matched:
