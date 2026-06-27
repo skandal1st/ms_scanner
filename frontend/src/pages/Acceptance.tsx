@@ -204,6 +204,7 @@ export function AcceptancePage() {
         </span>
       </header>
 
+      <div className="acc-scroll">
       <div style={{ padding: '12px 16px 0' }}>
         <UpdImportBar busy={busy} onSubmit={handleSubmit} />
 
@@ -278,7 +279,7 @@ export function AcceptancePage() {
         </div>
       )}
 
-      <div className="acc-body" style={{ display: 'block', padding: '12px 16px' }}>
+      <div style={{ padding: '12px 16px' }}>
         {result ? (
           <div className="acc-table-wrap" style={{ background: '#fff' }}>
             <ResizableTable
@@ -302,6 +303,7 @@ export function AcceptancePage() {
             коды маркировки и сопоставит их с товарами поступления по GTIN.
           </p>
         )}
+      </div>
       </div>
 
       {result && (
