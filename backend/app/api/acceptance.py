@@ -26,7 +26,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
-from app.services.chestnyznak import normalize_gtin_key
+from app.services.chestnyznak import normalize_gtin_key, parse_gs1_km_gtin_serial
 from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition
 
 router = APIRouter(prefix="/acceptance", tags=["acceptance"])
@@ -203,6 +203,19 @@ async def create_acceptance_document(
     )
 
 
+def _code_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
+    """GTIN, зашитый в сам код (``01``+GTIN). Фолбэк — GTIN позиции.
+
+    Блочные/агрегатные коды (НомУпак) несут СВОЙ GTIN, отличный от GTIN единиц
+    в той же позиции. Поэтому товар резолвим по GTIN каждого кода, а не по одному
+    GTIN на всю позицию. Для кодов без GTIN (SSCC ``00…``) — фолбэк на GTIN позиции.
+    """
+    gtin, _ = parse_gs1_km_gtin_serial(code)
+    if gtin:
+        return normalize_gtin_key(gtin)
+    return fallback
+
+
 async def _resolve_product(
     gtin: Optional[str],
     user_id: UUID,
@@ -315,67 +328,105 @@ async def import_upd(
     skipped = 0
 
     for pos in positions:
-        product_id, product_name = await _resolve_product(
-            pos.gtin, current_user.id, ms, db, resolve_cache, plan_map
-        )
-        matched = product_id is not None
-        if pos.gtin and not matched:
-            unmatched.add(pos.gtin)
+        # Группируем коды позиции по их СОБСТВЕННОМУ GTIN (01+GTIN внутри кода).
+        # Блочные/смешанные позиции содержат коды с разными GTIN — каждый код
+        # резолвится в свой товар, а не в один GTIN на всю позицию (вариант B).
+        groups: dict[Optional[str], dict[str, list[str]]] = {}
+        order: list[Optional[str]] = []
 
-        status = ScanStatus.valid if matched else ScanStatus.unknown_product
+        def _bucket(g: Optional[str]) -> dict[str, list[str]]:
+            if g not in groups:
+                groups[g] = {"codes": [], "packages": []}
+                order.append(g)
+            return groups[g]
 
-        # КИЗ — штучные КМ.
         for code in pos.codes:
             code = code.strip()
-            if not code or code in existing_codes:
-                skipped += 1
-                continue
-            existing_codes.add(code)
-            db.add(
-                Scan(
-                    document_id=document_id,
-                    code=code,
-                    gtin=pos.gtin,
-                    moysklad_product_id=product_id,
-                    product_name=product_name,
-                    status=status,
-                )
-            )
-            created += 1
-
-        # НомУпак — агрегаты/SSCC: сохраняем целиком (без разворота в v1).
+            if code:
+                _bucket(_code_gtin(code, pos.gtin))["codes"].append(code)
+        # НомУпак — агрегаты/блоки/SSCC: сохраняем целиком (без разворота).
         for sscc in pos.packages:
             sscc = sscc.strip()
-            if not sscc or sscc in existing_codes:
-                skipped += 1
-                continue
-            existing_codes.add(sscc)
-            db.add(
-                Scan(
-                    document_id=document_id,
-                    code=sscc,
+            if sscc:
+                _bucket(_code_gtin(sscc, pos.gtin))["packages"].append(sscc)
+
+        # Позиция без кодов — показываем строку «без марок» (как раньше).
+        if not order:
+            results.append(
+                ImportPositionResult(
+                    name=pos.name,
                     gtin=pos.gtin,
-                    moysklad_product_id=product_id,
-                    product_name=product_name,
-                    status=status,
-                    is_box=True,
+                    article=pos.article,
+                    quantity=pos.quantity,
+                    codes_count=0,
+                    packages_count=0,
+                    product_id=None,
+                    product_name=None,
+                    matched=False,
                 )
             )
-            created += 1
+            continue
 
-        results.append(
-            ImportPositionResult(
-                name=pos.name,
-                gtin=pos.gtin,
-                article=pos.article,
-                quantity=pos.quantity,
-                codes_count=len(pos.codes),
-                packages_count=len(pos.packages),
-                product_id=product_id,
-                product_name=product_name,
-                matched=matched,
+        for g in order:
+            bucket = groups[g]
+            product_id, product_name = await _resolve_product(
+                g, current_user.id, ms, db, resolve_cache, plan_map
             )
-        )
+            matched = product_id is not None
+            if g and not matched:
+                unmatched.add(g)
+            status = ScanStatus.valid if matched else ScanStatus.unknown_product
+
+            for code in bucket["codes"]:
+                if code in existing_codes:
+                    skipped += 1
+                    continue
+                existing_codes.add(code)
+                db.add(
+                    Scan(
+                        document_id=document_id,
+                        code=code,
+                        gtin=g,
+                        moysklad_product_id=product_id,
+                        product_name=product_name,
+                        status=status,
+                    )
+                )
+                created += 1
+
+            for sscc in bucket["packages"]:
+                if sscc in existing_codes:
+                    skipped += 1
+                    continue
+                existing_codes.add(sscc)
+                db.add(
+                    Scan(
+                        document_id=document_id,
+                        code=sscc,
+                        gtin=g,
+                        moysklad_product_id=product_id,
+                        product_name=product_name,
+                        status=status,
+                        is_box=True,
+                    )
+                )
+                created += 1
+
+            results.append(
+                ImportPositionResult(
+                    name=pos.name,
+                    gtin=g,
+                    article=pos.article,
+                    # Кол-во (КолТов) — на «основную» строку позиции (GTIN единиц);
+                    # для отделившихся блочных GTIN кол-во неоднозначно → не показываем.
+                    quantity=pos.quantity if g == pos.gtin else None,
+                    codes_count=len(bucket["codes"]),
+                    packages_count=len(bucket["packages"]),
+                    product_id=product_id,
+                    product_name=product_name,
+                    matched=matched,
+                )
+            )
 
     await db.commit()
     logger.info(
