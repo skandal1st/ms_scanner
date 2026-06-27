@@ -326,6 +326,10 @@ async def import_upd(
     unmatched: set[str] = set()
     created = 0
     skipped = 0
+    # Накопление товарных позиций для плана: product_id → {gtin, product_name,
+    # expected_qty}. expected_qty = сумма КолТов (УПД) по «основной» группе позиции.
+    # При «Отправить в МС» из плана создаются позиции поступления с этими кол-вами.
+    plan_acc: dict[str, dict] = {}
 
     for pos in positions:
         # Группируем коды позиции по их СОБСТВЕННОМУ GTIN (01+GTIN внутри кода).
@@ -376,6 +380,24 @@ async def import_upd(
             if g and not matched:
                 unmatched.add(g)
             status = ScanStatus.valid if matched else ScanStatus.unknown_product
+
+            # КолТов позиции относим к товару «основной» (первой) группы — она же
+            # несёт GTIN единиц/строки УПД. Накапливаем по товару для плана.
+            if product_id:
+                entry = plan_acc.setdefault(
+                    product_id,
+                    {
+                        "gtin": g,
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "expected_qty": 0,
+                    },
+                )
+                if g == order[0] and pos.quantity:
+                    try:
+                        entry["expected_qty"] += int(pos.quantity)
+                    except (TypeError, ValueError):
+                        pass
 
             for code in bucket["codes"]:
                 if code in existing_codes:
@@ -428,6 +450,25 @@ async def import_upd(
                 )
             )
 
+    # Обновляем план документа позициями из УПД (товар + КолТов). Сохраняем
+    # pack_gtins из прежнего плана (если поступление МС уже имело позиции), КолТов
+    # УПД имеет приоритет по количеству. Из этого плана при «Отправить в МС»
+    # создаются позиции поступления.
+    existing_by_pid = {
+        p["product_id"]: p
+        for p in (doc.plan or [])
+        if isinstance(p, dict) and p.get("product_id")
+    }
+    new_plan: list[dict] = []
+    for pid, entry in plan_acc.items():
+        old = existing_by_pid.get(pid, {})
+        new_plan.append({**old, **entry, "pack_gtins": old.get("pack_gtins", [])})
+    # Сохраняем позиции прежнего плана, для которых в этом УПД не было кодов.
+    for pid, old in existing_by_pid.items():
+        if pid not in plan_acc:
+            new_plan.append(old)
+    doc.plan = new_plan
+
     await db.commit()
     logger.info(
         "acceptance.upd_imported",
@@ -436,6 +477,7 @@ async def import_upd(
         created_scans=created,
         skipped=skipped,
         unmatched=len(unmatched),
+        plan_products=len(new_plan),
         user_id=str(current_user.id),
     )
 

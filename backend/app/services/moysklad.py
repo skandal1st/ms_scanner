@@ -269,7 +269,11 @@ class MoySkladService:
         return payload
 
     async def update_document(
-        self, kind: str, doc_id: str, scans: List[Dict]
+        self,
+        kind: str,
+        doc_id: str,
+        scans: List[Dict],
+        position_quantities: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
         """
         Обновить позиции МС-документа на основе сканов.
@@ -376,6 +380,15 @@ class MoySkladService:
             # Нет позиций из МС — старый путь (новый/пустой документ)
             positions = []
             for product_id, group in groups.items():
+                # Кол-во позиции: приоритет — КолТов из УПД (position_quantities),
+                # иначе сумма единиц по сканам (fallback на число распознанных кодов).
+                qty = (position_quantities or {}).get(product_id)
+                try:
+                    qty = int(qty) if qty is not None else 0
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty < 1:
+                    qty = sum(self._scan_units(s) for s in group)
                 position: Dict[str, Any] = {
                     "assortment": {
                         "meta": {
@@ -384,7 +397,7 @@ class MoySkladService:
                             "mediaType": "application/json",
                         }
                     },
-                    "quantity": sum(self._scan_units(s) for s in group),
+                    "quantity": qty,
                 }
                 if write_codes:
                     position["trackingCodes"] = [

@@ -685,6 +685,9 @@ async def _process_document_async(document_id: str, user_id: str):
             }
             unique_gtins.discard(None)
             gtin_to_product_id: dict[str, str] = {}
+            # Кол-во позиции из плана (для supply — КолТов УПД): product_id → qty.
+            # Используется при создании новых позиций поступления в МС.
+            product_qty: dict[str, int] = {}
             for p in doc.plan or []:
                 if not isinstance(p, dict):
                     continue
@@ -692,6 +695,13 @@ async def _process_document_async(document_id: str, user_id: str):
                 ng = normalize_gtin_key(g)
                 if ng and pid and isinstance(pid, str):
                     gtin_to_product_id.setdefault(ng, pid)
+                if pid and isinstance(pid, str):
+                    try:
+                        q = int(p.get("expected_qty") or 0)
+                    except (TypeError, ValueError):
+                        q = 0
+                    if q > 0:
+                        product_qty[pid] = q
 
             for gtin in unique_gtins:
                 if not gtin or gtin in gtin_to_product_id:
@@ -752,7 +762,9 @@ async def _process_document_async(document_id: str, user_id: str):
                         scans=len(scans_data),
                     )
                     break
-                result = await ms.update_document(kind, doc.moysklad_id, scans_data)
+                result = await ms.update_document(
+                    kind, doc.moysklad_id, scans_data, position_quantities=product_qty
+                )
                 if isinstance(result, dict) and result.get("__moysklad_412__") is True:
                     body = result.get("body") or ""
                     m = re.search(
