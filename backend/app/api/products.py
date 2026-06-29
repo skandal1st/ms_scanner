@@ -173,6 +173,33 @@ async def link_gtin_to_product(
             )
         )
 
+    # Переносим в план документа цену/НДС/кол-во из УПД для привязанного товара —
+    # иначе при «Отправить в МС» поступление запишется без цены и НДС (до ручной
+    # привязки план не содержал этот товар). Источник — upd_meta["positions"],
+    # которое import_upd заполняет по GTIN независимо от сопоставления товара.
+    if updated:
+        upd_pos = ((doc.upd_meta or {}).get("positions") or {}).get(target_key) or {}
+        plan = list(doc.plan or [])
+        entry = next(
+            (p for p in plan if isinstance(p, dict) and p.get("product_id") == pid),
+            None,
+        )
+        if entry is None:
+            entry = {"product_id": pid, "gtin": target_key}
+            plan.append(entry)
+        entry["gtin"] = target_key
+        if name:
+            entry["product_name"] = name
+        if upd_pos.get("price") is not None:
+            entry["price"] = upd_pos["price"]
+        if upd_pos.get("vat") is not None:
+            entry["vat"] = upd_pos["vat"]
+        # Кол-во: приоритет КолТов из УПД, иначе число сопоставленных сканов.
+        qty = upd_pos.get("quantity") or len(matched)
+        if qty:
+            entry["expected_qty"] = qty
+        doc.plan = plan
+
     # Коммитим всегда — связка GtinProductMap должна сохраниться даже если
     # подходящих unknown_product сканов в этом документе не оказалось.
     await db.commit()

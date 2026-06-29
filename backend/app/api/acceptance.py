@@ -327,12 +327,37 @@ async def import_upd(
         raise HTTPException(status_code=422, detail=str(exc))
     positions: list[ParsedPosition] = parsed.positions
 
+    # Цена/НДС/кол-во из УПД по GTIN позиции — сохраняем НЕЗАВИСИМО от того,
+    # сопоставился ли товар. Нужны при ручной привязке GTIN (link-gtin), чтобы
+    # перенести их в план и записать в поступление МС: для пустых поступлений
+    # GTIN'ы часто резолвятся вручную, а на этом этапе цена/НДС из плана уже нет.
+    upd_positions: dict[str, dict] = {}
+    for pos in positions:
+        key = normalize_gtin_key(pos.gtin)
+        if not key:
+            continue
+        info: dict = {}
+        if pos.price is not None:
+            info["price"] = pos.price
+        if pos.vat is not None:
+            info["vat"] = pos.vat
+        if pos.quantity is not None:
+            try:
+                info["quantity"] = int(pos.quantity)
+            except (TypeError, ValueError):
+                pass
+        if info:
+            upd_positions.setdefault(key, info)
+
     # Реквизиты счёта-фактуры из шапки УПД → для комментария поступления МС.
+    meta: dict = dict(doc.upd_meta or {})
     if parsed.invoice_number or parsed.invoice_date:
-        doc.upd_meta = {
-            "invoice_number": parsed.invoice_number,
-            "invoice_date": parsed.invoice_date,
-        }
+        meta["invoice_number"] = parsed.invoice_number
+        meta["invoice_date"] = parsed.invoice_date
+    if upd_positions:
+        meta["positions"] = {**(meta.get("positions") or {}), **upd_positions}
+    if meta:
+        doc.upd_meta = meta
 
     ms = await _maybe_ms_service(current_user, db)
 
