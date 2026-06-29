@@ -627,7 +627,9 @@ async def _process_document_async(document_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus, Scan, ScanStatus, Integration
     from app.services.moysklad import MoySkladService
+    from app.services.chestnyznak import ChestnyZnakService
     from app.core.security import decrypt_token
+    from app.core.config import settings
     from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
@@ -665,6 +667,48 @@ async def _process_document_async(document_id: str, user_id: str):
                 document_id=document_id,
                 kind=kind,
             )
+
+        # Приёмка по УПД: коды упаковок (НомУпак) сохранены как is_box без раскрытия
+        # (импорт УПД в API синхронно ЧЗ не дёргает). Перед записью в МС разворачиваем
+        # такие агрегаты в листовые КМ пачек через ЧЗ (cises/info + aggregated/list,
+        # «короб→блоки→пачки»), иначе в МС уйдёт код блока как одна штука. Сканы
+        # отгрузки (demand) уже развёрнуты в verify_code_task — у них child_codes есть.
+        boxes_to_expand = [s for s in valid_scans if s.is_box and not s.child_codes]
+        if boxes_to_expand and not settings.CZ_MOCK_MODE:
+            cz_token = await _get_cz_token(db, user_id)
+            if not cz_token:
+                await _push_cz_token_expired(user_id)
+            else:
+                cz = ChestnyZnakService(token=cz_token, mock=False)
+                for s in boxes_to_expand:
+                    try:
+                        info = await cz.get_code_info(s.code)
+                    except Exception as exc:
+                        logger.warning(
+                            "process_document.expand_box_failed",
+                            scan_id=str(s.id),
+                            error=str(exc),
+                        )
+                        continue
+                    if info and info.is_aggregate and info.children:
+                        s.child_codes = info.children
+                        s.box_quantity = len(info.children)
+                        # GTIN агрегата ≠ GTIN пачки — берём GTIN вложенной пачки,
+                        # чтобы скан матчился с планом и считался как N единиц.
+                        child_gtin = extract_gtin(info.children[0])
+                        if child_gtin:
+                            gk = normalize_gtin_key(child_gtin)
+                            if gk:
+                                s.gtin = gk
+                        if info.product_name:
+                            s.product_name = info.product_name
+                        logger.info(
+                            "process_document.box_expanded",
+                            scan_id=str(s.id),
+                            units=s.box_quantity,
+                            gtin=s.gtin,
+                        )
+                await db.flush()
 
         # Интеграции
         int_result = await db.execute(
