@@ -42,7 +42,16 @@ def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
         return True
     loose_b2 = re.sub(r"(?i)%c1", "", loose_b)
     loose_a2 = re.sub(r"(?i)%c1", "", loose_a)
-    return loose_a2 == loose_b2 or loose_a2.lower() == loose_b2.lower()
+    if loose_a2 == loose_b2 or loose_a2.lower() == loose_b2.lower():
+        return True
+    # МС обрезает код в тексте ошибки 412 на кавычке ("): сохранённый
+    # ...lOS6"G; приходит в ответе как ...lOS6. Считаем совпадением, если один
+    # код — префикс другого, и общий префикс не короче головы 01+GTIN(14)+21
+    # (18 символов), иначе можно поймать чужой код с тем же GTIN.
+    x, y = loose_a2.lower(), loose_b2.lower()
+    if x and y and (x.startswith(y) or y.startswith(x)) and min(len(x), len(y)) >= 18:
+        return True
+    return False
 
 
 def _run(coro):
@@ -674,9 +683,28 @@ async def _process_document_async(document_id: str, user_id: str):
         # «короб→блоки→пачки»), иначе в МС уйдёт код блока как одна штука. Сканы
         # отгрузки (demand) уже развёрнуты в verify_code_task — у них child_codes есть.
         boxes_to_expand = [s for s in valid_scans if s.is_box and not s.child_codes]
-        if boxes_to_expand and not settings.CZ_MOCK_MODE:
-            cz_token = await _get_cz_token(db, user_id)
+        if boxes_to_expand:
+            # Развернуть агрегаты (НомУпак: блок/короб) в листовые КМ можно только
+            # через ЧЗ. Без валидного токена (или в mock-режиме) писать сырые коды
+            # упаковок в МС нельзя — это гарантированный 412. Для supply прерываем
+            # запись с понятной ошибкой; для demand (обычно уже развёрнуто в
+            # verify_code_task) — прежнее поведение: баннер + отправка как есть.
+            cz_token = None if settings.CZ_MOCK_MODE else await _get_cz_token(db, user_id)
             if not cz_token:
+                if kind == "supply":
+                    doc.error_message = (
+                        "Токен Честного Знака истёк. Войдите в ЧЗ заново и повторите "
+                        "приёмку — коды упаковок не удалось развернуть в марки маркировки."
+                    )
+                    logger.warning(
+                        "process_document.cz_token_missing",
+                        document_id=document_id,
+                        boxes=len(boxes_to_expand),
+                    )
+                    if not settings.CZ_MOCK_MODE:
+                        await _push_cz_token_expired(user_id)
+                    await db.commit()
+                    return
                 await _push_cz_token_expired(user_id)
             else:
                 cz = ChestnyZnakService(token=cz_token, mock=False)
@@ -781,7 +809,17 @@ async def _process_document_async(document_id: str, user_id: str):
                     )
 
             remaining_scans = list(valid_scans)
+            max_iterations = len(valid_scans) + 1
+            iterations = 0
             while remaining_scans:
+                iterations += 1
+                if iterations > max_iterations:
+                    logger.error(
+                        "process_document.retry_limit",
+                        document_id=document_id,
+                        remaining=len(remaining_scans),
+                    )
+                    break
                 scans_data = []
                 for s in remaining_scans:
                     pid_default = (
@@ -872,9 +910,10 @@ async def _process_document_async(document_id: str, user_id: str):
                                 (str(s.id), (s.code or "")[:120]) for s in remaining_scans
                             ],
                         )
-                        raise RuntimeError(
-                            "МойСклад 412: неверный формат кода маркировки; не удалось сопоставить со сканами."
-                        )
+                        # Не роняем весь батч из-за одного несопоставимого кода:
+                        # прекращаем ретраи; коды, принятые в прошлых итерациях,
+                        # сохранены, документ финализируется как accepted.
+                        break
 
                     bad_scan.status = ScanStatus.invalid
                     bad_scan.error_message = (
@@ -909,6 +948,8 @@ async def _process_document_async(document_id: str, user_id: str):
 
         # Финальный статус документа
         doc.status = DocumentStatus.accepted
+        # Успешный прогон (в т.ч. повторный после входа в ЧЗ) — снимаем прошлую ошибку.
+        doc.error_message = None
         await db.commit()
 
         logger.info(

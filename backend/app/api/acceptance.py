@@ -75,6 +75,9 @@ class AcceptanceDocResponse(BaseModel):
     scan_count: int = 0
     # Сколько позиций поступления МС подтянуто в план (для UI «привязано к МС»).
     plan_count: int = 0
+    # Причина неуспешной отправки в МС (напр. истёк токен ЧЗ) — показывается на
+    # странице приёмки вместо ложного «МойСклад ещё обрабатывает».
+    error_message: Optional[str] = None
 
 
 class ImportPositionResult(BaseModel):
@@ -598,4 +601,5 @@ async def get_acceptance_document(
         moysklad_id=doc.moysklad_id,
         scan_count=count,
         plan_count=len(doc.plan or []),
+        error_message=doc.error_message,
     )

@@ -113,14 +113,23 @@ export function AcceptancePage() {
       await documentsApi.process(docId)
       // Запись в МС идёт в Celery; опрашиваем статус документа до accepted.
       let finalStatus = 'processing'
+      let failReason: string | null = null
       for (let i = 0; i < 20; i++) {
         await sleep(1500)
         const { data: fresh } = await acceptanceApi.getDoc(docId)
         finalStatus = fresh.status
         setDoc(fresh)
         if (fresh.status === 'accepted') break
+        // Воркер выставил причину неуспеха (напр. истёк токен ЧЗ) — прекращаем
+        // опрос и показываем её, а не ждём ложное «ещё обрабатывается».
+        if (fresh.error_message) {
+          failReason = fresh.error_message
+          break
+        }
       }
-      if (finalStatus === 'accepted') {
+      if (failReason) {
+        setSendError(failReason)
+      } else if (finalStatus === 'accepted') {
         setSendDone(true)
         if (window.opener && !window.opener.closed) {
           setTimeout(() => window.close(), 1500)

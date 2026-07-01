@@ -119,6 +119,9 @@ class Document(Base):
     product_group = Column(String(64), nullable=True)
     # Реквизиты из шапки УПД для комментария поступления МС: {invoice_number, invoice_date}.
     upd_meta = Column(JSONB, nullable=True)
+    # Причина неуспешной отправки в МС (напр. истёк токен ЧЗ) — показывается на
+    # странице приёмки вместо ложного «МойСклад ещё обрабатывает».
+    error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 

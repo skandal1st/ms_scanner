@@ -188,6 +188,8 @@ export interface AcceptanceDoc {
   scan_count: number
   /** Кол-во позиций поступления МС, подтянутых в план. */
   plan_count: number
+  /** Причина неуспешной отправки в МС (напр. истёк токен ЧЗ), если была. */
+  error_message: string | null
 }
 
 export interface ImportPositionResult {
