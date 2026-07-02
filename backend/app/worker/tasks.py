@@ -752,8 +752,14 @@ async def _process_document_async(document_id: str, user_id: str):
             # product_id: сначала план документа (позиции этой отгрузки/приёмки в МС),
             # иначе поиск в каталоге по штрихкоду — иначе КМ без баркода в карточке
             # не попадёт в update_document (там отбрасываются строки без product_id).
+            # Лукап в каталоге нужен только для GTIN сканов, у которых нет прямого
+            # moysklad_product_id (при приёмке по УПД он проставлен из позиций
+            # поступления) — иначе на каждую приёмку летят десятки лишних GET в МС,
+            # что упирает в rate limit (429) и роняет всю запись.
             unique_gtins = {
-                normalize_gtin_key(s.gtin) for s in valid_scans if s.gtin
+                normalize_gtin_key(s.gtin)
+                for s in valid_scans
+                if s.gtin and not s.moysklad_product_id
             }
             unique_gtins.discard(None)
             gtin_to_product_id: dict[str, str] = {}

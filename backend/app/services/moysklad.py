@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
@@ -34,6 +35,34 @@ class MoySkladService:
     def _validate_kind(kind: str) -> None:
         if kind not in SUPPORTED_KINDS:
             raise ValueError(f"Неподдерживаемый тип документа МС: {kind}")
+
+    # МС ограничивает частоту запросов (429, code 1049). При приёмке идёт много
+    # обращений подряд (позиции + trackingCodes), поэтому на 429 ждём и повторяем.
+    _RATE_LIMIT_DELAYS = (0.6, 1.5, 3.0)
+
+    async def _request_with_retry(
+        self,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """HTTP-запрос к МС с ретраем на 429 (rate limit). Прочие статусы —
+        как есть; вызывающий сам решает про raise_for_status/412."""
+        for attempt in range(len(self._RATE_LIMIT_DELAYS) + 1):
+            resp = await client.request(method, url, headers=self.headers, **kwargs)
+            if resp.status_code != 429 or attempt == len(self._RATE_LIMIT_DELAYS):
+                return resp
+            delay = self._RATE_LIMIT_DELAYS[attempt]
+            logger.warning(
+                "moysklad.rate_limited",
+                method=method,
+                url=url,
+                attempt=attempt + 1,
+                delay=delay,
+            )
+            await asyncio.sleep(delay)
+        return resp
 
     # --- Универсальные методы по типу документа ---
 
@@ -182,9 +211,10 @@ class MoySkladService:
     async def _load_positions_rows(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
         self._validate_kind(kind)
         async with httpx.AsyncClient(timeout=25) as client:
-            resp = await client.get(
+            resp = await self._request_with_retry(
+                client,
+                "GET",
                 f"{self.base_url}/entity/{kind}/{doc_id}/positions",
-                headers=self.headers,
                 params={"expand": "assortment", "limit": 1000},
             )
             resp.raise_for_status()
@@ -431,9 +461,10 @@ class MoySkladService:
         if description:
             put_body["description"] = description
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.put(
+            resp = await self._request_with_retry(
+                client,
+                "PUT",
                 f"{self.base_url}/entity/{kind}/{doc_id}",
-                headers=self.headers,
                 json=put_body,
             )
             if resp.status_code >= 400:
@@ -458,9 +489,10 @@ class MoySkladService:
                         f"{self.base_url}/entity/{kind}/{doc_id}"
                         f"/positions/{pos_id}/trackingCodes"
                     )
-                    tc_resp = await client.post(
+                    tc_resp = await self._request_with_retry(
+                        client,
+                        "POST",
                         tc_url,
-                        headers=self.headers,
                         json=batch,
                     )
                     if tc_resp.status_code >= 400:
@@ -516,9 +548,10 @@ class MoySkladService:
             candidates.append(gtin[1:])
         async with httpx.AsyncClient(timeout=15) as client:
             for value in candidates:
-                resp = await client.get(
+                resp = await self._request_with_retry(
+                    client,
+                    "GET",
                     f"{self.base_url}/entity/assortment",
-                    headers=self.headers,
                     params={"filter": f"barcode={value}", "limit": 1},
                 )
                 if resp.status_code != 200:
