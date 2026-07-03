@@ -335,22 +335,34 @@ async def import_upd(
     # перенести их в план и записать в поступление МС: для пустых поступлений
     # GTIN'ы часто резолвятся вручную, а на этом этапе цена/НДС из плана уже нет.
     upd_positions: dict[str, dict] = {}
-    for pos in positions:
-        key = normalize_gtin_key(pos.gtin)
-        if not key:
-            continue
+
+    def _record_upd_price(pos: ParsedPosition, gkey: Optional[str], *, with_qty: bool):
+        if not gkey:
+            return
         info: dict = {}
         if pos.price is not None:
             info["price"] = pos.price
         if pos.vat is not None:
             info["vat"] = pos.vat
-        if pos.quantity is not None:
+        # Кол-во (КолТов) относится к строке позиции в целом — сохраняем только
+        # под GTIN строки, не под GTIN отдельных упаковок набора.
+        if with_qty and pos.quantity is not None:
             try:
                 info["quantity"] = int(pos.quantity)
             except (TypeError, ValueError):
                 pass
         if info:
-            upd_positions.setdefault(key, info)
+            upd_positions.setdefault(gkey, info)
+
+    for pos in positions:
+        # GTIN строки позиции — с кол-вом.
+        _record_upd_price(pos, normalize_gtin_key(pos.gtin), with_qty=True)
+        # GTIN каждого кода/упаковки набора — та же цена/НДС (без кол-ва). Нужно,
+        # чтобы ручная привязка НомУпак-GTIN к товару подхватила закупочную цену.
+        for code in pos.codes:
+            _record_upd_price(pos, _code_gtin(code, None), with_qty=False)
+        for pkg in pos.packages:
+            _record_upd_price(pos, _package_gtin(pkg, None), with_qty=False)
 
     # Реквизиты счёта-фактуры из шапки УПД → для комментария поступления МС.
     meta: dict = dict(doc.upd_meta or {})
@@ -474,17 +486,22 @@ async def import_upd(
                         "expected_qty": 0,
                     },
                 )
-                if g == order[0]:
-                    if pos.quantity:
-                        try:
-                            entry["expected_qty"] += int(pos.quantity)
-                        except (TypeError, ValueError):
-                            pass
-                    # Цена/НДS из УПД — на «основную» группу позиции.
-                    if pos.price is not None:
-                        entry["price"] = pos.price
-                    if pos.vat is not None:
-                        entry["vat"] = pos.vat
+                # Цена/НДС из атрибутов СведТов относятся ко всему «набору» —
+                # проставляем их КАЖДОЙ товарной позиции (каждому НомУпак/GTIN
+                # внутри позиции), а не только «основной» группе. Иначе у всех
+                # товаров набора, кроме первого, закупочная цена в поступлении
+                # МС остаётся пустой.
+                if pos.price is not None:
+                    entry["price"] = pos.price
+                if pos.vat is not None:
+                    entry["vat"] = pos.vat
+                # КолТов относим к «основной» (первой) группе — она несёт GTIN
+                # строки/единиц УПД; для остальных групп кол-во неоднозначно.
+                if g == order[0] and pos.quantity:
+                    try:
+                        entry["expected_qty"] += int(pos.quantity)
+                    except (TypeError, ValueError):
+                        pass
 
             for code in bucket["codes"]:
                 if code in existing_codes:

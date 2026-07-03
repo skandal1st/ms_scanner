@@ -72,11 +72,13 @@ async def link_gtin_to_product(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Привязать все unknown_product сканы документа с указанным GTIN к товару МС.
+    """Привязать сканы документа с указанным GTIN к товару МС.
 
-    После сопоставления статус меняется с unknown_product на valid (либо overflow,
-    если уже превышен план). WS-пуш отправляется на каждый обновлённый скан, чтобы
-    фронт перерисовал список без перезагрузки.
+    Работает и для ещё не сопоставленных (unknown_product), и для уже
+    сопоставленных (valid/overflow) сканов — последнее позволяет ИСПРАВИТЬ
+    ошибочно привязанный при загрузке УПД товар, перепривязав GTIN к другому.
+    Статус пересчитывается (valid/overflow по плану), WS-пуш идёт на каждый
+    обновлённый скан, чтобы фронт перерисовал список без перезагрузки.
     """
     doc_q = await db.execute(
         select(Document).where(
@@ -98,10 +100,15 @@ async def link_gtin_to_product(
 
     name = (body.product_name or "").strip() or None
 
+    # Берём сканы этого GTIN во всех «рабочих» статусах, включая уже
+    # сопоставленные (valid/overflow) — чтобы можно было перепривязать ошибочно
+    # сопоставленный товар. duplicate оставляем как есть.
     scans_q = await db.execute(
         select(Scan).where(
             Scan.document_id == body.document_id,
-            Scan.status == ScanStatus.unknown_product,
+            Scan.status.in_(
+                [ScanStatus.unknown_product, ScanStatus.valid, ScanStatus.overflow]
+            ),
         )
     )
     matched: List[Scan] = []
@@ -121,17 +128,10 @@ async def link_gtin_to_product(
                     expected_qty = None
                 break
 
+    # matched уже содержит ВСЕ сканы этого GTIN (в т.ч. ранее valid/overflow),
+    # поэтому overflow считаем с нуля по ним — внешний подсчёт не нужен (иначе
+    # ранее валидные сканы этого GTIN были бы посчитаны дважды).
     valid_count = 0
-    if expected_qty:
-        prev_q = await db.execute(
-            select(Scan.gtin).where(
-                Scan.document_id == body.document_id,
-                Scan.status == ScanStatus.valid,
-            )
-        )
-        for (g,) in prev_q.all():
-            if g and normalize_gtin_key(g) == target_key:
-                valid_count += 1
 
     updated = 0
     for s in matched:
@@ -179,7 +179,18 @@ async def link_gtin_to_product(
     # которое import_upd заполняет по GTIN независимо от сопоставления товара.
     if updated:
         upd_pos = ((doc.upd_meta or {}).get("positions") or {}).get(target_key) or {}
-        plan = list(doc.plan or [])
+        # Перепривязка: убираем прежнюю (ошибочную) запись этого GTIN с другим
+        # товаром — иначе в плане остаётся «фантомная» позиция чужого товара с
+        # ценой/кол-вом из УПД, и при отправке в МС он завышает поступление.
+        plan = [
+            p
+            for p in (doc.plan or [])
+            if not (
+                isinstance(p, dict)
+                and normalize_gtin_key(p.get("gtin")) == target_key
+                and p.get("product_id") != pid
+            )
+        ]
         entry = next(
             (p for p in plan if isinstance(p, dict) and p.get("product_id") == pid),
             None,

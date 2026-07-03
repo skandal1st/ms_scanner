@@ -301,6 +301,11 @@ export function AcceptancePage() {
               renderExpanded={(p) => (
                 <ExpandedPosition
                   codes={p.gtin ? codesByGtin.get(p.gtin) ?? [] : []}
+                  documentId={docId}
+                  gtin={p.gtin}
+                  currentProductName={p.product_name}
+                  canRelink={linkedToMs && !alreadyAccepted}
+                  onLinked={refreshAfterLink}
                 />
               )}
             />
@@ -383,10 +388,41 @@ export function AcceptancePage() {
   )
 }
 
-function ExpandedPosition({ codes }: { codes: string[] }) {
+function ExpandedPosition({
+  codes,
+  documentId,
+  gtin,
+  currentProductName,
+  canRelink,
+  onLinked,
+}: {
+  codes: string[]
+  documentId: string | null
+  gtin?: string | null
+  currentProductName?: string | null
+  canRelink: boolean
+  onLinked: () => void
+}) {
   const shown = codes.slice(0, 50)
   return (
     <div>
+      {canRelink && documentId && gtin && (
+        <div style={{ marginBottom: 12 }}>
+          <div className="field-label" style={{ marginBottom: 4 }}>
+            Изменить товар МойСклад для GTIN {gtin}
+            {currentProductName && (
+              <span className="text-muted" style={{ fontWeight: 400 }}>
+                {' '}(сейчас: {currentProductName})
+              </span>
+            )}
+          </div>
+          <InlineProductPicker
+            documentId={documentId}
+            gtin={gtin}
+            onLinked={onLinked}
+          />
+        </div>
+      )}
       <div className="field-label" style={{ marginBottom: 4 }}>
         Коды маркировки {codes.length > 0 ? `(${codes.length})` : ''}
       </div>
