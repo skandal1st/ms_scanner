@@ -18,6 +18,9 @@ function errorDetail(e: unknown): string | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+const rub = (v: number) =>
+  v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
 export function AcceptancePage() {
   const [doc, setDoc] = useState<AcceptanceDoc | null>(null)
   const [result, setResult] = useState<ImportUpdResult | null>(null)
@@ -149,6 +152,13 @@ export function AcceptancePage() {
   const columns: ColumnDef<ImportPositionResult>[] = useMemo(
     () => [
       {
+        key: 'line',
+        header: '№',
+        width: 56,
+        minWidth: 40,
+        render: (p) => p.line_number ?? '—',
+      },
+      {
         key: 'name',
         header: 'Позиция (УПД)',
         width: 260,
@@ -236,6 +246,12 @@ export function AcceptancePage() {
                   не сопоставлено GTIN: {result.unmatched_gtins.length}
                 </span>
               </>
+            )}
+            {result.total_amount != null && (
+              <> · сумма по УПД: <b>{rub(result.total_amount)} ₽</b></>
+            )}
+            {result.total_vat != null && (
+              <> · в т.ч. НДС: <b>{rub(result.total_vat)} ₽</b></>
             )}
             {linkedToMs ? (
               <> · привязано к поступлению МС</>

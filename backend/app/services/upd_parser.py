@@ -36,6 +36,8 @@ class ParsedPosition:
     # Цена за единицу (ЦенаТов, руб.) и ставка НДС (НалСт, напр. 20 из «20%»).
     price: Optional[float] = None
     vat: Optional[int] = None
+    # Номер строки позиции в таблице УПД (НомСтр из <СведТов>).
+    line_number: Optional[int] = None
 
 
 @dataclass
@@ -44,6 +46,10 @@ class ParsedUpd:
     positions: list[ParsedPosition]
     invoice_number: Optional[str] = None
     invoice_date: Optional[str] = None
+    # Документные итоги из <ВсегоОпл>: сумма с НДС (СтТовУчНалВсего) и сумма НДС
+    # (СумНалВсего/СумНал). Официальные итоги УПД — не пересчёт по строкам.
+    total_amount: Optional[float] = None
+    total_vat: Optional[float] = None
 
 
 class UpdParseError(Exception):
@@ -121,6 +127,19 @@ def _quantity(raw: Optional[str]) -> Optional[float]:
         return None
     try:
         return float(s)
+    except ValueError:
+        return None
+
+
+def _int(raw: Optional[str]) -> Optional[int]:
+    """Целое из строки (напр. НомСтр «1» → 1). None при отсутствии/мусоре."""
+    if not raw:
+        return None
+    digits = "".join(c for c in raw if c.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
     except ValueError:
         return None
 
@@ -234,6 +253,7 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
                 packages=packages,
                 price=_quantity(tov.get("ЦенаТов")),
                 vat=_vat_rate(tov.get("НалСт")),
+                line_number=_int(tov.get("НомСтр")),
             )
         )
 
@@ -243,15 +263,32 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
             "Ожидается УПД в формате ФНС 5.03."
         )
 
+    # Документные итоги из <ВсегоОпл> (namespace-агностично): сумма с НДС и сумма НДС.
+    # <БезНДС> вместо <СумНал> → total_vat остаётся None (фронт покажет отсутствие).
+    total_amount: Optional[float] = None
+    total_vat: Optional[float] = None
+    vsego = next(_iter_by_localname(root, "ВсегоОпл"), None)
+    if vsego is not None:
+        total_amount = _quantity(vsego.get("СтТовУчНалВсего"))
+        sumnal_vsego = _first_child(vsego, "СумНалВсего")
+        if sumnal_vsego is not None:
+            sumnal = _first_child(sumnal_vsego, "СумНал")
+            if sumnal is not None:
+                total_vat = _quantity(sumnal.text or "")
+
     logger.info(
         "upd.parsed",
         positions=len(positions),
         codes=sum(len(p.codes) for p in positions),
         packages=sum(len(p.packages) for p in positions),
         invoice_number=invoice_number,
+        total_amount=total_amount,
+        total_vat=total_vat,
     )
     return ParsedUpd(
         positions=positions,
         invoice_number=invoice_number,
         invoice_date=invoice_date,
+        total_amount=total_amount,
+        total_vat=total_vat,
     )

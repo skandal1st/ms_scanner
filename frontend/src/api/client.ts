@@ -202,6 +202,8 @@ export interface ImportPositionResult {
   product_id: string | null
   product_name: string | null
   matched: boolean
+  /** Номер строки позиции в таблице УПД (НомСтр). */
+  line_number: number | null
 }
 
 export interface ImportUpdResult {
@@ -210,6 +212,10 @@ export interface ImportUpdResult {
   created_scans: number
   skipped_duplicates: number
   unmatched_gtins: string[]
+  /** Сумма по УПД с НДС (СтТовУчНалВсего из <ВсегоОпл>). */
+  total_amount: number | null
+  /** Итоговая сумма НДС (СумНалВсего/СумНал из <ВсегоОпл>). */
+  total_vat: number | null
 }
 
 export const acceptanceApi = {

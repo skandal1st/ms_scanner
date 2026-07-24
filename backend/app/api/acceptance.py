@@ -90,6 +90,7 @@ class ImportPositionResult(BaseModel):
     product_id: Optional[str] = None
     product_name: Optional[str] = None
     matched: bool = False
+    line_number: Optional[int] = None
 
 
 class ImportUpdResponse(BaseModel):
@@ -98,6 +99,9 @@ class ImportUpdResponse(BaseModel):
     created_scans: int
     skipped_duplicates: int
     unmatched_gtins: List[str]
+    # Документные итоги из <ВсегоОпл> УПД: сумма с НДС и итоговая сумма НДС.
+    total_amount: Optional[float] = None
+    total_vat: Optional[float] = None
 
 
 async def _get_acceptance_doc(
@@ -460,6 +464,7 @@ async def import_upd(
                     product_id=None,
                     product_name=None,
                     matched=False,
+                    line_number=pos.line_number,
                 )
             )
             continue
@@ -551,6 +556,7 @@ async def import_upd(
                     product_id=product_id,
                     product_name=product_name,
                     matched=matched,
+                    line_number=pos.line_number,
                 )
             )
 
@@ -591,6 +597,8 @@ async def import_upd(
         created_scans=created,
         skipped_duplicates=skipped,
         unmatched_gtins=sorted(unmatched),
+        total_amount=parsed.total_amount,
+        total_vat=parsed.total_vat,
     )
 
 
