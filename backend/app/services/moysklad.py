@@ -193,6 +193,10 @@ class MoySkladService:
                 expected_qty = 0
             if expected_qty <= 0:
                 continue
+            # Маркированность товара по trackingType МС: пусто/NOT_TRACKED —
+            # немаркированный (собирается сканом штрихкода, без КМ и ЧЗ).
+            tt = (asrt.get("trackingType") or "").strip()
+            marked = bool(tt) and tt != "NOT_TRACKED"
             plan.append(
                 {
                     "gtin": gtin,
@@ -204,6 +208,7 @@ class MoySkladService:
                     "product_name": product_name,
                     "expected_qty": expected_qty,
                     "pack_gtins": pack_gtins,
+                    "marked": marked,
                 }
             )
         return plan
@@ -239,8 +244,8 @@ class MoySkladService:
 
     @staticmethod
     def _scan_units(s: Dict[str, Any]) -> int:
-        """Сколько единиц товара представляет скан: короб = box_quantity, иначе 1."""
-        if s.get("is_box"):
+        """Сколько единиц товара представляет скан: короб/штрихкод = quantity, иначе 1."""
+        if s.get("is_box") or s.get("is_barcode"):
             return int(s.get("quantity") or 0) or 1
         return 1
 
@@ -393,10 +398,12 @@ class MoySkladService:
                         payload["quantity"] = units
                         if write_codes:
                             ms_tt = self._moysklad_tracking_type_from_position(row)
+                            # Штрихкод немаркированного товара (is_barcode) даёт только
+                            # quantity позиции — trackingCode для него не пишем.
                             tc_batch = [
                                 self._tracking_code_entry(s, ms_tt)
                                 for s in take
-                                if s.get("code")
+                                if s.get("code") and not s.get("is_barcode")
                             ]
                             pos_row_id = row.get("id")
                             if pos_row_id and tc_batch:
@@ -450,11 +457,14 @@ class MoySkladService:
                     except (TypeError, ValueError):
                         pass
                 if write_codes:
-                    position["trackingCodes"] = [
+                    # Штрихкод немаркированного товара (is_barcode) не даёт trackingCode.
+                    tcs = [
                         self._tracking_code_entry(s, None)
                         for s in group
-                        if s.get("code")
+                        if s.get("code") and not s.get("is_barcode")
                     ]
+                    if tcs:
+                        position["trackingCodes"] = tcs
                 positions.append(position)
 
         put_body: Dict[str, Any] = {"positions": positions}

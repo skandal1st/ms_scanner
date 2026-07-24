@@ -24,6 +24,8 @@ export interface ProgressRow {
   addedTotal: number
   /** Только свободная сборка: сколько ещё на проверке. */
   pendingCount?: number
+  /** Немаркированный товар (собирается сканом штрихкода). Только для строк плана. */
+  unmarked?: boolean
 }
 
 /** Выбранная позиция для взаимной подсветки позиция↔коды (по product_id и/или GTIN). */
@@ -192,6 +194,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
         expected: p.expected_qty,
         scanned,
         addedTotal,
+        unmarked: p.marked === false,
       }
     })
     const total = {
@@ -298,7 +301,13 @@ export const useScanStore = create<ScanStore>((set, get) => ({
 
   addScan: (scan) =>
     set((state) => {
-      const scans = [scan, ...state.scans]
+      // Upsert по id: повторный скан штрихкода немаркированного товара возвращает тот
+      // же скан с обновлённым box_quantity — заменяем строку, а не плодим дубль.
+      const idx = state.scans.findIndex((s) => s.id === scan.id)
+      const scans =
+        idx >= 0
+          ? state.scans.map((s) => (s.id === scan.id ? scan : s))
+          : [scan, ...state.scans]
       return { scans, stats: calcStats(scans) }
     }),
 

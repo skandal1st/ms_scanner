@@ -77,8 +77,10 @@ function ScanRow({
 }) {
   const cfg = STATUS_CONFIG[scan.status]
   // Агрегат (блок/короб): развёрнут в единицы — box_quantity/child_codes без is_box.
+  // Штрихкод немаркированного товара (is_barcode) — не агрегат: box_quantity = кол-во.
   const childCount = scan.child_codes?.length ?? 0
-  const isAggregate = !scan.is_box && (childCount > 0 || scan.box_quantity != null)
+  const isAggregate =
+    !scan.is_box && !scan.is_barcode && (childCount > 0 || scan.box_quantity != null)
 
   return (
     <>
@@ -88,6 +90,7 @@ function ScanRow({
       >
         <td className="is-code">
           {scan.is_box || isAggregate ? '📦 ' : ''}
+          {scan.is_barcode ? '🏷️ ' : ''}
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
@@ -104,6 +107,11 @@ function ScanRow({
           {isAggregate ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
               Упаковка · {scan.box_quantity ?? childCount} шт.
+            </div>
+          ) : null}
+          {scan.is_barcode ? (
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+              Штрихкод · {scan.box_quantity ?? 1} шт.
             </div>
           ) : null}
           {scan.moysklad_product_id ? (

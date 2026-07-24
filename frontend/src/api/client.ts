@@ -48,6 +48,8 @@ export interface PlanItem {
   product_id: string | null
   product_name: string
   expected_qty: number
+  /** Маркированный товар (по trackingType МС). false/undefined — немаркированный (штрихкод). */
+  marked?: boolean
 }
 
 export interface Document {
@@ -101,7 +103,9 @@ export interface Scan {
   scanned_at: string
   /** Короб SSCC, сохранённый целиком (transportpack). */
   is_box?: boolean
-  /** Число SGTIN внутри короба/блока (из ЧЗ). */
+  /** Скан обычного штрихкода немаркированного товара (не КМ): box_quantity — кол-во. */
+  is_barcode?: boolean
+  /** Число SGTIN внутри короба/блока (из ЧЗ) либо кол-во для штрихкодового скана. */
   box_quantity?: number | null
   /** Владелец и производитель КМ из ЧЗ (cises/info). */
   owner_name?: string | null

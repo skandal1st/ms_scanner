@@ -858,8 +858,14 @@ async def _process_document_async(document_id: str, user_id: str):
                             "gtin": s.gtin,
                             "product_id": pid_default,
                             "is_box": s.is_box,
-                            # Короб «целиком» = box_quantity единиц; обычный скан = 1.
-                            "quantity": (int(s.box_quantity or 0) or 1) if s.is_box else 1,
+                            # Штрихкод немаркированного товара: quantity без trackingCode.
+                            "is_barcode": s.is_barcode,
+                            # Короб «целиком»/штрихкод = box_quantity единиц; обычный скан = 1.
+                            "quantity": (
+                                (int(s.box_quantity or 0) or 1)
+                                if (s.is_box or s.is_barcode)
+                                else 1
+                            ),
                         })
                 # В update_document попадут только строки с product_id.
                 if not any(s.get("product_id") for s in scans_data):

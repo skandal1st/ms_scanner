@@ -158,7 +158,14 @@ export function ProgressTable() {
               }}
             >
               <div style={styles.rowHead}>
-                <span style={styles.name}>{item.product_name || item.gtin}</span>
+                <span style={styles.name}>
+                  {item.product_name || item.gtin}
+                  {item.unmarked && (
+                    <span style={styles.barcodeTag} title="Немаркированный товар — сканируйте штрихкод">
+                      штрихкод
+                    </span>
+                  )}
+                </span>
                 <span style={{ ...styles.count, color }} title={item.gtin}>
                   {countLabel}
                   {item.pendingCount ? (
@@ -262,6 +269,19 @@ const styles: Record<string, CSSProperties> = {
     whiteSpace: 'nowrap',
     minWidth: 0,
     flex: 1,
+  },
+  barcodeTag: {
+    display: 'inline-block',
+    marginLeft: 6,
+    padding: '0 6px',
+    fontSize: 10,
+    fontWeight: 600,
+    lineHeight: '16px',
+    color: '#3730a3',
+    background: '#eef2ff',
+    border: '1px solid #c7d2fe',
+    borderRadius: 4,
+    verticalAlign: 'middle',
   },
   count: {
     fontWeight: 500,

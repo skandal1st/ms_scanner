@@ -20,6 +20,7 @@ from app.services.chestnyznak import (
     CZApiError,
     extract_gtin,
     is_sscc,
+    normalize_gtin_key,
 )
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -37,6 +38,8 @@ class ScanResponse(BaseModel):
     scanned_at: datetime
     is_box: bool = False
     box_quantity: Optional[int] = None
+    # Скан обычного штрихкода немаркированного товара (не КМ): box_quantity — кол-во.
+    is_barcode: bool = False
     owner_name: Optional[str] = None
     producer_name: Optional[str] = None
     child_codes: Optional[List[str]] = None
@@ -240,19 +243,122 @@ async def _create_scan_record(
     return scan, False
 
 
+def _classify_barcode(
+    doc: Document, code: str
+) -> tuple[Optional[dict], Optional[dict]]:
+    """Классифицировать «плоский» штрихкод по плану документа.
+
+    Возвращает (немаркированная_позиция, маркированная_позиция): совпавшая по GTIN
+    запись плана. Срабатывает только для обычного штрихкода (все цифры, 8..14) —
+    настоящий КМ (Data Matrix) содержит серийник/спецсимволы и сюда не попадает.
+    Обе None → не штрихкод либо нет совпадения (обычный флоу проверки КМ).
+    """
+    c = (code or "").strip()
+    if not (c.isdigit() and 8 <= len(c) <= 14):
+        return None, None
+    key = normalize_gtin_key(c)
+    if not key:
+        return None, None
+    for p in doc.plan or []:
+        if not isinstance(p, dict):
+            continue
+        if normalize_gtin_key(p.get("gtin")) != key:
+            continue
+        if p.get("marked"):
+            return None, p
+        return p, None
+    return None, None
+
+
+async def _create_or_increment_barcode_scan(
+    db: AsyncSession,
+    document_id: UUID,
+    code: str,
+    plan_entry: dict,
+) -> tuple[Scan, bool]:
+    """Штрихкодовый скан немаркированного товара: скан = +1 единица.
+
+    Повторный скан того же штрихкода в документе наращивает ``box_quantity`` (а не
+    возвращает «дубль»). ЧЗ не вызывается — скан сразу ``valid``. Возвращает (scan, False).
+    """
+    code = code.strip()
+    key = normalize_gtin_key(code)
+    existing = (
+        await db.execute(
+            select(Scan).where(
+                Scan.document_id == document_id,
+                Scan.code == code,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        # Уже был как штрихкодовый — наращиваем кол-во. Если вдруг тот же код есть как
+        # обычный скан (маловероятно) — не трогаем, отдаём как дубль.
+        if not existing.is_barcode:
+            return existing, True
+        existing.box_quantity = (existing.box_quantity or 0) + 1
+        await db.commit()
+        await db.refresh(existing)
+        return existing, False
+
+    scan = Scan(
+        document_id=document_id,
+        code=code,
+        gtin=key,
+        moysklad_product_id=(plan_entry.get("product_id") or None),
+        product_name=(plan_entry.get("product_name") or "").strip() or None,
+        status=ScanStatus.valid,
+        is_barcode=True,
+        box_quantity=1,
+    )
+    db.add(scan)
+    await db.commit()
+    await db.refresh(scan)
+    return scan, False
+
+
 @router.post("/", response_model=ScanResponse, status_code=201)
 async def create_scan(
     body: CreateScanRequest,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Создать скан кода маркировки (KM, не SSCC). Для коробов — POST /scans/box."""
-    await _ensure_document_owner(body.document_id, current_user, db)
+    """Создать скан кода маркировки (KM, не SSCC). Для коробов — POST /scans/box.
+
+    Немаркированный товар собирается сканом обычного штрихкода (EAN-13): если код —
+    «плоский» штрихкод и совпал с немаркированной позицией плана, добавляем кол-во
+    без вызова ЧЗ. Штрихкод маркированного товара — подсказка отсканировать КМ.
+    """
+    doc = await _ensure_document_owner(body.document_id, current_user, db)
     if is_sscc(body.code):
         raise HTTPException(
             400,
             "Это код короба (SSCC). Используйте /scans/box.",
         )
+
+    unmarked_entry, marked_entry = _classify_barcode(doc, body.code)
+    if marked_entry is not None:
+        raise HTTPException(
+            400,
+            "Это маркированный товар — отсканируйте код маркировки (Data Matrix), "
+            "а не штрихкод.",
+        )
+    if unmarked_entry is not None:
+        scan, is_dup = await _create_or_increment_barcode_scan(
+            db, body.document_id, body.code, unmarked_entry
+        )
+        logger.info(
+            "scan.barcode",
+            document_id=str(body.document_id),
+            scan_id=str(scan.id),
+            gtin=scan.gtin,
+            qty=scan.box_quantity,
+            user_id=str(current_user.id),
+        )
+        resp = ScanResponse.model_validate(scan)
+        resp.duplicate = is_dup
+        return resp
+
     scan, is_dup = await _create_scan_record(
         db,
         body.document_id,

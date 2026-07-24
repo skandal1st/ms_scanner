@@ -189,6 +189,9 @@ export function useScanner(documentId: string | null) {
           return
         }
         addScan(scan)
+        // Штрихкод немаркированного товара проверку ЧЗ не проходит (нет WS-события) —
+        // подтверждаем звуком сразу.
+        if (scan.is_barcode) playBeep('ok')
         if (scan.status === 'used_in_other_doc') playBeep('error')
       } catch (err: unknown) {
         playBeep('error')
