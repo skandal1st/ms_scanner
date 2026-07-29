@@ -138,6 +138,9 @@ export const scansApi = {
   /** Принять SSCC-короб. unpack=true — раскрыть на штучные КМ; false — целиком (transportpack). */
   box: (document_id: string, sscc: string, unpack: boolean) =>
     api.post<Scan[]>('/scans/box', { document_id, sscc, unpack }),
+  /** Массовая загрузка списка марок (отгрузка): проходят обычный конвейер проверки. */
+  bulk: (document_id: string, codes: string[], unpack_boxes = false) =>
+    api.post<Scan[]>('/scans/bulk', { document_id, codes, unpack_boxes }),
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
@@ -240,6 +243,12 @@ export const acceptanceApi = {
       { headers: { 'Content-Type': 'multipart/form-data' } },
     )
   },
+  /** Ручная загрузка списка марок в приёмку (альтернатива УПД). */
+  importMarks: (documentId: string, codes: string[]) =>
+    api.post<ImportUpdResult>(
+      `/acceptance/documents/${documentId}/import-marks`,
+      { codes },
+    ),
 }
 
 export interface Integration {

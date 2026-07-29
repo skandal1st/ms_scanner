@@ -26,7 +26,11 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
-from app.services.chestnyznak import normalize_gtin_key, parse_gs1_km_gtin_serial
+from app.services.chestnyznak import (
+    normalize_gtin_key,
+    parse_gs1_km_gtin_serial,
+    is_sscc,
+)
 from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition, ParsedUpd
 
 router = APIRouter(prefix="/acceptance", tags=["acceptance"])
@@ -102,6 +106,11 @@ class ImportUpdResponse(BaseModel):
     # Документные итоги из <ВсегоОпл> УПД: сумма с НДС и итоговая сумма НДС.
     total_amount: Optional[float] = None
     total_vat: Optional[float] = None
+
+
+class ImportMarksRequest(BaseModel):
+    """Ручная загрузка списка марок в приёмку (альтернатива УПД)."""
+    codes: List[str]
 
 
 async def _get_acceptance_doc(
@@ -599,6 +608,173 @@ async def import_upd(
         unmatched_gtins=sorted(unmatched),
         total_amount=parsed.total_amount,
         total_vat=parsed.total_vat,
+    )
+
+
+@router.post(
+    "/documents/{document_id}/import-marks", response_model=ImportUpdResponse
+)
+async def import_marks(
+    document_id: UUID,
+    body: ImportMarksRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Загрузить список марок в приёмку вручную (без УПД).
+
+    Дополнительный источник рядом с загрузкой УПД: кладовщик вставляет/загружает
+    готовый перечень кодов. Каждый код резолвится в товар по СВОЕМУ GTIN тем же
+    порядком, что и при импорте УПД (позиции привязанного поступления → GtinProductMap
+    → каталог МС), и сохраняется как скан ``valid``/``unknown_product``. План НЕ
+    мутируем: кол-во/цена берутся из привязанного поступления МС. Несопоставленные
+    GTIN привязываются вручную панелью подбора (``/products/link-gtin``).
+    """
+    doc = await _get_acceptance_doc(document_id, current_user, db)
+
+    # Нормализуем список: strip, отбрасываем пустые, дедуп с сохранением порядка.
+    seen: set[str] = set()
+    codes: list[str] = []
+    for raw in body.codes:
+        c = (raw or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        codes.append(c)
+    if not codes:
+        raise HTTPException(status_code=400, detail="Список марок пуст")
+
+    ms = await _maybe_ms_service(current_user, db)
+
+    # План привязанного поступления МС: gtin/pack_gtin → товар, артикул/КодТов → товар.
+    plan_map: dict[str, tuple[str, Optional[str]]] = {}
+    article_map: dict[str, tuple[str, Optional[str]]] = {}
+    for p in doc.plan or []:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("product_id")
+        if not (pid and isinstance(pid, str)):
+            continue
+        name = (p.get("product_name") or "").strip() or None
+        g = normalize_gtin_key(p.get("gtin"))
+        if g:
+            plan_map.setdefault(g, (pid, name))
+        for pg in p.get("pack_gtins") or []:
+            pgk = normalize_gtin_key(pg)
+            if pgk:
+                plan_map.setdefault(pgk, (pid, name))
+        for a in (_norm_article(p.get("article")), _norm_article(p.get("code"))):
+            if a:
+                article_map.setdefault(a, (pid, name))
+
+    # Уже имеющиеся коды документа — не плодим дубли при повторной загрузке.
+    existing_codes = set(
+        (
+            await db.execute(
+                select(Scan.code).where(Scan.document_id == document_id)
+            )
+        ).scalars().all()
+    )
+
+    # Группируем коды по их СОБСТВЕННОМУ GTIN. SSCC-короб GTIN не несёт — сохраняем
+    # его как is_box с gtin=None (резолв только по артикулу, обычно не сматчится →
+    # ручная привязка). Блок (НомУпак с 01+GTIN) несёт свой GTIN.
+    groups: dict[Optional[str], dict[str, list[str]]] = {}
+    order: list[Optional[str]] = []
+
+    def _bucket(g: Optional[str]) -> dict[str, list[str]]:
+        if g not in groups:
+            groups[g] = {"codes": [], "packages": []}
+            order.append(g)
+        return groups[g]
+
+    for code in codes:
+        if is_sscc(code):
+            _bucket(_package_gtin(code, None))["packages"].append(code)
+        else:
+            _bucket(_code_gtin(code, None))["codes"].append(code)
+
+    resolve_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    results: list[ImportPositionResult] = []
+    unmatched: set[str] = set()
+    created = 0
+    skipped = 0
+
+    for g in order:
+        bucket = groups[g]
+        product_id, product_name = await _resolve_product(
+            g, None, current_user.id, ms, db, resolve_cache, plan_map, article_map
+        )
+        matched = product_id is not None
+        if g and not matched:
+            unmatched.add(g)
+        status = ScanStatus.valid if matched else ScanStatus.unknown_product
+
+        for code in bucket["codes"]:
+            if code in existing_codes:
+                skipped += 1
+                continue
+            existing_codes.add(code)
+            db.add(
+                Scan(
+                    document_id=document_id,
+                    code=code,
+                    gtin=g,
+                    moysklad_product_id=product_id,
+                    product_name=product_name,
+                    status=status,
+                )
+            )
+            created += 1
+
+        for sscc in bucket["packages"]:
+            if sscc in existing_codes:
+                skipped += 1
+                continue
+            existing_codes.add(sscc)
+            db.add(
+                Scan(
+                    document_id=document_id,
+                    code=sscc,
+                    gtin=g,
+                    moysklad_product_id=product_id,
+                    product_name=product_name,
+                    status=status,
+                    is_box=True,
+                )
+            )
+            created += 1
+
+        results.append(
+            ImportPositionResult(
+                name=product_name or "Без товара",
+                gtin=g,
+                article=None,
+                quantity=None,
+                codes_count=len(bucket["codes"]),
+                packages_count=len(bucket["packages"]),
+                product_id=product_id,
+                product_name=product_name,
+                matched=matched,
+            )
+        )
+
+    await db.commit()
+    logger.info(
+        "acceptance.marks_imported",
+        document_id=str(document_id),
+        total=len(codes),
+        created_scans=created,
+        skipped=skipped,
+        unmatched=len(unmatched),
+        user_id=str(current_user.id),
+    )
+
+    return ImportUpdResponse(
+        document_id=document_id,
+        positions=results,
+        created_scans=created,
+        skipped_duplicates=skipped,
+        unmatched_gtins=sorted(unmatched),
     )
 
 

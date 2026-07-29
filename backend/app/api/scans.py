@@ -80,6 +80,18 @@ class CreateBoxRequest(BaseModel):
     unpack: bool = True
 
 
+# Кап на размер одной массовой загрузки списка марок (защита от гигантских payload).
+_BULK_MAX_CODES = 5000
+
+
+class BulkScanRequest(BaseModel):
+    document_id: UUID
+    codes: List[str]
+    # Как трактовать SSCC-короба в списке: True — раскрыть на штучные КМ (mock-only),
+    # False — сохранить короб целиком (transportpack). По умолчанию — целиком.
+    unpack_boxes: bool = False
+
+
 async def _ensure_document_owner(
     document_id: UUID, current_user: User, db: AsyncSession
 ) -> Document:
@@ -371,6 +383,106 @@ async def create_scan(
     return resp
 
 
+async def _resolve_cz_for_boxes(
+    current_user: User, db: AsyncSession
+) -> ChestnyZnakService:
+    """Собрать сервис ЧЗ для работы с коробами.
+
+    В mock-режиме — без ограничений. В проде требует включённого режима коробов и
+    действующего входа по УКЭП (иначе HTTPException). Вынесено из ``create_box_scans``,
+    чтобы переиспользовать в массовой загрузке списка марок (``/scans/bulk``).
+    """
+    if settings.CZ_MOCK_MODE:
+        return ChestnyZnakService(token=None)
+
+    int_result = await db.execute(
+        select(Integration).where(Integration.user_id == current_user.id)
+    )
+    integration = int_result.scalar_one_or_none()
+    if not integration or not integration.cz_box_mode_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Работа с коробами отключена. Включите режим в настройках и войдите через УКЭП.",
+        )
+    try:
+        cz_token = (
+            decrypt_token(integration.cz_token) if integration.cz_token else None
+        )
+    except InvalidToken:
+        raise HTTPException(
+            status_code=502,
+            detail="Токен Честного Знака повреждён. Выйдите и войдите снова по УКЭП.",
+        )
+    expired = (
+        integration.cz_token_expires_at is not None
+        and integration.cz_token_expires_at <= datetime.now(timezone.utc)
+    )
+    if not cz_token or expired:
+        raise HTTPException(
+            status_code=403,
+            detail="Нужен действующий вход в Честный Знак (УКЭП) для работы с коробами.",
+        )
+    return ChestnyZnakService(token=cz_token, mock=False)
+
+
+async def _create_box_scans_core(
+    db: AsyncSession,
+    doc: Document,
+    sscc: str,
+    unpack: bool,
+    current_user_id: UUID,
+    cz: ChestnyZnakService,
+) -> List[ScanResponse]:
+    """Ядро создания сканов из SSCC-короба (целиком или с раскрытием на штучные КМ).
+
+    Общее для ``/scans/box`` и ``/scans/bulk``. Валидацию SSCC и сбор ``cz`` делает
+    вызывающий.
+    """
+    plan_gtins = [
+        item.get("gtin")
+        for item in (doc.plan or [])
+        if isinstance(item, dict) and item.get("gtin")
+    ]
+
+    # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
+    if not unpack:
+        try:
+            info = await cz.get_sscc_info(sscc, plan_gtins)
+        except CZApiError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+        scan, is_dup = await _create_scan_record(
+            db,
+            doc.id,
+            sscc,
+            current_user_id,
+            is_box=True,
+            box_quantity=info.quantity,
+            gtin_override=info.gtin,
+        )
+        resp = ScanResponse.model_validate(scan)
+        resp.duplicate = is_dup
+        return [resp]
+
+    # Раскрытие на штучные КМ.
+    try:
+        member_codes = await cz.unpack_box(sscc, plan_gtins)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail="Раскрытие SSCC через API Честного Знака пока не настроено. "
+            "Переключите тумблер на «целиком» или сканируйте коды поштучно.",
+        )
+
+    responses: List[ScanResponse] = []
+    for code in member_codes:
+        scan, is_dup = await _create_scan_record(db, doc.id, code, current_user_id)
+        resp = ScanResponse.model_validate(scan)
+        resp.duplicate = is_dup
+        responses.append(resp)
+
+    return responses
+
+
 @router.post("/box", response_model=List[ScanResponse], status_code=201)
 async def create_box_scans(
     body: CreateBoxRequest,
@@ -395,78 +507,83 @@ async def create_box_scans(
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
-    int_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
+    cz = await _resolve_cz_for_boxes(current_user, db)
+    return await _create_box_scans_core(
+        db, doc, sscc, body.unpack, current_user.id, cz
     )
-    integration = int_result.scalar_one_or_none()
 
-    if not settings.CZ_MOCK_MODE:
-        if not integration or not integration.cz_box_mode_enabled:
-            raise HTTPException(
-                status_code=403,
-                detail="Работа с коробами отключена. Включите режим в настройках и войдите через УКЭП.",
-            )
-        try:
-            cz_token = (
-                decrypt_token(integration.cz_token)
-                if integration.cz_token
-                else None
-            )
-        except InvalidToken:
-            raise HTTPException(
-                status_code=502,
-                detail="Токен Честного Знака повреждён. Выйдите и войдите снова по УКЭП.",
-            )
-        expired = (
-            integration.cz_token_expires_at is not None
-            and integration.cz_token_expires_at <= datetime.now(timezone.utc)
-        )
-        if not cz_token or expired:
-            raise HTTPException(
-                status_code=403,
-                detail="Нужен действующий вход в Честный Знак (УКЭП) для работы с коробами.",
-            )
-        cz = ChestnyZnakService(token=cz_token, mock=False)
-    else:
-        cz = ChestnyZnakService(token=None)
 
-    plan_gtins = [
-        item.get("gtin")
-        for item in (doc.plan or [])
-        if isinstance(item, dict) and item.get("gtin")
-    ]
+@router.post("/bulk", response_model=List[ScanResponse], status_code=201)
+async def create_bulk_scans(
+    body: BulkScanRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Массовая загрузка списка марок в документ (отгрузка).
 
-    # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
-    if not body.unpack:
-        try:
-            info = await cz.get_sscc_info(sscc, plan_gtins)
-        except CZApiError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
-        scan, is_dup = await _create_scan_record(
-            db,
-            body.document_id,
-            sscc,
-            current_user.id,
-            is_box=True,
-            box_quantity=info.quantity,
-            gtin_override=info.gtin,
-        )
-        resp = ScanResponse.model_validate(scan)
-        resp.duplicate = is_dup
-        return [resp]
+    Кладовщик вставляет/загружает готовый список кодов, а не сканирует по одному.
+    Каждый код проходит ту же диспетчеризацию, что и одиночный скан:
+    SSCC-короб → раскрытие/целиком, «плоский» EAN немаркированной позиции → +кол-во,
+    обычный КМ → ``_create_scan_record`` + ``verify_code_task`` (ЧЗ-проверка,
+    overflow, распределение по плану — всё как при сканировании).
 
-    # Раскрытие на штучные КМ.
-    try:
-        member_codes = await cz.unpack_box(sscc, plan_gtins)
-    except NotImplementedError:
+    Возвращает массив сканов (дубли — с ``duplicate=True``). Статусы ``pending``
+    дотягиваются по WS по мере проверки в Celery.
+    """
+    doc = await _ensure_document_owner(body.document_id, current_user, db)
+
+    # Нормализуем список: strip, отбрасываем пустые, дедуп с сохранением порядка.
+    seen: set[str] = set()
+    codes: List[str] = []
+    for raw in body.codes:
+        c = (raw or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        codes.append(c)
+    if not codes:
+        raise HTTPException(400, "Список марок пуст")
+    if len(codes) > _BULK_MAX_CODES:
         raise HTTPException(
-            status_code=501,
-            detail="Раскрытие SSCC через API Честного Знака пока не настроено. "
-            "Переключите тумблер на «целиком» или сканируйте коды поштучно.",
+            400,
+            f"Слишком много кодов за раз (макс. {_BULK_MAX_CODES}). "
+            "Разбейте список на части.",
         )
 
+    # ЧЗ для коробов собираем лениво — только если в списке реально есть SSCC.
+    cz: Optional[ChestnyZnakService] = None
     responses: List[ScanResponse] = []
-    for code in member_codes:
+    for code in codes:
+        if is_sscc(code):
+            if cz is None:
+                cz = await _resolve_cz_for_boxes(current_user, db)
+            responses.extend(
+                await _create_box_scans_core(
+                    db, doc, code, body.unpack_boxes, current_user.id, cz
+                )
+            )
+            continue
+
+        unmarked_entry, marked_entry = _classify_barcode(doc, code)
+        if marked_entry is not None:
+            # Штрихкод маркированного товара в списке — не КМ; помечаем как invalid,
+            # чтобы кладовщик увидел проблемную строку, а не молча её потерять.
+            scan, is_dup = await _create_scan_record(
+                db, body.document_id, code, current_user.id
+            )
+            resp = ScanResponse.model_validate(scan)
+            resp.duplicate = is_dup
+            responses.append(resp)
+            continue
+        if unmarked_entry is not None:
+            scan, is_dup = await _create_or_increment_barcode_scan(
+                db, body.document_id, code, unmarked_entry
+            )
+            resp = ScanResponse.model_validate(scan)
+            resp.duplicate = is_dup
+            responses.append(resp)
+            continue
+
         scan, is_dup = await _create_scan_record(
             db, body.document_id, code, current_user.id
         )
@@ -474,6 +591,13 @@ async def create_box_scans(
         resp.duplicate = is_dup
         responses.append(resp)
 
+    logger.info(
+        "scan.bulk",
+        document_id=str(body.document_id),
+        total=len(codes),
+        created=len(responses),
+        user_id=str(current_user.id),
+    )
     return responses
 
 

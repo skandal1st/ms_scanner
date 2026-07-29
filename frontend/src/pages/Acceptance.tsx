@@ -60,6 +60,42 @@ export function AcceptancePage() {
     }
   }
 
+  // Ручной список марок: дополняет текущий документ, если он уже открыт (напр.
+  // после УПД); иначе создаёт новый по выбранной группе/поступлению.
+  const handleSubmitMarks = async (
+    codes: string[],
+    group: string,
+    moyskladId: string,
+  ) => {
+    setBusy(true)
+    setError(null)
+    setSendError(null)
+    setSendDone(false)
+    try {
+      let target = doc
+      if (!target) {
+        setResult(null)
+        setScans([])
+        const { data: created } = await acceptanceApi.createDoc(
+          'Приёмка — список марок',
+          group,
+          moyskladId || undefined,
+        )
+        target = created
+        setDoc(created)
+      }
+      const { data: imp } = await acceptanceApi.importMarks(target.id, codes)
+      setResult(imp)
+      const { data: sc } = await scansApi.list(target.id)
+      setScans(sc)
+    } catch (e) {
+      setError(errorDetail(e) ?? 'Не удалось загрузить список марок')
+      throw e
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // Коды маркировки по GTIN — для разворота строки позиции.
   const codesByGtin = useMemo(() => {
     const m = new Map<string, string[]>()
@@ -225,7 +261,7 @@ export function AcceptancePage() {
 
       <div className="acc-scroll">
       <div style={{ padding: '12px 16px 0' }}>
-        <UpdImportBar busy={busy} onSubmit={handleSubmit} />
+        <UpdImportBar busy={busy} onSubmit={handleSubmit} onSubmitMarks={handleSubmitMarks} />
 
         {error && (
           <div className="alert alert--error" style={{ marginTop: 10 }}>

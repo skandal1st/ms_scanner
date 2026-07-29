@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { acceptanceApi } from '../api/client'
 import type { ProductGroup, MsDocument } from '../api/client'
 import { useMsDocuments } from '../hooks/useDocuments'
+import { BulkMarksModal } from './BulkMarksModal'
 
 interface UpdImportBarProps {
   busy: boolean
   onSubmit: (file: File, productGroup: string, moyskladId: string) => void
+  /** Загрузить список марок вручную (альтернатива УПД) с выбранной группой/поступлением. */
+  onSubmitMarks: (codes: string[], productGroup: string, moyskladId: string) => Promise<void>
 }
 
 /** Отображаемое имя поступления МС: "00123 — ООО Поставщик". */
@@ -19,13 +22,14 @@ function msSupplyLabel(m: MsDocument): string {
  * куда писать КМ) + XML-файл + кнопка «Загрузить». Сам импорт выполняет родитель
  * через onSubmit.
  */
-export function UpdImportBar({ busy, onSubmit }: UpdImportBarProps) {
+export function UpdImportBar({ busy, onSubmit, onSubmitMarks }: UpdImportBarProps) {
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [group, setGroup] = useState('')
   const [moyskladId, setMoyskladId] = useState('')
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
   const [file, setFile] = useState<File | null>(null)
+  const [marksOpen, setMarksOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -130,6 +134,27 @@ export function UpdImportBar({ busy, onSubmit }: UpdImportBarProps) {
       >
         {busy ? 'Загрузка…' : 'Загрузить'}
       </button>
+
+      <button
+        type="button"
+        className="button"
+        onClick={() => setMarksOpen(true)}
+        disabled={!group || busy}
+        title={
+          group
+            ? 'Загрузить список марок вручную (без УПД)'
+            : 'Сначала выберите товарную группу'
+        }
+      >
+        📋 Список марок
+      </button>
+
+      <BulkMarksModal
+        open={marksOpen}
+        onClose={() => setMarksOpen(false)}
+        busy={busy}
+        onSubmit={(codes) => onSubmitMarks(codes, group, moyskladId)}
+      />
     </div>
   )
 }

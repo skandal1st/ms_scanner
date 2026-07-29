@@ -6,18 +6,33 @@ import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
+import { BulkMarksModal } from '../components/BulkMarksModal'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument, useClearDocumentScans } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
+import { scansApi } from '../api/client'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
-  const { document, setDocument, stats, scans, getProgress, czTokenExpired, setCzTokenExpired } = useScanStore()
+  const { document, setDocument, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired } = useScanStore()
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+
+  const handleBulkMarks = async (codes: string[]) => {
+    if (!document) return
+    setBulkBusy(true)
+    try {
+      const { data: created } = await scansApi.bulk(document.id, codes, unpackBox)
+      for (const s of created) addScan(s)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
 
   const processMutation = useProcessDocument()
   const clearMutation = useClearDocumentScans()
@@ -105,6 +120,15 @@ export function ShipmentPage() {
           <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
+          <button
+            type="button"
+            className="button"
+            style={{ marginTop: 8, width: '100%' }}
+            disabled={!document}
+            onClick={() => setBulkOpen(true)}
+          >
+            📋 Загрузить список марок
+          </button>
           <StatsPanel />
         </div>
 
@@ -168,6 +192,13 @@ export function ShipmentPage() {
                   : 'Отгрузить товары'}
         </button>
       </footer>
+
+      <BulkMarksModal
+        open={bulkOpen}
+        onClose={() => setBulkOpen(false)}
+        onSubmit={handleBulkMarks}
+        busy={bulkBusy}
+      />
 
       {closingTab && (
         <div
