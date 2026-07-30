@@ -256,7 +256,7 @@ async def _create_scan_record(
 
 
 def _classify_barcode(
-    doc: Document, code: str
+    plan: Optional[list], code: str
 ) -> tuple[Optional[dict], Optional[dict]]:
     """Классифицировать «плоский» штрихкод по плану документа.
 
@@ -264,6 +264,10 @@ def _classify_barcode(
     запись плана. Срабатывает только для обычного штрихкода (все цифры, 8..14) —
     настоящий КМ (Data Matrix) содержит серийник/спецсимволы и сюда не попадает.
     Обе None → не штрихкод либо нет совпадения (обычный флоу проверки КМ).
+
+    Принимает сам список плана (а не ORM-документ): в массовой загрузке объект
+    документа истекает после per-code commit, и обращение к ``doc.plan`` в цикле
+    вызвало бы неявную async-подгрузку (MissingGreenlet).
     """
     c = (code or "").strip()
     if not (c.isdigit() and 8 <= len(c) <= 14):
@@ -271,7 +275,7 @@ def _classify_barcode(
     key = normalize_gtin_key(c)
     if not key:
         return None, None
-    for p in doc.plan or []:
+    for p in plan or []:
         if not isinstance(p, dict):
             continue
         if normalize_gtin_key(p.get("gtin")) != key:
@@ -348,7 +352,7 @@ async def create_scan(
             "Это код короба (SSCC). Используйте /scans/box.",
         )
 
-    unmarked_entry, marked_entry = _classify_barcode(doc, body.code)
+    unmarked_entry, marked_entry = _classify_barcode(doc.plan, body.code)
     if marked_entry is not None:
         raise HTTPException(
             400,
@@ -427,7 +431,8 @@ async def _resolve_cz_for_boxes(
 
 async def _create_box_scans_core(
     db: AsyncSession,
-    doc: Document,
+    document_id: UUID,
+    plan_gtins: list,
     sscc: str,
     unpack: bool,
     current_user_id: UUID,
@@ -435,15 +440,10 @@ async def _create_box_scans_core(
 ) -> List[ScanResponse]:
     """Ядро создания сканов из SSCC-короба (целиком или с раскрытием на штучные КМ).
 
-    Общее для ``/scans/box`` и ``/scans/bulk``. Валидацию SSCC и сбор ``cz`` делает
-    вызывающий.
+    Общее для ``/scans/box`` и ``/scans/bulk``. Валидацию SSCC, сбор ``cz`` и
+    ``plan_gtins`` делает вызывающий — сюда передаём примитивы (а не ORM-документ),
+    т.к. в массовой загрузке документ истекает после per-code commit.
     """
-    plan_gtins = [
-        item.get("gtin")
-        for item in (doc.plan or [])
-        if isinstance(item, dict) and item.get("gtin")
-    ]
-
     # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
     if not unpack:
         try:
@@ -452,7 +452,7 @@ async def _create_box_scans_core(
             raise HTTPException(status_code=502, detail=str(exc))
         scan, is_dup = await _create_scan_record(
             db,
-            doc.id,
+            document_id,
             sscc,
             current_user_id,
             is_box=True,
@@ -475,12 +475,21 @@ async def _create_box_scans_core(
 
     responses: List[ScanResponse] = []
     for code in member_codes:
-        scan, is_dup = await _create_scan_record(db, doc.id, code, current_user_id)
+        scan, is_dup = await _create_scan_record(db, document_id, code, current_user_id)
         resp = ScanResponse.model_validate(scan)
         resp.duplicate = is_dup
         responses.append(resp)
 
     return responses
+
+
+def _plan_gtins(plan: Optional[list]) -> list:
+    """GTIN'ы плана документа для проверки состава короба в ЧЗ."""
+    return [
+        item.get("gtin")
+        for item in (plan or [])
+        if isinstance(item, dict) and item.get("gtin")
+    ]
 
 
 @router.post("/box", response_model=List[ScanResponse], status_code=201)
@@ -509,7 +518,7 @@ async def create_box_scans(
 
     cz = await _resolve_cz_for_boxes(current_user, db)
     return await _create_box_scans_core(
-        db, doc, sscc, body.unpack, current_user.id, cz
+        db, doc.id, _plan_gtins(doc.plan), sscc, body.unpack, current_user.id, cz
     )
 
 
@@ -550,6 +559,14 @@ async def create_bulk_scans(
             "Разбейте список на части.",
         )
 
+    # Примитивы фиксируем ДО цикла: ``_create_scan_record`` коммитит на каждый код,
+    # после чего ORM-объекты ``current_user``/``doc`` истекают, и повторное обращение
+    # к ``current_user.id`` / ``doc.plan`` в цикле вызвало бы неявную async-подгрузку
+    # (MissingGreenlet → 500). PK (``id``) не истекает, но берём его один раз явно.
+    user_id = current_user.id
+    plan_items = list(doc.plan or [])
+    plan_gtins = _plan_gtins(plan_items)
+
     # ЧЗ для коробов собираем лениво — только если в списке реально есть SSCC.
     cz: Optional[ChestnyZnakService] = None
     responses: List[ScanResponse] = []
@@ -559,17 +576,17 @@ async def create_bulk_scans(
                 cz = await _resolve_cz_for_boxes(current_user, db)
             responses.extend(
                 await _create_box_scans_core(
-                    db, doc, code, body.unpack_boxes, current_user.id, cz
+                    db, body.document_id, plan_gtins, code, body.unpack_boxes, user_id, cz
                 )
             )
             continue
 
-        unmarked_entry, marked_entry = _classify_barcode(doc, code)
+        unmarked_entry, marked_entry = _classify_barcode(plan_items, code)
         if marked_entry is not None:
             # Штрихкод маркированного товара в списке — не КМ; помечаем как invalid,
             # чтобы кладовщик увидел проблемную строку, а не молча её потерять.
             scan, is_dup = await _create_scan_record(
-                db, body.document_id, code, current_user.id
+                db, body.document_id, code, user_id
             )
             resp = ScanResponse.model_validate(scan)
             resp.duplicate = is_dup
@@ -585,7 +602,7 @@ async def create_bulk_scans(
             continue
 
         scan, is_dup = await _create_scan_record(
-            db, body.document_id, code, current_user.id
+            db, body.document_id, code, user_id
         )
         resp = ScanResponse.model_validate(scan)
         resp.duplicate = is_dup
@@ -596,7 +613,7 @@ async def create_bulk_scans(
         document_id=str(body.document_id),
         total=len(codes),
         created=len(responses),
-        user_id=str(current_user.id),
+        user_id=str(user_id),
     )
     return responses
 
