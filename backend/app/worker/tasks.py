@@ -321,6 +321,7 @@ async def _verify_code_async(scan_id: str, user_id: str):
                 if info:
                     scan.owner_name = info.owner_name
                     scan.producer_name = info.producer_name
+                    scan.owner_inn = info.owner_inn
                     if info.is_aggregate:
                         # Блок/короб: разворачиваем в листовые КМ пачек.
                         scan.status = ScanStatus.valid
@@ -436,6 +437,7 @@ async def _verify_code_async(scan_id: str, user_id: str):
             box_quantity=scan.box_quantity,
             owner_name=scan.owner_name,
             producer_name=scan.producer_name,
+            owner_inn=scan.owner_inn,
             child_codes=scan.child_codes,
         )
 
@@ -553,6 +555,7 @@ async def _push_ws_update(
     box_quantity: Optional[int] = None,
     owner_name: Optional[str] = None,
     producer_name: Optional[str] = None,
+    owner_inn: Optional[str] = None,
     child_codes: Optional[list] = None,
 ):
     import redis.asyncio as aioredis
@@ -572,6 +575,7 @@ async def _push_ws_update(
         "box_quantity": box_quantity,
         "owner_name": owner_name,
         "producer_name": producer_name,
+        "owner_inn": owner_inn,
         "child_codes": child_codes,
     })
     await r.publish(f"ws:{user_id}", message)

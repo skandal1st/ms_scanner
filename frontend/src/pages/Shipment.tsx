@@ -7,8 +7,8 @@ import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { BulkMarksModal } from '../components/BulkMarksModal'
-import { useScanStore } from '../store/scanStore'
-import { useLoadDocument, useProcessDocument, useClearDocumentScans } from '../hooks/useDocuments'
+import { useScanStore, ownerCheckState } from '../store/scanStore'
+import { useLoadDocument, useProcessDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
 import { scansApi } from '../api/client'
 import type { Document } from '../api/client'
@@ -36,6 +36,19 @@ export function ShipmentPage() {
 
   const processMutation = useProcessDocument()
   const clearMutation = useClearDocumentScans()
+
+  // Владелец подписи (ИНН из сертификата ЧЗ) — для сверки владельца марок в отгрузке.
+  const { data: integration } = useIntegration()
+  const signatureInn = integration?.cz_inn ?? null
+  const ownerWarnings = scans.reduce(
+    (acc, s) => {
+      const st = ownerCheckState(s, signatureInn)
+      if (st === 'mismatch') acc.mismatch += 1
+      else if (st === 'unknown') acc.unknown += 1
+      return acc
+    },
+    { mismatch: 0, unknown: 0 },
+  )
 
   // Ширина левой панели (документы/сканирование) — тянется мышью за разделитель.
   const { width: leftWidth, startResize } = useResizableWidth(
@@ -148,7 +161,7 @@ export function ShipmentPage() {
             <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>
           </div>
           <div className="acc-table-wrap">
-            <CodesTable />
+            <CodesTable signatureInn={signatureInn} />
           </div>
         </div>
       </div>
@@ -163,6 +176,17 @@ export function ShipmentPage() {
           {clearMutation.isPending ? 'Очистка…' : 'Очистить'}
         </button>
         <div className="acc-footer__spacer" />
+        {(ownerWarnings.mismatch > 0 || ownerWarnings.unknown > 0) && (
+          <span
+            style={{ marginRight: 12, fontSize: 12, color: '#8a3008', whiteSpace: 'nowrap' }}
+            title="Владельца этих марок стоит проверить. Отгрузку это не блокирует."
+          >
+            ⚠{' '}
+            {ownerWarnings.mismatch > 0 && `${ownerWarnings.mismatch} с чужим владельцем`}
+            {ownerWarnings.mismatch > 0 && ownerWarnings.unknown > 0 && ' · '}
+            {ownerWarnings.unknown > 0 && `${ownerWarnings.unknown} не проверено`}
+          </span>
+        )}
         <button
           type="button"
           className="button button--success"

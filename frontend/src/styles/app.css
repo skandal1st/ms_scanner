@@ -491,6 +491,12 @@ html, body, #root { height: 100%; }
 /* Коды выбранной позиции: синяя заливка + акцентная левая граница. */
 .scans-table .scans-row.is-selected > td { background: #eff6ff; }
 .scans-table .scans-row.is-selected > td.is-code { box-shadow: inset 3px 0 0 #2563eb; }
+/* Отгрузка: владелец марки ≠ владелец подписи — янтарная подсветка (не блокирует). */
+.scans-table .scans-row.is-owner-mismatch > td { background: #fef3c7; }
+.scans-table .scans-row.is-owner-mismatch > td.is-code { box-shadow: inset 3px 0 0 #d97706; }
+/* Владельца проверить не удалось — нейтральная серая подсветка. */
+.scans-table .scans-row.is-owner-unknown > td { background: #f4f4f5; }
+.scans-table .scans-row.is-owner-unknown > td.is-code { box-shadow: inset 3px 0 0 #a1a1aa; }
 /* Повторный скан существующего кода: строка кратко вспыхивает жёлтым. */
 .scans-table .scans-row.is-flash > td { animation: scan-flash 1.2s ease-out; }
 @keyframes scan-flash {

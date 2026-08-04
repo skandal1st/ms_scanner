@@ -65,6 +65,8 @@ class CodeInfo:
     owner_name: Optional[str]
     producer_name: Optional[str]
     product_group: Optional[str]
+    # ИНН владельца марки (ЧЗ ownerInn) — для сверки с владельцем подписи (Integration.cz_inn).
+    owner_inn: Optional[str] = None
 
     @property
     def is_aggregate(self) -> bool:
@@ -660,6 +662,7 @@ class ChestnyZnakService:
                 owner_name=(ci.get("ownerName") or None),
                 producer_name=(ci.get("producerName") or ci.get("manufacturerName") or None),
                 product_group=ci.get("productGroup") or pg,
+                owner_inn=(ci.get("ownerInn") or None),
             )
             logger.info(
                 "cz.code_info.ok",

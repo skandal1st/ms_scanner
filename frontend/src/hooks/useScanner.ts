@@ -83,6 +83,7 @@ export function useScanner(documentId: string | null) {
           ...(data.producer_name != null
             ? { producer_name: data.producer_name as string }
             : {}),
+          ...(data.owner_inn != null ? { owner_inn: data.owner_inn as string } : {}),
           ...(Array.isArray(data.child_codes)
             ? { child_codes: data.child_codes as string[] }
             : {}),

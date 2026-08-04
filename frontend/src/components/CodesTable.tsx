@@ -3,6 +3,7 @@ import {
   useScanStore,
   effectiveGtinKey,
   selectionMatchesScan,
+  ownerCheckState,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 
@@ -16,7 +17,7 @@ const STATUS_CONFIG = {
   used_in_other_doc: { label: 'В другом документе', cls: 'badge--warn' },
 } as const
 
-export function CodesTable() {
+export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
   const { scans, removeScan, flashScanId, selection, togglePositionSelection } = useScanStore()
   const [expanded, setExpanded] = useState<string | null>(null)
 
@@ -39,6 +40,7 @@ export function CodesTable() {
           <ScanRow
             key={scan.id}
             scan={scan}
+            signatureInn={signatureInn}
             isExpanded={expanded === scan.id}
             isFlash={flashScanId === scan.id}
             isSelected={Boolean(selection && selectionMatchesScan(selection, scan))}
@@ -62,6 +64,7 @@ export function CodesTable() {
 
 function ScanRow({
   scan,
+  signatureInn,
   isExpanded,
   isFlash,
   isSelected,
@@ -69,6 +72,7 @@ function ScanRow({
   onDelete,
 }: {
   scan: Scan
+  signatureInn?: string | null
   isExpanded: boolean
   isFlash: boolean
   isSelected: boolean
@@ -76,6 +80,10 @@ function ScanRow({
   onDelete: () => void
 }) {
   const cfg = STATUS_CONFIG[scan.status]
+  // Сверка владельца марки с владельцем подписи (только отгрузка). Подсветка, не блокировка.
+  const owner = ownerCheckState(scan, signatureInn)
+  const ownerCls =
+    owner === 'mismatch' ? 'is-owner-mismatch' : owner === 'unknown' ? 'is-owner-unknown' : ''
   // Агрегат (блок/короб): развёрнут в единицы — box_quantity/child_codes без is_box.
   // Штрихкод немаркированного товара (is_barcode) — не агрегат: box_quantity = кол-во.
   const childCount = scan.child_codes?.length ?? 0
@@ -85,7 +93,7 @@ function ScanRow({
   return (
     <>
       <tr
-        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''}`}
+        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''} ${ownerCls}`}
         onClick={onToggle}
       >
         <td className="is-code">
@@ -122,6 +130,24 @@ function ScanRow({
         </td>
         <td>
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
+          {owner === 'mismatch' && (
+            <span
+              className="badge badge--warn"
+              style={{ marginLeft: 4 }}
+              title="ИНН владельца марки не совпадает с владельцем подписи"
+            >
+              Чужой владелец
+            </span>
+          )}
+          {owner === 'unknown' && (
+            <span
+              className="badge badge--pending"
+              style={{ marginLeft: 4 }}
+              title="Не удалось проверить владельца марки в Честном Знаке"
+            >
+              Владелец не проверен
+            </span>
+          )}
         </td>
         <td className="is-action">
           <button
@@ -148,10 +174,13 @@ function ScanRow({
                 <span>{scan.gtin}</span>
               </div>
             )}
-            {scan.owner_name && (
+            {(scan.owner_name || scan.owner_inn) && (
               <div className="scans-expanded__row">
                 <span className="scans-expanded__label">Владелец:</span>
-                <span>{scan.owner_name}</span>
+                <span>
+                  {scan.owner_name}
+                  {scan.owner_inn ? ` (ИНН ${scan.owner_inn})` : ''}
+                </span>
               </div>
             )}
             {scan.producer_name && (

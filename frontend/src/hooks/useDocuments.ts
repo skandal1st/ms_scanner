@@ -1,6 +1,15 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { documentsApi, scansApi, type DocumentKind } from '../api/client'
+import { documentsApi, scansApi, integrationsApi, type DocumentKind } from '../api/client'
 import { useScanStore } from '../store/scanStore'
+
+/** Интеграция текущего пользователя (в т.ч. cz_inn — владелец подписи для сверки марок). */
+export function useIntegration() {
+  return useQuery({
+    queryKey: ['integration'],
+    queryFn: () => integrationsApi.get().then((r) => r.data),
+    staleTime: 60_000,
+  })
+}
 
 export function useMsDocuments(kind: DocumentKind, search?: string) {
   return useQuery({

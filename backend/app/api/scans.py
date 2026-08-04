@@ -42,6 +42,8 @@ class ScanResponse(BaseModel):
     is_barcode: bool = False
     owner_name: Optional[str] = None
     producer_name: Optional[str] = None
+    # ИНН владельца марки (ЧЗ) — фронт сверяет с владельцем подписи (cz_inn) в отгрузке.
+    owner_inn: Optional[str] = None
     child_codes: Optional[List[str]] = None
     # Повторный скан кода, уже присутствующего в ЭТОМ документе. Строка в БД одна
     # (unique document_id+code), статус существующей не меняется — фронт подсвечивает.

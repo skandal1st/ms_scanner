@@ -126,6 +126,27 @@ export function scanUnits(scan: Scan): number {
   return 1
 }
 
+export type OwnerCheck = 'mismatch' | 'unknown'
+
+/** Сверка владельца марки (owner_inn из ЧЗ) с владельцем подписи (signatureInn = cz_inn)
+ * в отгрузке. Возвращает:
+ *  - 'mismatch' — ИНН владельца марки не совпадает с владельцем подписи;
+ *  - 'unknown'  — ЧЗ не вернул ИНН владельца (нет токена/mock/пусто);
+ *  - null       — проверка неприменима (немаркированный штрихкод, статус не valid/overflow,
+ *                 нет ИНН подписи) или владелец совпал.
+ * Никогда не блокирует отгрузку — только для подсветки. */
+export function ownerCheckState(
+  scan: Scan,
+  signatureInn: string | null | undefined,
+): OwnerCheck | null {
+  if (scan.is_barcode) return null
+  if (!signatureInn) return null
+  if (scan.status !== 'valid' && scan.status !== 'overflow') return null
+  const inn = (scan.owner_inn ?? '').trim()
+  if (!inn) return 'unknown'
+  return inn === signatureInn.trim() ? null : 'mismatch'
+}
+
 function sumUnits(scans: Scan[]): number {
   return scans.reduce((a, s) => a + scanUnits(s), 0)
 }

@@ -161,6 +161,9 @@ class Scan(Base):
     # Владелец и производитель КМ из ЧЗ (cises/info) — для отображения при проверке.
     owner_name = Column(String(500), nullable=True)
     producer_name = Column(String(500), nullable=True)
+    # ИНН владельца марки (ЧЗ ownerInn) — сверка с владельцем подписи (Integration.cz_inn)
+    # в отгрузке: несовпадение подсвечивается на фронте, но не блокирует.
+    owner_inn = Column(String(12), nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
 
