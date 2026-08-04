@@ -14,15 +14,15 @@ const KIND_LABEL: Record<DocumentKind, string> = {
   supply: 'поступление',
 }
 
-/** Отображаемое имя МС-отгрузки: "00123 — (00045) — (ООО Покупатель)".
- * Номер отгрузки, затем номер привязанного заказа, затем контрагент.
- * Отсутствующие части пропускаются. */
+/** Отображаемое имя МС-отгрузки: "00045 - (00123) ООО Покупатель".
+ * Номер привязанного заказа, затем номер отгрузки в скобках, затем контрагент.
+ * Отсутствующие части пропускаются (заказ/контрагент могут быть не заданы). */
 function msDocLabel(m: MsDocument): string {
   const number = m.name || `Без имени · ${m.id.slice(0, 8)}`
-  const parts = [number]
-  if (m.customer_order_name) parts.push(`(${m.customer_order_name})`)
-  if (m.agent_name) parts.push(`(${m.agent_name})`)
-  return parts.join(' — ')
+  let label = `(${number})`
+  if (m.customer_order_name) label = `${m.customer_order_name} - ${label}`
+  if (m.agent_name) label = `${label} ${m.agent_name}`
+  return label
 }
 
 export function DocumentSelector({ kind, onSelect, selected }: Props) {
