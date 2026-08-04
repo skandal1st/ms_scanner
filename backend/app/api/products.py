@@ -36,6 +36,38 @@ class LinkGtinResponse(BaseModel):
     updated_count: int
 
 
+class BulkLinkItem(BaseModel):
+    gtin: str
+    moysklad_product_id: str
+    product_name: Optional[str] = None
+
+
+class BulkLinkRequest(BaseModel):
+    document_id: UUID
+    links: List[BulkLinkItem]
+
+
+class BulkLinkResult(BaseModel):
+    gtin: str
+    updated: int
+
+
+class BulkLinkResponse(BaseModel):
+    updated_total: int
+    results: List[BulkLinkResult]
+
+
+class MatchSuggestion(BaseModel):
+    """Подсказка сопоставления для одного несопоставленного GTIN."""
+    gtin: str
+    gtin_key: str
+    name: Optional[str] = None
+    count: int
+    confidence: str  # high | low | none
+    best: Optional[ProductSearchItem] = None
+    suggestions: List[ProductSearchItem] = []
+
+
 async def _get_ms_service(user: User, db: AsyncSession) -> MoySkladService:
     int_q = await db.execute(select(Integration).where(Integration.user_id == user.id))
     integration = int_q.scalar_one_or_none()
@@ -66,58 +98,44 @@ async def search_products(
     return [ProductSearchItem.model_validate(r) for r in rows]
 
 
-@router.post("/link-gtin", response_model=LinkGtinResponse)
-async def link_gtin_to_product(
-    body: LinkGtinRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Привязать сканы документа с указанным GTIN к товару МС.
+def _norm_name(s: Optional[str]) -> str:
+    """Нормализация имени товара для сравнения: lower + сжатие пробелов."""
+    return " ".join((s or "").lower().split())
 
-    Работает и для ещё не сопоставленных (unknown_product), и для уже
-    сопоставленных (valid/overflow) сканов — последнее позволяет ИСПРАВИТЬ
-    ошибочно привязанный при загрузке УПД товар, перепривязав GTIN к другому.
-    Статус пересчитывается (valid/overflow по плану), WS-пуш идёт на каждый
-    обновлённый скан, чтобы фронт перерисовал список без перезагрузки.
+
+async def _link_gtin_core(
+    db: AsyncSession,
+    doc: Document,
+    user_id: UUID,
+    gtin: str,
+    pid: str,
+    name: Optional[str],
+) -> List[Scan]:
+    """Привязать сканы одного GTIN к товару: статусы + GtinProductMap + план.
+
+    БЕЗ commit / WS-пуша / записи штрихкода в МС — это делает вызывающий (одиночный
+    ``link_gtin_to_product`` или пакетный ``link_gtin_bulk``). Возвращает
+    сопоставленные сканы. Общий движок, чтобы одиночная и массовая привязка вели
+    себя одинаково.
     """
-    doc_q = await db.execute(
-        select(Document).where(
-            Document.id == body.document_id,
-            Document.user_id == current_user.id,
-        )
-    )
-    doc = doc_q.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    pid = body.moysklad_product_id.strip()
-    if not pid or len(pid) > 64:
-        raise HTTPException(status_code=400, detail="Некорректный UUID товара МС")
-
-    target_key = normalize_gtin_key(body.gtin)
+    target_key = normalize_gtin_key(gtin)
     if not target_key:
         raise HTTPException(status_code=400, detail="Некорректный GTIN")
 
-    name = (body.product_name or "").strip() or None
-
-    # Берём сканы этого GTIN во всех «рабочих» статусах, включая уже
-    # сопоставленные (valid/overflow) — чтобы можно было перепривязать ошибочно
-    # сопоставленный товар. duplicate оставляем как есть.
+    # Все «рабочие» сканы этого GTIN (в т.ч. valid/overflow — для перепривязки).
     scans_q = await db.execute(
         select(Scan).where(
-            Scan.document_id == body.document_id,
+            Scan.document_id == doc.id,
             Scan.status.in_(
                 [ScanStatus.unknown_product, ScanStatus.valid, ScanStatus.overflow]
             ),
         )
     )
-    matched: List[Scan] = []
-    for s in scans_q.scalars().all():
-        if normalize_gtin_key(s.gtin) == target_key:
-            matched.append(s)
+    matched: List[Scan] = [
+        s for s in scans_q.scalars().all()
+        if normalize_gtin_key(s.gtin) == target_key
+    ]
 
-    # Подсчёт уже принятых валидных сканов с этим GTIN — для overflow-проверки
-    # на случай, если сопоставление прилетает после превышения плана.
     expected_qty: Optional[int] = None
     if doc.plan:
         for p in doc.plan:
@@ -128,12 +146,7 @@ async def link_gtin_to_product(
                     expected_qty = None
                 break
 
-    # matched уже содержит ВСЕ сканы этого GTIN (в т.ч. ранее valid/overflow),
-    # поэтому overflow считаем с нуля по ним — внешний подсчёт не нужен (иначе
-    # ранее валидные сканы этого GTIN были бы посчитаны дважды).
     valid_count = 0
-
-    updated = 0
     for s in matched:
         s.moysklad_product_id = pid
         if name:
@@ -147,15 +160,12 @@ async def link_gtin_to_product(
         else:
             s.status = ScanStatus.valid
         valid_count += 1
-        updated += 1
 
-    # Запоминаем соответствие GTIN→товар локально — чтобы следующие загрузки УПД
-    # резолвили его без МС (find_product_by_gtin может быть недоступен / товар без
-    # штрихкода). Дополняет МС-персистенцию ниже (add_gtin_barcode_to_product).
+    # Локальная связка GTIN→товар (следующие загрузки резолвят без МС).
     map_row = (
         await db.execute(
             select(GtinProductMap).where(
-                GtinProductMap.user_id == current_user.id,
+                GtinProductMap.user_id == user_id,
                 GtinProductMap.gtin == target_key,
             )
         )
@@ -166,22 +176,16 @@ async def link_gtin_to_product(
     else:
         db.add(
             GtinProductMap(
-                user_id=current_user.id,
+                user_id=user_id,
                 gtin=target_key,
                 product_id=pid,
                 product_name=name,
             )
         )
 
-    # Переносим в план документа цену/НДС/кол-во из УПД для привязанного товара —
-    # иначе при «Отправить в МС» поступление запишется без цены и НДС (до ручной
-    # привязки план не содержал этот товар). Источник — upd_meta["positions"],
-    # которое import_upd заполняет по GTIN независимо от сопоставления товара.
-    if updated:
+    # Цена/НДС/кол-во из УПД для привязанного товара в план документа.
+    if matched:
         upd_pos = ((doc.upd_meta or {}).get("positions") or {}).get(target_key) or {}
-        # Перепривязка: убираем прежнюю (ошибочную) запись этого GTIN с другим
-        # товаром — иначе в плане остаётся «фантомная» позиция чужого товара с
-        # ценой/кол-вом из УПД, и при отправке в МС он завышает поступление.
         plan = [
             p
             for p in (doc.plan or [])
@@ -205,48 +209,202 @@ async def link_gtin_to_product(
             entry["price"] = upd_pos["price"]
         if upd_pos.get("vat") is not None:
             entry["vat"] = upd_pos["vat"]
-        # Кол-во: приоритет КолТов из УПД, иначе число сопоставленных сканов.
         qty = upd_pos.get("quantity") or len(matched)
         if qty:
             entry["expected_qty"] = qty
         doc.plan = plan
 
-    # Коммитим всегда — связка GtinProductMap должна сохраниться даже если
-    # подходящих unknown_product сканов в этом документе не оказалось.
-    await db.commit()
-    if updated:
-        for s in matched:
-            await db.refresh(s)
-        # WS-пуш по каждому скану, чтобы фронт мгновенно перерисовал.
-        from app.worker.tasks import _push_ws_update
+    return matched
 
-        for s in matched:
-            await _push_ws_update(
-                str(current_user.id),
-                str(s.id),
-                s.status,
-                s.product_name,
-                s.error_message,
-                gtin=s.gtin,
-                moysklad_product_id=s.moysklad_product_id,
+
+async def _push_links_and_barcodes(
+    db: AsyncSession,
+    current_user: User,
+    scans: List[Scan],
+    gtin_pid_pairs: List[tuple],
+) -> None:
+    """После commit: WS-пуш по сканам + закрепление штрихкодов GTIN в МС (best-effort)."""
+    from app.worker.tasks import _push_ws_update
+
+    for s in scans:
+        await db.refresh(s)
+    for s in scans:
+        await _push_ws_update(
+            str(current_user.id),
+            str(s.id),
+            s.status,
+            s.product_name,
+            s.error_message,
+            gtin=s.gtin,
+            moysklad_product_id=s.moysklad_product_id,
+        )
+    if not gtin_pid_pairs:
+        return
+    try:
+        ms = await _get_ms_service(current_user, db)
+    except HTTPException:
+        return  # МС не подключён — сопоставление сканов уже сохранено
+    for gtin, pid in gtin_pid_pairs:
+        try:
+            await ms.add_gtin_barcode_to_product(pid, gtin)
+        except Exception as e:
+            logger.warning("products.link_gtin.barcode_persist_failed", gtin=gtin, error=str(e))
+
+
+async def _get_document_owned(
+    db: AsyncSession, document_id: UUID, user_id: UUID
+) -> Document:
+    doc = (
+        await db.execute(
+            select(Document).where(
+                Document.id == document_id, Document.user_id == user_id
             )
+        )
+    ).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return doc
+
+
+@router.post("/link-gtin", response_model=LinkGtinResponse)
+async def link_gtin_to_product(
+    body: LinkGtinRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Привязать сканы документа с указанным GTIN к товару МС (одиночно).
+
+    Работает и для unknown_product, и для уже сопоставленных (valid/overflow) —
+    последнее позволяет исправить ошибочную привязку. WS-пуш по каждому скану.
+    """
+    doc = await _get_document_owned(db, body.document_id, current_user.id)
+    pid = body.moysklad_product_id.strip()
+    if not pid or len(pid) > 64:
+        raise HTTPException(status_code=400, detail="Некорректный UUID товара МС")
+    name = (body.product_name or "").strip() or None
+
+    matched = await _link_gtin_core(db, doc, current_user.id, body.gtin, pid, name)
+    await db.commit()  # связка GtinProductMap сохраняется даже без подходящих сканов
+    if matched:
         logger.info(
             "products.link_gtin.done",
             document_id=str(body.document_id),
             gtin=body.gtin,
             product_id=pid,
-            updated=updated,
+            updated=len(matched),
         )
+    await _push_links_and_barcodes(db, current_user, matched, [(body.gtin, pid)])
+    return LinkGtinResponse(updated_count=len(matched))
 
-    # Закрепляем GTIN за товаром в МС — чтобы следующие сканы этого GTIN
-    # матчились автоматически (find_product_by_gtin) и не требовали ручного
-    # сопоставления повторно. Best-effort: не ломаем ответ при сбое МС.
-    try:
-        ms = await _get_ms_service(current_user, db)
-        await ms.add_gtin_barcode_to_product(pid, body.gtin)
-    except HTTPException:
-        pass  # МС не подключён — само сопоставление сканов уже выполнено
-    except Exception as e:
-        logger.warning("products.link_gtin.barcode_persist_failed", error=str(e))
 
-    return LinkGtinResponse(updated_count=updated)
+@router.post("/link-gtin-bulk", response_model=BulkLinkResponse)
+async def link_gtin_bulk(
+    body: BulkLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Привязать пачку GTIN→товар за один запрос (массовое сопоставление).
+
+    Переиспользует общий движок ``_link_gtin_core`` для каждой связки, коммитит один
+    раз, затем один проход WS-пуша и закрепления штрихкодов в МС.
+    """
+    doc = await _get_document_owned(db, body.document_id, current_user.id)
+
+    all_matched: List[Scan] = []
+    pairs: List[tuple] = []
+    results: List[BulkLinkResult] = []
+    for link in body.links:
+        pid = (link.moysklad_product_id or "").strip()
+        if not pid or len(pid) > 64:
+            continue
+        if not normalize_gtin_key(link.gtin):
+            continue
+        name = (link.product_name or "").strip() or None
+        matched = await _link_gtin_core(db, doc, current_user.id, link.gtin, pid, name)
+        all_matched.extend(matched)
+        pairs.append((link.gtin, pid))
+        results.append(BulkLinkResult(gtin=link.gtin, updated=len(matched)))
+
+    await db.commit()
+    logger.info(
+        "products.link_gtin_bulk.done",
+        document_id=str(body.document_id),
+        links=len(results),
+        updated=len(all_matched),
+    )
+    await _push_links_and_barcodes(db, current_user, all_matched, pairs)
+    return BulkLinkResponse(updated_total=len(all_matched), results=results)
+
+
+@router.get("/match-suggestions", response_model=List[MatchSuggestion])
+async def match_suggestions(
+    document_id: UUID = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Подсказки сопоставления для всех несопоставленных GTIN документа.
+
+    По каждому GTIN (сканы unknown_product) берём известное имя (ЧЗ/УПД) и ищем товар
+    в МС, отмечая уверенность: high (точное совпадение имени), low (нашлось неточно),
+    none (не нашлось). Фронт предвыбирает high для «Подтвердить все».
+    """
+    import asyncio
+
+    doc = await _get_document_owned(db, document_id, current_user.id)
+
+    scans_q = await db.execute(
+        select(Scan).where(
+            Scan.document_id == document_id,
+            Scan.status == ScanStatus.unknown_product,
+        )
+    )
+    groups: dict = {}
+    for s in scans_q.scalars().all():
+        key = normalize_gtin_key(s.gtin) or (s.gtin or "")
+        if not key:
+            continue
+        g = groups.setdefault(key, {"gtin": s.gtin or key, "count": 0, "name": None})
+        g["count"] += 1
+        if not g["name"] and s.product_name:
+            g["name"] = s.product_name
+
+    # Фолбэк имени из позиций УПД (приёмка), если у скана имени нет.
+    positions = (doc.upd_meta or {}).get("positions") or {}
+    for key, g in groups.items():
+        if not g["name"]:
+            g["name"] = (positions.get(key) or {}).get("name")
+
+    if not groups:
+        return []
+
+    ms = await _get_ms_service(current_user, db)
+
+    out: List[MatchSuggestion] = []
+    for key, g in sorted(groups.items(), key=lambda kv: -kv[1]["count"]):
+        name = g["name"]
+        suggestions: List[ProductSearchItem] = []
+        best: Optional[ProductSearchItem] = None
+        confidence = "none"
+        if name:
+            rows = await ms.search_products(name, limit=5)
+            suggestions = [ProductSearchItem.model_validate(r) for r in rows]
+            if suggestions:
+                target = _norm_name(name)
+                exact = next((p for p in suggestions if _norm_name(p.name) == target), None)
+                if exact:
+                    best, confidence = exact, "high"
+                else:
+                    best, confidence = suggestions[0], "low"
+            await asyncio.sleep(0.1)  # щадим лимиты МС при десятках GTIN
+        out.append(
+            MatchSuggestion(
+                gtin=g["gtin"],
+                gtin_key=key,
+                name=name,
+                count=g["count"],
+                confidence=confidence,
+                best=best,
+                suggestions=suggestions,
+            )
+        )
+    return out

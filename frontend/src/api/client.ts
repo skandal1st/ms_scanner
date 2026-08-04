@@ -167,6 +167,22 @@ export interface ProductSearchItem {
   barcodes: string[]
 }
 
+export interface MatchSuggestion {
+  gtin: string
+  gtin_key: string
+  name: string | null
+  count: number
+  confidence: 'high' | 'low' | 'none'
+  best: ProductSearchItem | null
+  suggestions: ProductSearchItem[]
+}
+
+export interface BulkLinkItem {
+  gtin: string
+  moysklad_product_id: string
+  product_name?: string | null
+}
+
 export const productsApi = {
   search: (q: string) =>
     api.get<ProductSearchItem[]>('/products/search', { params: { q } }),
@@ -182,6 +198,15 @@ export const productsApi = {
       moysklad_product_id,
       product_name: product_name ?? null,
     }),
+  matchSuggestions: (document_id: string) =>
+    api.get<MatchSuggestion[]>('/products/match-suggestions', {
+      params: { document_id },
+    }),
+  linkGtinBulk: (document_id: string, links: BulkLinkItem[]) =>
+    api.post<{ updated_total: number; results: { gtin: string; updated: number }[] }>(
+      '/products/link-gtin-bulk',
+      { document_id, links },
+    ),
 }
 
 // ---------- Приёмка по УПД (XML 5.03) ----------

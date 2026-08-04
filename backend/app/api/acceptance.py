@@ -353,6 +353,10 @@ async def import_upd(
         if not gkey:
             return
         info: dict = {}
+        # Имя позиции из УПД — нужно для авто-подсказок сопоставления GTIN↔товар
+        # (match-suggestions ищет товар в МС по этому имени, когда у скана его нет).
+        if pos.name:
+            info["name"] = pos.name
         if pos.price is not None:
             info["price"] = pos.price
         if pos.vat is not None:

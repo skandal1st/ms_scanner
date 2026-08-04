@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { productsApi } from '../api/client'
-import type { ProductSearchItem, Scan } from '../api/client'
+import type { ProductSearchItem, Scan, MatchSuggestion } from '../api/client'
 import { useScanStore, normalizeGtinKey } from '../store/scanStore'
+import { useMatchSuggestions } from '../hooks/useDocuments'
 import type { CSSProperties } from 'react'
 
 interface UnknownGroup {
@@ -36,9 +37,54 @@ function groupUnknown(scans: Scan[]): UnknownGroup[] {
 export function UnknownProductsPicker() {
   const documentId = useScanStore((s) => s.document?.id)
   const scans = useScanStore((s) => s.scans)
+  const updateScan = useScanStore((s) => s.updateScan)
   const groups = useMemo(() => groupUnknown(scans), [scans])
 
+  const sugQuery = useMatchSuggestions(documentId ?? null, groups.length > 0)
+  const sugMap = useMemo(() => {
+    const m = new Map<string, MatchSuggestion>()
+    for (const s of sugQuery.data ?? []) m.set(s.gtin_key, s)
+    return m
+  }, [sugQuery.data])
+
+  const [confirmingAll, setConfirmingAll] = useState(false)
+  const highGroups = useMemo(
+    () => groups.filter((g) => sugMap.get(g.gtinKey)?.confidence === 'high'),
+    [groups, sugMap],
+  )
+
   if (!documentId || groups.length === 0) return null
+
+  const confirmAll = async () => {
+    const links = highGroups
+      .map((g) => ({ g, sug: sugMap.get(g.gtinKey) }))
+      .filter((x) => x.sug?.best)
+      .map((x) => ({
+        gtin: x.g.displayGtin,
+        moysklad_product_id: x.sug!.best!.id,
+        product_name: x.sug!.best!.name,
+      }))
+    if (links.length === 0) return
+    setConfirmingAll(true)
+    try {
+      await productsApi.linkGtinBulk(documentId, links)
+      for (const g of highGroups) {
+        const best = sugMap.get(g.gtinKey)?.best
+        if (!best) continue
+        for (const s of g.scans) {
+          updateScan(s.id, {
+            moysklad_product_id: best.id,
+            product_name: best.name,
+            status: 'valid',
+            error_message: null,
+          })
+        }
+      }
+      void sugQuery.refetch()
+    } finally {
+      setConfirmingAll(false)
+    }
+  }
 
   return (
     <div style={styles.wrap}>
@@ -49,9 +95,30 @@ export function UnknownProductsPicker() {
         <span style={styles.subtitle}>
           Эти коды не уйдут в отгрузку без привязки к товару
         </span>
+        {sugQuery.isLoading && (
+          <span style={styles.subtitle}>Подбираю товары в МойСклад…</span>
+        )}
+        {highGroups.length > 0 && (
+          <button
+            type="button"
+            className="button button--success"
+            style={{ marginTop: 6, alignSelf: 'flex-start' }}
+            onClick={confirmAll}
+            disabled={confirmingAll}
+          >
+            {confirmingAll
+              ? 'Привязываю…'
+              : `✓ Подтвердить все точные (${highGroups.length})`}
+          </button>
+        )}
       </div>
       {groups.map((g) => (
-        <UnknownGroupRow key={g.gtinKey} group={g} documentId={documentId} />
+        <UnknownGroupRow
+          key={g.gtinKey}
+          group={g}
+          documentId={documentId}
+          suggestion={sugMap.get(g.gtinKey)}
+        />
       ))}
     </div>
   )
@@ -60,9 +127,11 @@ export function UnknownProductsPicker() {
 function UnknownGroupRow({
   group,
   documentId,
+  suggestion,
 }: {
   group: UnknownGroup
   documentId: string
+  suggestion?: MatchSuggestion
 }) {
   const updateScan = useScanStore((s) => s.updateScan)
   const [query, setQuery] = useState('')
@@ -125,6 +194,37 @@ function UnknownGroupRow({
         <code style={styles.gtin}>GTIN {group.displayGtin}</code>
         <span style={styles.count}>{group.count} код(ов)</span>
       </div>
+      {suggestion?.name && (
+        <div style={styles.suggestedName}>Из УПД/ЧЗ: {suggestion.name}</div>
+      )}
+      {suggestion?.best && suggestion.confidence !== 'none' && (
+        <div
+          style={{
+            ...styles.suggestBox,
+            ...(suggestion.confidence === 'high'
+              ? styles.suggestHigh
+              : styles.suggestLow),
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={styles.suggestBadge}>
+              {suggestion.confidence === 'high' ? '✓ Точное совпадение' : '≈ Проверьте'}
+            </div>
+            <div style={styles.resultName}>{suggestion.best.name}</div>
+            {suggestion.best.article && (
+              <div style={styles.resultMeta}>арт. {suggestion.best.article}</div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="button button--success"
+            onClick={() => void link(suggestion.best as ProductSearchItem)}
+            disabled={linking}
+          >
+            Подтвердить
+          </button>
+        </div>
+      )}
       <div style={styles.searchRow}>
         <input
           type="text"
@@ -223,6 +323,32 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 11,
     color: '#6b7280',
     fontVariantNumeric: 'tabular-nums',
+  },
+  suggestedName: {
+    fontSize: 11,
+    color: '#6b7280',
+  },
+  suggestBox: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: 8,
+    borderRadius: 6,
+    border: '1px solid',
+  },
+  suggestHigh: {
+    background: '#f0fdf4',
+    borderColor: '#86efac',
+  },
+  suggestLow: {
+    background: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  suggestBadge: {
+    fontSize: 10,
+    fontWeight: 600,
+    color: '#374151',
+    marginBottom: 2,
   },
   searchRow: {
     display: 'flex',

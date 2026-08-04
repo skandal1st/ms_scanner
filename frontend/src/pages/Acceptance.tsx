@@ -6,10 +6,13 @@ import type {
   ImportPositionResult,
   Scan,
   ProductSearchItem,
+  MatchSuggestion,
 } from '../api/client'
 import { ResizableTable } from '../components/ResizableTable'
 import type { ColumnDef } from '../components/ResizableTable'
 import { UpdImportBar } from '../components/UpdImportBar'
+import { useMatchSuggestions } from '../hooks/useDocuments'
+import { normalizeGtinKey } from '../store/scanStore'
 
 function errorDetail(e: unknown): string | null {
   const ax = e as { response?: { data?: { detail?: string } } }
@@ -141,6 +144,43 @@ export function AcceptancePage() {
     return [...src].sort((a, b) => Number(a.matched) - Number(b.matched))
   }, [result])
   const unmatched = positions.filter((p) => !p.matched && p.gtin)
+
+  // Авто-подсказки сопоставления GTIN↔товар (МС-поиск по имени из УПД/ЧЗ).
+  const sugQuery = useMatchSuggestions(docId, unmatched.length > 0)
+  const sugMap = useMemo(() => {
+    const m = new Map<string, MatchSuggestion>()
+    for (const s of sugQuery.data ?? []) m.set(s.gtin_key, s)
+    return m
+  }, [sugQuery.data])
+  const sugFor = (g?: string | null): MatchSuggestion | undefined =>
+    g ? sugMap.get(normalizeGtinKey(g) ?? '') : undefined
+  const [confirmingAll, setConfirmingAll] = useState(false)
+  const highUnmatched = useMemo(
+    () => unmatched.filter((p) => sugFor(p.gtin)?.confidence === 'high'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unmatched, sugMap],
+  )
+
+  const confirmAllSuggestions = async () => {
+    if (!docId) return
+    const links = highUnmatched
+      .map((p) => ({ gtin: p.gtin as string, sug: sugFor(p.gtin) }))
+      .filter((x) => x.sug?.best)
+      .map((x) => ({
+        gtin: x.gtin,
+        moysklad_product_id: x.sug!.best!.id,
+        product_name: x.sug!.best!.name,
+      }))
+    if (links.length === 0) return
+    setConfirmingAll(true)
+    try {
+      await productsApi.linkGtinBulk(docId, links)
+      await refreshAfterLink()
+      void sugQuery.refetch()
+    } finally {
+      setConfirmingAll(false)
+    }
+  }
   const linkedToMs = !!doc?.moysklad_id
   const alreadyAccepted = doc?.status === 'accepted'
 
@@ -317,6 +357,24 @@ export function AcceptancePage() {
               Сопоставьте товары МойСклад ({unmatched.length}) — без этого приёмку
               нельзя отправить в МС
             </div>
+            {sugQuery.isLoading && (
+              <div className="text-muted" style={{ fontSize: 11, marginBottom: 8 }}>
+                Подбираю товары в МойСклад…
+              </div>
+            )}
+            {highUnmatched.length > 0 && (
+              <button
+                type="button"
+                className="button button--success"
+                style={{ marginBottom: 10 }}
+                onClick={confirmAllSuggestions}
+                disabled={confirmingAll}
+              >
+                {confirmingAll
+                  ? 'Привязываю…'
+                  : `✓ Подтвердить все точные (${highUnmatched.length})`}
+              </button>
+            )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {unmatched.map((p) => (
                 <div key={`${p.gtin}|${p.name}`}>
@@ -331,6 +389,7 @@ export function AcceptancePage() {
                       documentId={docId}
                       gtin={p.gtin}
                       onLinked={refreshAfterLink}
+                      suggestion={sugFor(p.gtin)}
                     />
                   )}
                 </div>
@@ -504,10 +563,12 @@ function InlineProductPicker({
   documentId,
   gtin,
   onLinked,
+  suggestion,
 }: {
   documentId: string
   gtin: string
   onLinked: () => void
+  suggestion?: MatchSuggestion
 }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ProductSearchItem[]>([])
@@ -555,6 +616,41 @@ function InlineProductPicker({
 
   return (
     <div className="upd-picker">
+      {suggestion?.best && suggestion.confidence !== 'none' && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: 8,
+            marginBottom: 8,
+            borderRadius: 6,
+            border: '1px solid',
+            background: suggestion.confidence === 'high' ? '#f0fdf4' : '#fffbeb',
+            borderColor: suggestion.confidence === 'high' ? '#86efac' : '#fde68a',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: '#374151' }}>
+              {suggestion.confidence === 'high' ? '✓ Точное совпадение' : '≈ Проверьте'}
+            </div>
+            <div style={{ fontWeight: 500, fontSize: 13 }}>{suggestion.best.name}</div>
+            {suggestion.best.article && (
+              <div className="text-muted" style={{ fontSize: 11 }}>
+                арт. {suggestion.best.article}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            className="button button--success"
+            onClick={() => void link(suggestion.best as ProductSearchItem)}
+            disabled={linking}
+          >
+            Подтвердить
+          </button>
+        </div>
+      )}
       <input
         type="text"
         className="ui-input ui-input--block"
