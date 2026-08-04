@@ -103,6 +103,47 @@ def _norm_name(s: Optional[str]) -> str:
     return " ".join((s or "").lower().split())
 
 
+# Стоп-слова/единицы — мешают полнотекстовому поиску МС (он ищет по И-логике) и не
+# различают товар. Выкидываем из запроса и из проверки вхождения.
+_NAME_NOISE = {
+    "с", "и", "для", "гр", "г", "мл", "шт", "кг", "ml", "g", "kg",
+    "x", "аромат", "ароматом", "вкус", "вкусом",
+}
+
+
+def _significant_tokens(name: str) -> List[str]:
+    """Значимые слова имени (без стоп-слов, единиц и чистых чисел) — для поиска и оценки."""
+    import re
+
+    toks = [t for t in re.split(r"[\s\-,.()]+", (name or "").lower()) if t]
+    # Отбрасываем стоп-слова и токены с цифрами (фасовка/упаковка: «25», «10x», «40г») —
+    # их нет в именах товаров МС, они ломают поиск и проверку вхождения.
+    return [
+        t for t in toks
+        if len(t) >= 2 and not any(ch.isdigit() for ch in t) and t not in _NAME_NOISE
+    ]
+
+
+async def _ms_search_progressive(ms, name: str) -> tuple:
+    """Поиск товара в МС с деградацией запроса: полное имя → всё меньше значимых слов.
+
+    Полнотекстовый ``search`` МС требует ВСЕ слова, поэтому длинное имя из ЧЗ
+    («…SEBERO Black с ароматом Watermelon 25 гр 10X») часто даёт 0. Отступаем к
+    первым N значимым словам, пока не найдём. Возвращает ``(rows, significant_tokens)``.
+    """
+    sig = _significant_tokens(name)
+    queries = [name.strip()]
+    for n in (6, 5, 4, 3, 2):
+        q = " ".join(sig[:n])
+        if q and q not in queries:
+            queries.append(q)
+    for q in queries:
+        rows = await ms.search_products(q, limit=8)
+        if rows:
+            return rows, sig
+    return [], sig
+
+
 async def _link_gtin_core(
     db: AsyncSession,
     doc: Document,
@@ -386,15 +427,26 @@ async def match_suggestions(
         best: Optional[ProductSearchItem] = None
         confidence = "none"
         if name:
-            rows = await ms.search_products(name, limit=5)
+            rows, sig = await _ms_search_progressive(ms, name)
             suggestions = [ProductSearchItem.model_validate(r) for r in rows]
-            if suggestions:
-                target = _norm_name(name)
-                exact = next((p for p in suggestions if _norm_name(p.name) == target), None)
-                if exact:
-                    best, confidence = exact, "high"
-                else:
-                    best, confidence = suggestions[0], "low"
+            if suggestions and sig:
+                sigset = set(sig)
+
+                def _score(pname: str) -> float:
+                    """Доля значимых слов имени, встретившихся в названии товара МС."""
+                    pn = _norm_name(pname)
+                    return sum(1 for t in sigset if t in pn) / len(sigset)
+
+                top = max(suggestions, key=lambda p: _score(p.name))
+                full_count = sum(1 for p in suggestions if _score(p.name) >= 1.0)
+                # high — РОВНО ОДИН товар содержит ВСЕ значимые слова (уверенное
+                # совпадение). Несколько полных (напр. разные фасовки) или сильное
+                # частичное (≥60%) → low: показываем, но не предвыбираем. Слабее —
+                # none: не подсовываем неверный товар, кладовщик ищет вручную.
+                if _score(top.name) >= 1.0 and full_count == 1:
+                    best, confidence = top, "high"
+                elif _score(top.name) >= 0.6:
+                    best, confidence = top, "low"
             await asyncio.sleep(0.1)  # щадим лимиты МС при десятках GTIN
         out.append(
             MatchSuggestion(
