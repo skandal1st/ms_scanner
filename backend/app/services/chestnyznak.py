@@ -510,8 +510,10 @@ class ChestnyZnakService:
     ) -> SsccInfo:
         """
         Сводка по SSCC-коробу для сохранения «целиком» (без раскрытия): GTIN, серия,
-        число SGTIN внутри. Real-режим зовёт ЧЗ ``GET …/reestr/sscc/{sscc}/sscc_check``
-        (нужно право SSCC_CHECK на сертификате). Mock берёт GTIN из плана документа и
+        число SGTIN внутри. Real-режим сначала зовёт ЧЗ ``GET …/reestr/sscc/{sscc}/sscc_check``
+        (нужно право SSCC_CHECK на сертификате). Если этого права нет (403) или метод
+        недоступен — fallback на ``cises/aggregated/list`` (право обычно есть): количество =
+        число листовых КМ, GTIN — из первой пачки. Mock берёт GTIN из плана документа и
         случайное количество, чтобы поток работал без реального ЧЗ.
 
         Перечень индивидуальных КМ этот метод не возвращает — для «целиком» он и не
@@ -551,9 +553,27 @@ class ChestnyZnakService:
         except httpx.TimeoutException:
             raise CZApiError("Таймаут запроса к Честный Знак (sscc_check)")
         except httpx.HTTPStatusError as e:
-            raise CZApiError(
-                f"HTTP {e.response.status_code} при sscc_check: {e.response.text[:200]}"
+            # sscc_check требует право SSCC_CHECK; если его нет (403) или иная ошибка —
+            # берём состав через aggregated/list (это право у сертификата обычно есть).
+            logger.warning(
+                "cz.sscc_check.fallback_aggregated",
+                sscc=sscc,
+                status=e.response.status_code,
             )
+            return await self._sscc_info_via_aggregated(sscc)
+
+    async def _sscc_info_via_aggregated(self, sscc: str) -> SsccInfo:
+        """SsccInfo для «целиком» через cises/aggregated/list (когда sscc_check запрещён).
+
+        Разворачиваем короб в листовые КМ (``unpack_box``) и берём из них количество и
+        GTIN пачки. Сами коды для «целиком» не сохраняем — в МС уходит один transportpack.
+        """
+        codes = await self.unpack_box(sscc)
+        gtin = normalize_gtin_key(extract_gtin(codes[0])) if codes else None
+        logger.info(
+            "cz.sscc_check.via_aggregated", sscc=sscc, gtin=gtin, quantity=len(codes)
+        )
+        return SsccInfo(sscc=sscc, gtin=gtin, series=None, quantity=len(codes))
 
     async def get_code_info(self, code: str) -> Optional["CodeInfo"]:
         """Сведения о КМ через True API: владелец/производитель/товар + состав агрегата.
