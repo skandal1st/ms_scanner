@@ -249,6 +249,12 @@ async def export_document_xlsx(
     from urllib.parse import quote
     from fastapi.responses import Response
     from openpyxl import Workbook
+    from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+
+    # Коды маркировки содержат управляющий разделитель GS (\x1d) и пр. control-символы —
+    # openpyxl их запрещает (IllegalCharacterError). Вырезаем перед записью в ячейку.
+    def _xl(v):
+        return ILLEGAL_CHARACTERS_RE.sub("", v) if isinstance(v, str) else v
 
     result = await db.execute(
         select(Document).where(
@@ -284,7 +290,7 @@ async def export_document_xlsx(
     ws.title = "Отгрузка"
     ws.append(["Наименование позиции", "Марка", "Кол-во"])
     for r in rows:
-        ws.append([r[0], r[1], r[2]])
+        ws.append([_xl(r[0]), _xl(r[1]), r[2]])
     ws.column_dimensions["A"].width = 50
     ws.column_dimensions["B"].width = 45
     ws.column_dimensions["C"].width = 8

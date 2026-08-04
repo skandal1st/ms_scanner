@@ -66,6 +66,9 @@ export function ShipmentPage() {
       a.click()
       a.remove()
       URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Export XLSX error:', err)
+      window.alert('Не удалось выгрузить XLSX. Попробуйте ещё раз.')
     } finally {
       setExporting(false)
     }
