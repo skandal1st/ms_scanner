@@ -164,6 +164,10 @@ class Scan(Base):
     # ИНН владельца марки (ЧЗ ownerInn) — сверка с владельцем подписи (Integration.cz_inn)
     # в отгрузке: несовпадение подсвечивается на фронте, но не блокирует.
     owner_inn = Column(String(12), nullable=True)
+    # Марка выведена из оборота / заблокирована (ЧЗ markWithdraw) + причина. Подсветка +
+    # предупреждение при отгрузке, но не блокирует (статус скана остаётся прежним).
+    withdrawn = Column(Boolean, nullable=False, server_default="false")
+    withdraw_reason = Column(String(200), nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
 

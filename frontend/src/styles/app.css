@@ -497,6 +497,9 @@ html, body, #root { height: 100%; }
 /* Владельца проверить не удалось — нейтральная серая подсветка. */
 .scans-table .scans-row.is-owner-unknown > td { background: #f4f4f5; }
 .scans-table .scans-row.is-owner-unknown > td.is-code { box-shadow: inset 3px 0 0 #a1a1aa; }
+/* Марка выведена из оборота / заблокирована — красная подсветка (не блокирует отгрузку). */
+.scans-table .scans-row.is-withdrawn > td { background: #fde8e8; }
+.scans-table .scans-row.is-withdrawn > td.is-code { box-shadow: inset 3px 0 0 #dc2626; }
 /* Повторный скан существующего кода: строка кратко вспыхивает жёлтым. */
 .scans-table .scans-row.is-flash > td { animation: scan-flash 1.2s ease-out; }
 @keyframes scan-flash {

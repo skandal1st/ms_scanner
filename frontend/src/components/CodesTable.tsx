@@ -84,6 +84,8 @@ function ScanRow({
   const owner = ownerCheckState(scan, signatureInn)
   const ownerCls =
     owner === 'mismatch' ? 'is-owner-mismatch' : owner === 'unknown' ? 'is-owner-unknown' : ''
+  // Марка выведена из оборота / заблокирована (ЧЗ). Подсветка + предупреждение, не блокирует.
+  const withdrawnCls = scan.withdrawn ? 'is-withdrawn' : ''
   // Агрегат (блок/короб): развёрнут в единицы — box_quantity/child_codes без is_box.
   // Штрихкод немаркированного товара (is_barcode) — не агрегат: box_quantity = кол-во.
   const childCount = scan.child_codes?.length ?? 0
@@ -93,7 +95,7 @@ function ScanRow({
   return (
     <>
       <tr
-        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''} ${ownerCls}`}
+        className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''} ${ownerCls} ${withdrawnCls}`}
         onClick={onToggle}
       >
         <td className="is-code">
@@ -130,6 +132,19 @@ function ScanRow({
         </td>
         <td>
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
+          {scan.withdrawn && (
+            <span
+              className="badge badge--error"
+              style={{ marginLeft: 4 }}
+              title={
+                scan.withdraw_reason
+                  ? `Выведена из оборота (${scan.withdraw_reason})`
+                  : 'Марка выведена из оборота / заблокирована'
+              }
+            >
+              Выведена из оборота
+            </span>
+          )}
           {owner === 'mismatch' && (
             <span
               className="badge badge--warn"
@@ -180,6 +195,14 @@ function ScanRow({
                 <span>
                   {scan.owner_name}
                   {scan.owner_inn ? ` (ИНН ${scan.owner_inn})` : ''}
+                </span>
+              </div>
+            )}
+            {scan.withdrawn && (
+              <div className="scans-expanded__row">
+                <span className="scans-expanded__label">Выведена из оборота:</span>
+                <span className="error">
+                  да{scan.withdraw_reason ? ` · ${scan.withdraw_reason}` : ''}
                 </span>
               </div>
             )}

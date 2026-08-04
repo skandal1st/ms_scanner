@@ -322,6 +322,10 @@ async def _verify_code_async(scan_id: str, user_id: str):
                     scan.owner_name = info.owner_name
                     scan.producer_name = info.producer_name
                     scan.owner_inn = info.owner_inn
+                    # Марка выведена из оборота / заблокирована — флаг для подсветки
+                    # (статус скана не трогаем: отгрузку не блокируем, только предупреждаем).
+                    scan.withdrawn = info.mark_withdraw
+                    scan.withdraw_reason = info.withdraw_reason
                     if info.is_aggregate:
                         # Блок/короб: разворачиваем в листовые КМ пачек.
                         scan.status = ScanStatus.valid
@@ -438,6 +442,8 @@ async def _verify_code_async(scan_id: str, user_id: str):
             owner_name=scan.owner_name,
             producer_name=scan.producer_name,
             owner_inn=scan.owner_inn,
+            withdrawn=scan.withdrawn,
+            withdraw_reason=scan.withdraw_reason,
             child_codes=scan.child_codes,
         )
 
@@ -556,6 +562,8 @@ async def _push_ws_update(
     owner_name: Optional[str] = None,
     producer_name: Optional[str] = None,
     owner_inn: Optional[str] = None,
+    withdrawn: Optional[bool] = None,
+    withdraw_reason: Optional[str] = None,
     child_codes: Optional[list] = None,
 ):
     import redis.asyncio as aioredis
@@ -576,6 +584,8 @@ async def _push_ws_update(
         "owner_name": owner_name,
         "producer_name": producer_name,
         "owner_inn": owner_inn,
+        "withdrawn": withdrawn,
+        "withdraw_reason": withdraw_reason,
         "child_codes": child_codes,
     })
     await r.publish(f"ws:{user_id}", message)

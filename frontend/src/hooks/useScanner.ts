@@ -84,6 +84,10 @@ export function useScanner(documentId: string | null) {
             ? { producer_name: data.producer_name as string }
             : {}),
           ...(data.owner_inn != null ? { owner_inn: data.owner_inn as string } : {}),
+          ...(typeof data.withdrawn === 'boolean' ? { withdrawn: data.withdrawn } : {}),
+          ...(data.withdraw_reason != null
+            ? { withdraw_reason: data.withdraw_reason as string }
+            : {}),
           ...(Array.isArray(data.child_codes)
             ? { child_codes: data.child_codes as string[] }
             : {}),

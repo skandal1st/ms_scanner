@@ -67,6 +67,9 @@ class CodeInfo:
     product_group: Optional[str]
     # ИНН владельца марки (ЧЗ ownerInn) — для сверки с владельцем подписи (Integration.cz_inn).
     owner_inn: Optional[str] = None
+    # Марка выведена из оборота / заблокирована (ЧЗ markWithdraw) + причина (withdrawReason).
+    mark_withdraw: bool = False
+    withdraw_reason: Optional[str] = None
 
     @property
     def is_aggregate(self) -> bool:
@@ -663,6 +666,8 @@ class ChestnyZnakService:
                 producer_name=(ci.get("producerName") or ci.get("manufacturerName") or None),
                 product_group=ci.get("productGroup") or pg,
                 owner_inn=(ci.get("ownerInn") or None),
+                mark_withdraw=bool(ci.get("markWithdraw")),
+                withdraw_reason=(ci.get("withdrawReason") or None),
             )
             logger.info(
                 "cz.code_info.ok",

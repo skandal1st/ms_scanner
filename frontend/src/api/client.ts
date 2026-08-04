@@ -76,6 +76,8 @@ export const documentsApi = {
   get: (id: string) => api.get<Document>(`/documents/${id}`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   process: (id: string) => api.post(`/documents/${id}/process`),
+  exportXlsx: (id: string) =>
+    api.get<Blob>(`/documents/${id}/export.xlsx`, { responseType: 'blob' }),
 }
 
 export function isSscc(code: string): boolean {
@@ -112,6 +114,9 @@ export interface Scan {
   producer_name?: string | null
   /** ИНН владельца марки (ЧЗ) — сверка с владельцем подписи (cz_inn) в отгрузке. */
   owner_inn?: string | null
+  /** Марка выведена из оборота / заблокирована (ЧЗ markWithdraw) + причина. */
+  withdrawn?: boolean
+  withdraw_reason?: string | null
   /** Состав агрегата (блок/короб): КМ вложенных пачек из ЧЗ. */
   child_codes?: string[] | null
   /** Повторный скан кода, уже присутствующего в этом документе (строка не добавляется). */

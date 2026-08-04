@@ -233,6 +233,82 @@ async def get_document(
     return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
+@router.get("/{document_id}/export.xlsx")
+async def export_document_xlsx(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Выгрузить структуру документа в XLSX: наименование позиции + марка + кол-во.
+
+    Агрегаты (короб/блок) разворачиваются в марки пачек (child_codes). Немаркированный
+    товар (is_barcode) — строка с пустой маркой и количеством. SSCC «целиком» (is_box без
+    child_codes) — строка с кодом SSCC и количеством. Включаются все сканы документа.
+    """
+    import io
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    scans_res = await db.execute(
+        select(Scan).where(Scan.document_id == document_id).order_by(Scan.scanned_at)
+    )
+    scans = scans_res.scalars().all()
+
+    rows: List[tuple] = []
+    for s in scans:
+        name = s.product_name or "—"
+        if s.child_codes:  # короб/блок развёрнут — по строке на марку пачки
+            for cc in s.child_codes:
+                rows.append((name, cc, 1))
+        elif s.is_barcode:  # немаркированный товар — марка пустая, кол-во из скана
+            rows.append((name, "", int(s.box_quantity or 1)))
+        elif s.is_box:  # SSCC «целиком» — код короба + кол-во внутри
+            rows.append((name, s.code, int(s.box_quantity or 1)))
+        else:
+            rows.append((name, s.code, 1))
+    rows.sort(key=lambda r: (r[0], r[1]))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Отгрузка"
+    ws.append(["Наименование позиции", "Марка", "Кол-во"])
+    for r in rows:
+        ws.append([r[0], r[1], r[2]])
+    ws.column_dimensions["A"].width = 50
+    ws.column_dimensions["B"].width = 45
+    ws.column_dimensions["C"].width = 8
+    ws.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    safe_name = (doc.name or "Документ").replace("/", "-").replace("\\", "-")
+    filename = f"{safe_name}.xlsx"
+    headers = {
+        "Content-Disposition": (
+            f"attachment; filename=order.xlsx; filename*=UTF-8''{quote(filename)}"
+        )
+    }
+    return Response(
+        content=buf.getvalue(),
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers=headers,
+    )
+
+
 @router.post("/{document_id}/process")
 async def process_document(
     document_id: UUID,

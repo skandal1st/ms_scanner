@@ -10,7 +10,7 @@ import { BulkMarksModal } from '../components/BulkMarksModal'
 import { useScanStore, ownerCheckState } from '../store/scanStore'
 import { useLoadDocument, useProcessDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
-import { scansApi } from '../api/client'
+import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
@@ -49,6 +49,27 @@ export function ShipmentPage() {
     },
     { mismatch: 0, unknown: 0 },
   )
+  // Марки, выведенные из оборота / заблокированные (ЧЗ) — предупреждаем, но не блокируем.
+  const withdrawnCount = scans.reduce((n, s) => (s.withdrawn ? n + 1 : n), 0)
+  const [exporting, setExporting] = useState(false)
+
+  const handleExportXlsx = async () => {
+    if (!document) return
+    setExporting(true)
+    try {
+      const { data } = await documentsApi.exportXlsx(document.id)
+      const url = URL.createObjectURL(data)
+      const a = window.document.createElement('a')
+      a.href = url
+      a.download = `${document.name || 'Отгрузка'}.xlsx`
+      window.document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+    }
+  }
 
   // Ширина левой панели (документы/сканирование) — тянется мышью за разделитель.
   const { width: leftWidth, startResize } = useResizableWidth(
@@ -175,7 +196,24 @@ export function ShipmentPage() {
         >
           {clearMutation.isPending ? 'Очистка…' : 'Очистить'}
         </button>
+        <button
+          type="button"
+          className="button"
+          disabled={!document || scans.length === 0 || exporting}
+          onClick={handleExportXlsx}
+          title="Выгрузить структуру заказа (наименование + марка) в XLSX"
+        >
+          {exporting ? 'Выгрузка…' : '⬇ Выгрузить в XLSX'}
+        </button>
         <div className="acc-footer__spacer" />
+        {withdrawnCount > 0 && (
+          <span
+            style={{ marginRight: 12, fontSize: 12, color: '#b30000', whiteSpace: 'nowrap', fontWeight: 600 }}
+            title="Эти марки выведены из оборота / заблокированы. Отгрузку это не блокирует, но требует подтверждения."
+          >
+            ⛔ {withdrawnCount} выведены из оборота
+          </span>
+        )}
         {(ownerWarnings.mismatch > 0 || ownerWarnings.unknown > 0) && (
           <span
             style={{ marginRight: 12, fontSize: 12, color: '#8a3008', whiteSpace: 'nowrap' }}
@@ -276,6 +314,24 @@ export function ShipmentPage() {
                   </span>
                 </div>
               </div>
+              {withdrawnCount > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 10,
+                    background: '#fde8e8',
+                    border: '1px solid #f5b3b3',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: '#b30000',
+                    fontWeight: 600,
+                  }}
+                >
+                  Внимание: {withdrawnCount}{' '}
+                  {withdrawnCount === 1 ? 'марка выведена' : 'марок выведены'} из оборота
+                  (заблокированы). Всё равно отгрузить?
+                </div>
+              )}
               {(hasErrors || stats.overflow > 0) && (
                 <p className="hint">
                   В отгрузку попадут валидные ({stats.valid})
