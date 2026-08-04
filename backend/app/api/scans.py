@@ -75,7 +75,7 @@ class PatchScanBody(BaseModel):
 class CreateBoxRequest(BaseModel):
     document_id: UUID
     sscc: str
-    # True — раскрыть короб на штучные КМ (real → 501, пока работает только mock).
+    # True — раскрыть короб на штучные КМ (ЧЗ aggregated/list по SSCC).
     # False — сохранить короб целиком (transportpack): один скан, quantity из ЧЗ.
     unpack: bool = True
 
@@ -463,15 +463,11 @@ async def _create_box_scans_core(
         resp.duplicate = is_dup
         return [resp]
 
-    # Раскрытие на штучные КМ.
+    # Раскрытие на штучные КМ: состав короба берём из ЧЗ (aggregated/list).
     try:
         member_codes = await cz.unpack_box(sscc, plan_gtins)
-    except NotImplementedError:
-        raise HTTPException(
-            status_code=501,
-            detail="Раскрытие SSCC через API Честного Знака пока не настроено. "
-            "Переключите тумблер на «целиком» или сканируйте коды поштучно.",
-        )
+    except CZApiError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
     responses: List[ScanResponse] = []
     for code in member_codes:
@@ -501,8 +497,9 @@ async def create_box_scans(
     """
     Принять SSCC-код короба.
 
-    ``unpack=True`` — раскрыть на индивидуальные KM (по скану на каждый). Реальное
-    раскрытие через ЧЗ пока не реализовано (501); работает только в mock.
+    ``unpack=True`` — раскрыть на индивидуальные KM (по скану на каждый). Состав
+    короба берётся из ЧЗ (``cises/aggregated/list`` по SSCC); при недоступности —
+    502 с пояснением (переключить на «целиком» или сканировать поштучно).
 
     ``unpack=False`` — сохранить короб целиком: один скан с ``is_box=True`` и
     ``box_quantity`` из ЧЗ (``sscc_check``); в МС уйдёт одним ``transportpack``.

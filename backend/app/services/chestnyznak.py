@@ -427,8 +427,9 @@ class ChestnyZnakService:
         В mock режиме генерирует 3-5 фейковых KM на основе GTIN из плана документа,
         чтобы коды попали в ожидаемые позиции. Если plan_gtins пустой —
         используется случайный 14-значный GTIN.
-        Реальный режим должен звать ЧЗ /api/v3/facade/aggregation или подобный
-        — пока NotImplemented.
+        Реальный режим зовёт True API ``POST /api/v3/true-api/cises/aggregated/list``
+        по коду SSCC (перебор товарных групп) и разворачивает дерево вложенных КИ в
+        листовые КМ пачек. Если ЧЗ состав не отдал — ``CZApiError``.
         """
         if self.mock:
             await asyncio.sleep(random.uniform(0.2, 0.5))
@@ -450,8 +451,58 @@ class ChestnyZnakService:
                 "cz.unpack_box.mock", sscc=sscc, count=count, plan_gtins=len(pool)
             )
             return codes
-        raise NotImplementedError(
-            "Реальное раскрытие коробов в ЧЗ ещё не реализовано"
+
+        # Real: состав SSCC-короба (КИТУ) через True API cises/aggregated/list.
+        # Метод отдаёт дерево вложенных КИ по коду агрегата; SSCC передаём как код,
+        # перебирая товарные группы (нужен параметр pg). Листовые КМ пачек собираем
+        # рекурсивно тем же _flatten_aggregate_leaves, что и разворот блоков в get_code_info.
+        if not self.token:
+            raise CZApiError(
+                "Нет действующего токена Честного Знака для раскрытия короба (войдите по УКЭП)."
+            )
+
+        from app.services.cz_logger import log_cz_request
+
+        agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        for pg in settings.cz_product_groups_list:
+            start = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.post(
+                        agg_url, params={"pg": pg}, headers=headers, json=[sscc]
+                    )
+                    body = resp.json() if resp.status_code == 200 else None
+                    await log_cz_request(
+                        method="POST",
+                        url=f"{agg_url}?pg={pg}",
+                        request_body=[sscc],
+                        response_status=resp.status_code,
+                        response_body=body if isinstance(body, dict) else None,
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                logger.warning("cz.unpack_box.http_error", pg=pg, error=str(exc))
+                continue
+
+            if resp.status_code != 200 or not isinstance(body, dict):
+                continue
+            children = _flatten_aggregate_leaves(body.get(sscc)) if body.get(sscc) else []
+            if children:
+                logger.info(
+                    "cz.unpack_box.real", sscc=sscc, pg=pg, count=len(children)
+                )
+                return children
+
+        logger.warning("cz.unpack_box.no_contents", sscc=sscc)
+        raise CZApiError(
+            "Честный Знак не вернул состав SSCC-короба (aggregated/list): короб не "
+            "агрегирован в системе или метод недоступен для этого кода. Используйте "
+            "режим «целиком» или сканируйте коды поштучно."
         )
 
     async def get_sscc_info(
