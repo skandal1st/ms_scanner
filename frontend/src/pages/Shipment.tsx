@@ -376,6 +376,24 @@ export function ShipmentPage() {
                   Будет отгружена только собранная часть.
                 </div>
               )}
+              {progress.offPlanRows.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: 10,
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: 6,
+                    fontSize: 12,
+                    color: '#b91c1c',
+                    fontWeight: 600,
+                  }}
+                >
+                  Есть {progress.offPlanRows.length}{' '}
+                  {progress.offPlanRows.length === 1 ? 'позиция' : 'позиции(й)'} не из плана —
+                  они тоже уйдут в отгрузку. Удалите их в блоке «Не входят в план», если это ошибка.
+                </div>
+              )}
             </div>
             <div className="buttons" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
               <button type="button" className="button" onClick={() => setShowConfirm(false)}>

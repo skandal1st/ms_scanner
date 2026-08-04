@@ -732,6 +732,36 @@ async def delete_document_scans(
     )
 
 
+class DeleteBulkRequest(BaseModel):
+    document_id: UUID
+    scan_ids: List[UUID]
+
+
+@router.post("/delete-bulk")
+async def delete_scans_bulk(
+    body: DeleteBulkRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Удалить пачку сканов документа по их id (напр. позицию не из плана целиком)."""
+    await _ensure_document_owner(body.document_id, current_user, db)
+    if not body.scan_ids:
+        return {"deleted": 0}
+    result = await db.execute(
+        delete(Scan).where(
+            Scan.document_id == body.document_id,
+            Scan.id.in_(body.scan_ids),
+        )
+    )
+    await db.commit()
+    logger.info(
+        "scans.delete_bulk",
+        document_id=str(body.document_id),
+        count=result.rowcount,
+    )
+    return {"deleted": result.rowcount}
+
+
 @router.delete("/{scan_id}", status_code=204)
 async def delete_scan(
     scan_id: UUID,

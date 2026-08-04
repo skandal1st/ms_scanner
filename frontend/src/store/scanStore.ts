@@ -34,12 +34,25 @@ export interface PositionSelection {
   gtinKey: string | null
 }
 
+/** Позиция, отсканированная НЕ по плану (её GTIN/товар нет ни в одной строке плана). */
+export interface OffPlanRow {
+  gtin: string
+  product_name: string
+  /** valid + overflow единиц (уйдут в отгрузку, если не удалить). */
+  addedTotal: number
+  pendingCount?: number
+  /** id сканов этой позиции — для удаления пачкой. */
+  scanIds: string[]
+}
+
 export interface PlanProgress {
   /** Есть план из МС (ожидаемые количества по GTIN). */
   hasPlan: boolean
   /** Показывать блок сводки (план или свободная группировка по сканам). */
   hasSummary: boolean
   rows: ProgressRow[]
+  /** Позиции, отсканированные не по плану (только когда есть план). */
+  offPlanRows: OffPlanRow[]
   total: {
     scanned: number
     expected: number
@@ -223,10 +236,39 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       expected: rows.reduce((a, r) => a + r.expected, 0),
       addedTotal: rows.reduce((a, r) => a + r.addedTotal, 0),
     }
+
+    // Позиции не из плана: сканы valid/overflow/pending, чей GTIN/товар не совпал ни
+    // с одной строкой плана. unknown_product сюда не берём — это отдельный поток подбора.
+    const planRefs = planItems.map((p) => ({
+      key: p.gtin ? normalizeGtinKey(p.gtin) : null,
+      pid: (p.product_id as string) || null,
+    }))
+    const inPlan = (s: Scan): boolean =>
+      planRefs.some((r) => scanMatchesPlanRow(s, r.key, r.pid))
+    const offGroups = new Map<string, OffPlanRow>()
+    for (const s of scans) {
+      if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
+      if (inPlan(s)) continue
+      const k = groupKey(s)
+      let g = offGroups.get(k)
+      if (!g) {
+        g = { gtin: s.gtin || k, product_name: '', addedTotal: 0, scanIds: [] }
+        offGroups.set(k, g)
+      }
+      g.scanIds.push(s.id)
+      if (!g.product_name && s.product_name) g.product_name = s.product_name
+      if (s.status === 'pending') g.pendingCount = (g.pendingCount ?? 0) + scanUnits(s)
+      else g.addedTotal += scanUnits(s)
+    }
+    const offPlanRows = Array.from(offGroups.values())
+      .map((g) => ({ ...g, product_name: g.product_name || g.gtin }))
+      .sort((a, b) => b.addedTotal - a.addedTotal)
+
     return {
       hasPlan: true,
       hasSummary: true,
       rows,
+      offPlanRows,
       total,
     }
   }
@@ -280,6 +322,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
     hasPlan: false,
     hasSummary: rows.length > 0,
     rows,
+    offPlanRows: [],
     total,
   }
 }

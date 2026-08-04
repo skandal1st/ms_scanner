@@ -5,6 +5,8 @@ import {
   normalizeGtinKey,
   selectionMatchesRow,
 } from '../store/scanStore'
+import type { OffPlanRow } from '../store/scanStore'
+import { scansApi } from '../api/client'
 import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
@@ -18,7 +20,26 @@ export function ProgressTable() {
   const selection = useScanStore((s) => s.selection)
   const setSelection = useScanStore((s) => s.setSelection)
   const togglePositionSelection = useScanStore((s) => s.togglePositionSelection)
+  const documentId = useScanStore((s) => s.document?.id)
+  const removeScan = useScanStore((s) => s.removeScan)
   const progress = buildProgress(plan, scans)
+  const [deletingOff, setDeletingOff] = useState<string | null>(null)
+
+  const handleDeleteOffPlan = async (row: OffPlanRow) => {
+    if (!documentId) return
+    const ok = window.confirm(
+      `Удалить позицию «${row.product_name}» (${row.scanIds.length} код(ов))? ` +
+        `Она не входит в план. Действие необратимо.`,
+    )
+    if (!ok) return
+    setDeletingOff(row.gtin)
+    try {
+      await scansApi.deleteBulk(documentId, row.scanIds)
+      for (const id of row.scanIds) removeScan(id)
+    } finally {
+      setDeletingOff(null)
+    }
+  }
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(COLLAPSE_KEY) === '1',
   )
@@ -36,6 +57,10 @@ export function ProgressTable() {
     progress.hasPlan && progress.total.expected > 0
       ? Math.min(100, Math.round((progress.total.scanned / progress.total.expected) * 100))
       : 0
+  const overallOver =
+    progress.hasPlan &&
+    progress.total.expected > 0 &&
+    progress.total.addedTotal > progress.total.expected
 
   return (
     <div style={styles.wrap}>
@@ -77,7 +102,7 @@ export function ProgressTable() {
             style={{
               ...styles.bar,
               width: `${overallPct}%`,
-              background: overallPct >= 100 ? '#16a34a' : '#f59e0b',
+              background: overallOver ? '#dc2626' : overallPct >= 100 ? '#16a34a' : '#f59e0b',
             }}
           />
         </div>
@@ -113,8 +138,9 @@ export function ProgressTable() {
                 ? 100
                 : 0
           const ratio = item.expected > 0 ? item.addedTotal / item.expected : item.addedTotal > 0 ? 1 : 0
-          const color =
-            item.addedTotal === 0 && !item.pendingCount
+          const color = overLine
+            ? '#dc2626' // перевыполнено — красная полоска
+            : item.addedTotal === 0 && !item.pendingCount
               ? '#9ca3af'
               : ratio >= 1 && item.expected > 0
                 ? '#16a34a'
@@ -187,6 +213,34 @@ export function ProgressTable() {
           )
         })}
       </div>}
+      {!collapsed && progress.offPlanRows.length > 0 && (
+        <div style={styles.offPlanWrap}>
+          <div style={styles.offPlanHead}>
+            ⚠ Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
+          </div>
+          {progress.offPlanRows.map((row) => (
+            <div key={row.gtin} style={styles.offPlanRow}>
+              <span style={styles.offPlanName} title={row.gtin}>
+                {row.product_name}
+                <span style={styles.offPlanCount}>
+                  {' · '}
+                  {row.addedTotal} шт.
+                  {row.pendingCount ? ` (+${row.pendingCount} на проверке)` : ''}
+                </span>
+              </span>
+              <button
+                type="button"
+                className="button"
+                style={styles.offPlanDel}
+                onClick={() => void handleDeleteOffPlan(row)}
+                disabled={deletingOff === row.gtin}
+              >
+                {deletingOff === row.gtin ? 'Удаляю…' : '✕ Удалить'}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {!collapsed && overflow > 0 && progress.hasPlan && (
         <div style={styles.overflowNote}>
           Всего сверх плана: {overflow}{' '}
@@ -318,5 +372,46 @@ const styles: Record<string, CSSProperties> = {
     borderTop: '1px dashed #fecaca',
     fontSize: 12,
     color: '#b91c1c',
+  },
+  offPlanWrap: {
+    marginTop: 10,
+    padding: 10,
+    background: '#fef2f2',
+    border: '1px solid #fecaca',
+    borderRadius: 6,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  offPlanHead: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#b91c1c',
+  },
+  offPlanRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  offPlanName: {
+    fontSize: 12,
+    color: '#1f2937',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    minWidth: 0,
+    flex: 1,
+  },
+  offPlanCount: {
+    color: '#6b7280',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  offPlanDel: {
+    fontSize: 12,
+    padding: '4px 10px',
+    color: '#b91c1c',
+    borderColor: '#fca5a5',
+    flexShrink: 0,
   },
 }

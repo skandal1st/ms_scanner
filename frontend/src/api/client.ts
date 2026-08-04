@@ -152,6 +152,9 @@ export const scansApi = {
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
+  /** Удалить пачку сканов по id (напр. позицию не из плана целиком). */
+  deleteBulk: (document_id: string, scan_ids: string[]) =>
+    api.post<{ deleted: number }>('/scans/delete-bulk', { document_id, scan_ids }),
   /** Удалить все марки документа из БД. */
   clearDocument: (document_id: string) => api.delete(`/scans/by-document/${document_id}`),
   /** Найти документы пользователя, где уже есть указанный код маркировки. */
