@@ -22,6 +22,12 @@ SUPPORTED_KINDS = {"demand", "loss", "supply"}
 
 
 class MoySkladService:
+    # Ширина свежего окна для локального поиска по контрагенту/заказу (МС `search`
+    # их не индексирует). Найдём совпадения среди последних N документов.
+    # ВАЖНО: МС разворачивает `expand` (agent/customerOrder) только при limit ≤ 100 —
+    # при 101+ имена контрагентов приходят пустыми. Поэтому строго 100.
+    SEARCH_SCAN_LIMIT = 100
+
     def __init__(self, token: str):
         self.token = token
         self.base_url = settings.MOYSKLAD_API_BASE
@@ -73,8 +79,12 @@ class MoySkladService:
 
         expand=customerOrder,agent — чтобы вытащить имя связанного заказа покупателя
         и контрагента для отображения в селекторе (UX: "00123 — ООО Покупатель (#00045)").
-        search — полнотекстовый поиск МС по номеру/контрагенту: позволяет найти
-        документ за пределами 50 последних.
+
+        search — поиск по номеру / связанному заказу / контрагенту, **регистронезависимо**.
+        Полнотекстовый `search` МС ищет только по полям самого документа (номер/описание)
+        и НЕ индексирует имя связанного контрагента/заказа. Поэтому: серверный `search`
+        оставляем ради поиска по номеру за пределами свежего окна, а совпадения по
+        контрагенту/заказу добираем локальной фильтрацией свежей выборки (casefold).
         """
         self._validate_kind(kind)
         # expand зависит от типа: поле customerOrder есть только у отгрузки (demand);
@@ -84,25 +94,55 @@ class MoySkladService:
             "demand": "customerOrder,agent",
             "supply": "agent",
         }
-        params: Dict[str, Any] = {
-            "limit": limit,
-            "order": "moment,desc",
-        }
         expand = expand_by_kind.get(kind)
+        base_params: Dict[str, Any] = {"order": "moment,desc"}
         if expand:
-            params["expand"] = expand
-        if search and search.strip():
-            params["search"] = search.strip()
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
-                f"{self.base_url}/entity/{kind}",
-                headers=self.headers,
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            base_params["expand"] = expand
 
-        rows = data.get("rows", [])
+        async def _fetch(extra: Dict[str, Any]) -> List[Dict[str, Any]]:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{self.base_url}/entity/{kind}",
+                    headers=self.headers,
+                    params={**base_params, **extra},
+                )
+                resp.raise_for_status()
+                return resp.json().get("rows", []) or []
+
+        q = (search or "").strip()
+        if not q:
+            rows = await _fetch({"limit": limit})
+        else:
+            # МС `search` не найдёт по контрагенту → берём серверный search (номера)
+            # + широкое свежее окно и фильтруем регистронезависимо у себя.
+            server_rows = await _fetch({"limit": limit, "search": q})
+            recent_rows = await _fetch({"limit": self.SEARCH_SCAN_LIMIT})
+            merged: Dict[str, Dict[str, Any]] = {}
+            for r in server_rows + recent_rows:
+                if r.get("id") and r["id"] not in merged:
+                    merged[r["id"]] = r
+            ql = q.casefold()
+
+            def _matches(r: Dict[str, Any]) -> bool:
+                order = r.get("customerOrder") or {}
+                agent = r.get("agent") or {}
+                haystack = " ".join(
+                    s
+                    for s in (
+                        r.get("name") or "",
+                        order.get("name") if isinstance(order, dict) else "",
+                        agent.get("name") if isinstance(agent, dict) else "",
+                    )
+                    if s
+                )
+                return ql in haystack.casefold()
+
+            rows = sorted(
+                (r for r in merged.values() if _matches(r)),
+                key=lambda r: r.get("moment") or "",
+                reverse=True,
+            )
+
         out: List[Dict[str, Any]] = []
         for r in rows:
             order = r.get("customerOrder") or {}
