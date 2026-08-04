@@ -16,6 +16,7 @@ export function WriteoffPage() {
   const {
     document,
     setDocument,
+    reset,
     stats,
     scans,
     czTokenExpired,
@@ -84,6 +85,15 @@ export function WriteoffPage() {
   const handleSelectDoc = (doc: Document) => {
     setPendingDoc(doc)
     setDocument(doc)
+    setPhase('idle')
+    setMessage(null)
+    setWriteoffResult(null)
+  }
+
+  // Отвязаться от текущего документа → вернуться к выбору (без F5). Сканы остаются в БД.
+  const handleDetach = () => {
+    reset()
+    setPendingDoc(null)
     setPhase('idle')
     setMessage(null)
     setWriteoffResult(null)
@@ -169,6 +179,16 @@ export function WriteoffPage() {
           <h1 className="acc-header__title">Списание маркировки</h1>
           {phase === 'done' && <span className="badge badge--ok">Завершено</span>}
           {phase === 'processing' && <span className="badge badge--info">Обрабатывается</span>}
+          {document && (
+            <button
+              type="button"
+              className="button"
+              onClick={handleDetach}
+              title="Отвязаться и выбрать другой документ (сканы остаются)"
+            >
+              ✕ Отвязаться
+            </button>
+          )}
         </div>
         <span className="acc-header__doc">{document?.name ?? 'Документ не выбран'}</span>
       </header>

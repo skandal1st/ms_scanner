@@ -14,7 +14,7 @@ import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
-  const { document, setDocument, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired } = useScanStore()
+  const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired } = useScanStore()
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -88,6 +88,14 @@ export function ShipmentPage() {
     setDocument(doc)
   }
 
+  // Отвязаться от текущей отгрузки → вернуться к выбору (без F5). Сканы остаются в БД.
+  const handleDetach = () => {
+    reset()
+    setPendingDoc(null)
+    setShowConfirm(false)
+    setShowClearConfirm(false)
+  }
+
   const handleProcess = async () => {
     if (!document) return
     await processMutation.mutateAsync(document.id)
@@ -112,6 +120,16 @@ export function ShipmentPage() {
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
           {document && <span className={docStatusCls}>{docStatusText}</span>}
+          {document && (
+            <button
+              type="button"
+              className="button"
+              onClick={handleDetach}
+              title="Отвязаться и выбрать другую отгрузку (сканы остаются в документе)"
+            >
+              ✕ Отвязаться
+            </button>
+          )}
         </div>
         <span className="acc-header__doc">
           {document?.name ?? 'Документ не выбран'}
