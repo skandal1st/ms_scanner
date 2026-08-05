@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import secrets
@@ -37,6 +38,30 @@ def _parse_inn_from_subject(subject: Optional[str]) -> Optional[str]:
     if m:
         return m.group(1)
     return None
+
+
+# Реальный срок жизни токена ЧЗ по умолчанию — 10 часов. ЧЗ поле `expire` в ответе
+# /auth/cert/ НЕ присылает (проверено на проде 2026-08-05: expire пустой, а сам токен —
+# JWT с exp = выдача + 36000с). Раньше дефолт был 3600 → токен «умирал» через час,
+# вынуждая переподписываться раз в час при реальном сроке 10 ч.
+CZ_TOKEN_DEFAULT_TTL_SECONDS = 36000
+
+
+def _cz_token_expiry_from_jwt(token: str) -> Optional[datetime]:
+    """Срок действия токена ЧЗ из claim `exp` его JWT (True API отдаёт JWT).
+
+    Возвращает aware datetime (UTC) или None, если токен не JWT / без exp.
+    """
+    try:
+        payload_b64 = token.split(".")[1]
+        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        exp = payload.get("exp")
+        if exp is None:
+            return None
+        return datetime.fromtimestamp(int(exp), tz=timezone.utc)
+    except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+        return None
 
 
 class IntegrationResponse(BaseModel):
@@ -198,14 +223,20 @@ async def cz_login(
         )
 
     token = result.get("token")
-    expire = int(result.get("expire", 3600))
     if not token:
         raise HTTPException(status_code=502, detail="ЧЗ не вернул token")
 
     integration = await _get_or_create_integration(db, current_user.id)
     integration.cz_token = encrypt_token(token)
-    # запас 60 секунд: на стороне celery считаем «протух» чуть раньше реального expiry
-    integration.cz_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire - 60)
+    # Срок действия берём из самого JWT-токена ЧЗ (claim exp) — это реальный срок ~10 ч.
+    # ЧЗ поле `expire` в ответе не присылает; если вдруг появится — используем его,
+    # иначе дефолт 10 ч. Запас 60 сек: считаем «протух» чуть раньше реального expiry.
+    jwt_expiry = _cz_token_expiry_from_jwt(token)
+    if jwt_expiry is not None:
+        integration.cz_token_expires_at = jwt_expiry - timedelta(seconds=60)
+    else:
+        expire = int(result.get("expire") or CZ_TOKEN_DEFAULT_TTL_SECONDS)
+        integration.cz_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire - 60)
     integration.cz_cert_thumbprint = body.cert_thumbprint
     integration.cz_cert_subject = body.cert_subject
     integration.cz_auth_method = settings.CZ_AUTH_METHOD
