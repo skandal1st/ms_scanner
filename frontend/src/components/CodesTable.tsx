@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import {
   useScanStore,
   effectiveGtinKey,
@@ -18,48 +18,119 @@ const STATUS_CONFIG = {
 } as const
 
 export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
-  const { scans, removeScan, flashScanId, selection, togglePositionSelection } = useScanStore()
+  const {
+    scans,
+    removeScan,
+    flashScanId,
+    selection,
+    setSelection,
+    setTargetProductId,
+    togglePositionSelection,
+  } = useScanStore()
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (scans.length === 0) {
     return <div className="scans-empty">Коды появятся здесь после сканирования</div>
   }
 
+  // Фокус на выбранной позиции: пока активно выделение, показываем только её марки.
+  const visibleScans = selection
+    ? scans.filter((s) => selectionMatchesScan(selection, s))
+    : scans
+  const hiddenCount = scans.length - visibleScans.length
+
+  const clearSelection = () => {
+    setSelection(null)
+    setTargetProductId(null)
+  }
+
   return (
-    <table className="ui-table scans-table">
-      <thead>
-        <tr>
-          <th>Код</th>
-          <th>Товар</th>
-          <th>Статус</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {scans.map((scan) => (
-          <ScanRow
-            key={scan.id}
-            scan={scan}
-            signatureInn={signatureInn}
-            isExpanded={expanded === scan.id}
-            isFlash={flashScanId === scan.id}
-            isSelected={Boolean(selection && selectionMatchesScan(selection, scan))}
-            onToggle={() => {
-              setExpanded(expanded === scan.id ? null : scan.id)
-              togglePositionSelection({
-                productId: scan.moysklad_product_id ?? null,
-                gtinKey: effectiveGtinKey(scan),
-              })
-            }}
-            onDelete={async () => {
-              await scansApi.delete(scan.id)
-              removeScan(scan.id)
-            }}
-          />
-        ))}
-      </tbody>
-    </table>
+    <>
+      {selection && (
+        <div style={styles.filterBar}>
+          <span style={styles.filterText}>
+            Показаны марки выбранной позиции
+            {hiddenCount > 0 ? ` · скрыто ${hiddenCount}` : ''}
+          </span>
+          <button
+            type="button"
+            className="button"
+            style={styles.filterBtn}
+            onClick={clearSelection}
+          >
+            Показать все марки ({scans.length})
+          </button>
+        </div>
+      )}
+      {visibleScans.length === 0 ? (
+        <div className="scans-empty">В этой позиции пока нет отсканированных марок</div>
+      ) : (
+        <table className="ui-table scans-table">
+          <thead>
+            <tr>
+              <th>Код</th>
+              <th>Товар</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleScans.map((scan) => (
+              <ScanRow
+                key={scan.id}
+                scan={scan}
+                signatureInn={signatureInn}
+                isExpanded={expanded === scan.id}
+                isFlash={flashScanId === scan.id}
+                isSelected={Boolean(selection && selectionMatchesScan(selection, scan))}
+                onToggle={() => {
+                  setExpanded(expanded === scan.id ? null : scan.id)
+                  // Выделение задаём кликом по марке только когда его ещё нет. Если
+                  // позиция уже выбрана — клик лишь разворачивает детали, фильтр
+                  // держится (выделение не снимаем).
+                  if (!selection) {
+                    togglePositionSelection({
+                      productId: scan.moysklad_product_id ?? null,
+                      gtinKey: effectiveGtinKey(scan),
+                    })
+                  }
+                }}
+                onDelete={async () => {
+                  await scansApi.delete(scan.id)
+                  removeScan(scan.id)
+                }}
+              />
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   )
+}
+
+const styles: Record<string, CSSProperties> = {
+  filterBar: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    flexWrap: 'wrap',
+    padding: '6px 10px',
+    marginBottom: 8,
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    borderRadius: 6,
+  },
+  filterText: {
+    fontSize: 12,
+    color: '#1e40af',
+    fontVariantNumeric: 'tabular-nums',
+  },
+  filterBtn: {
+    fontSize: 12,
+    padding: '4px 10px',
+    flexShrink: 0,
+  },
 }
 
 function ScanRow({
