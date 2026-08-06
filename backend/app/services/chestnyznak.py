@@ -762,13 +762,24 @@ class ChestnyZnakService:
     # ── Вывод из оборота (списание) ────────────────────────────────────────────
 
     async def detect_product_group(self, cis: str) -> Optional[str]:
-        """Определить товарную группу (pg) кода через cises/info (перебор cz_product_groups_list).
+        """Определить товарную группу (pg) кода. См. resolve_product_group."""
+        pg, _ = await self.resolve_product_group(cis)
+        return pg
 
+    async def resolve_product_group(
+        self, cis: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Товарная группа (pg) кода через cises/info (перебор cz_product_groups_list).
+
+        Возвращает ``(pg, None)`` если код найден в какой-то группе, иначе
+        ``(None, reason)`` — человекочитаемая причина из ответа ЧЗ (напр.
+        «КМ/КИ не найден»). Причину берём из errorMessage ответа по группам, к
+        которым у участника есть доступ (статус 404 с телом), а не из 403/400.
         В mock возвращает первую сконфигурированную группу.
         """
         if self.mock or not self.token:
             groups = settings.cz_product_groups_list
-            return groups[0] if groups else None
+            return (groups[0] if groups else None, None)
 
         from app.services.cz_logger import log_cz_request
 
@@ -779,6 +790,7 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
+        reason: Optional[str] = None
         for pg in settings.cz_product_groups_list:
             start = time.time()
             try:
@@ -786,25 +798,33 @@ class ChestnyZnakService:
                     resp = await client.post(
                         info_url, params={"pg": pg}, headers=headers, json=[code]
                     )
-                    body = resp.json() if resp.status_code == 200 else None
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = None
                     await log_cz_request(
                         method="POST",
                         url=f"{info_url}?pg={pg}",
                         request_body=[code],
                         response_status=resp.status_code,
-                        response_body=body if isinstance(body, list) else None,
+                        response_body=body if isinstance(body, (list, dict)) else None,
                         duration_ms=int((time.time() - start) * 1000),
                     )
             except (httpx.TimeoutException, httpx.HTTPError) as exc:
                 logger.warning("cz.detect_pg.http_error", pg=pg, error=str(exc))
                 continue
-            if resp.status_code != 200 or not isinstance(body, list) or not body:
+            if not isinstance(body, list) or not body:
                 continue
             entry = body[0] if isinstance(body[0], dict) else {}
-            if entry.get("errorCode"):
-                continue
-            return pg
-        return None
+            if resp.status_code == 200 and not entry.get("errorCode"):
+                return (pg, None)  # код найден в этой группе
+            # Код в этой группе не найден (404) / нет доступа (403) — запомним
+            # причину из ответа для итогового сообщения. 403 не перетираем 404-ошибкой
+            # «не найден»: приоритет у более информативного «КМ/КИ не найден».
+            msg = entry.get("errorMessage")
+            if msg and (reason is None or resp.status_code == 404):
+                reason = str(msg)
+        return (None, reason or "Марка не найдена в Честном Знаке")
 
     @staticmethod
     def build_writeoff_document(

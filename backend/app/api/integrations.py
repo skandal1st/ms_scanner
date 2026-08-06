@@ -292,9 +292,17 @@ class WriteoffPart(BaseModel):
     product_document_b64: str
 
 
+class UnresolvedCode(BaseModel):
+    cis: str
+    reason: str
+
+
 class WriteoffPrepareResponse(BaseModel):
+    # Пустой, если ни одну марку нельзя списать (см. unresolved).
     writeoff_token: str
     parts: list[WriteoffPart]
+    # Марки, которые списать нельзя (не найдены в ЧЗ и т.п.) — показываем списком.
+    unresolved: list[UnresolvedCode] = []
 
 
 class WriteoffSignature(BaseModel):
@@ -386,52 +394,56 @@ async def cz_writeoff_prepare(
 
     cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
 
-    # Группируем КМ по товарной группе (pg). Кэшируем detect по коду.
+    # Группируем КМ по товарной группе (pg). Марки, которые ЧЗ не находит (нельзя
+    # списать физически), не роняют весь документ — собираем их отдельным списком.
     groups: dict[str, list[str]] = {}
+    unresolved: list[UnresolvedCode] = []
     for cis in cises:
-        pg = await cz.detect_product_group(cis)
+        pg, cz_reason = await cz.resolve_product_group(cis)
         if not pg:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Не удалось определить товарную группу для кода {cis[:40]}",
+            unresolved.append(
+                UnresolvedCode(cis=cis, reason=cz_reason or "Марка не найдена в ЧЗ")
             )
+            continue
         groups.setdefault(pg, []).append(cis)
 
     action_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     parts: list[WriteoffPart] = []
     stored_parts: dict[str, dict] = {}
-    for pg, pg_cises in groups.items():
-        document = cz.build_writeoff_document(
-            inn=integration.cz_inn,
-            action=reason["action"],
-            action_date=action_date,
-            cises=pg_cises,
-            custom_name=reason["label"],
-            basis_number=body.basis_number,
-            basis_date=body.basis_date,
-        )
-        b64 = cz.encode_product_document(document)
-        parts.append(WriteoffPart(pg=pg, product_document_b64=b64))
-        stored_parts[pg] = {"product_document_b64": b64, "cises": pg_cises}
+    token = ""
+    if groups:
+        for pg, pg_cises in groups.items():
+            document = cz.build_writeoff_document(
+                inn=integration.cz_inn,
+                action=reason["action"],
+                action_date=action_date,
+                cises=pg_cises,
+                custom_name=reason["label"],
+                basis_number=body.basis_number,
+                basis_date=body.basis_date,
+            )
+            b64 = cz.encode_product_document(document)
+            parts.append(WriteoffPart(pg=pg, product_document_b64=b64))
+            stored_parts[pg] = {"product_document_b64": b64, "cises": pg_cises}
 
-    token = secrets.token_urlsafe(32)
-    payload = {
-        "document_id": str(doc.id),
-        "reason": body.reason,
-        "parts": stored_parts,
-    }
-    r = aioredis.from_url(settings.REDIS_URL)
-    try:
-        await r.set(
-            f"cz:writeoff:{current_user.id}:{token}",
-            json.dumps(payload),
-            ex=WRITEOFF_TTL_SECONDS,
-        )
-    finally:
-        await r.aclose()
+        token = secrets.token_urlsafe(32)
+        payload = {
+            "document_id": str(doc.id),
+            "reason": body.reason,
+            "parts": stored_parts,
+        }
+        r = aioredis.from_url(settings.REDIS_URL)
+        try:
+            await r.set(
+                f"cz:writeoff:{current_user.id}:{token}",
+                json.dumps(payload),
+                ex=WRITEOFF_TTL_SECONDS,
+            )
+        finally:
+            await r.aclose()
 
-    doc.writeoff_reason = body.reason
-    await db.commit()
+        doc.writeoff_reason = body.reason
+        await db.commit()
 
     logger.info(
         "writeoff.prepared",
@@ -439,8 +451,11 @@ async def cz_writeoff_prepare(
         reason=body.reason,
         groups=list(groups.keys()),
         cises=len(cises),
+        unresolved=len(unresolved),
     )
-    return WriteoffPrepareResponse(writeoff_token=token, parts=parts)
+    return WriteoffPrepareResponse(
+        writeoff_token=token, parts=parts, unresolved=unresolved
+    )
 
 
 @router.post("/cz/writeoff/submit", response_model=WriteoffSubmitResponse)

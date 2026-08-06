@@ -318,9 +318,15 @@ export interface WriteoffPart {
   product_document_b64: string
 }
 
+export interface UnresolvedCode {
+  cis: string
+  reason: string
+}
+
 export interface WriteoffPrepareResult {
   writeoff_token: string
   parts: WriteoffPart[]
+  unresolved: UnresolvedCode[]
 }
 
 export const WRITEOFF_REASONS: { value: string; label: string }[] = [

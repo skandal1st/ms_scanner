@@ -8,7 +8,13 @@ import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument } from '../hooks/useDocuments'
 import { listCertificates, signDetachedBase64, type CzCertificate } from '../lib/cprob'
-import { czApi, integrationsApi, WRITEOFF_REASONS, type Document } from '../api/client'
+import {
+  czApi,
+  integrationsApi,
+  WRITEOFF_REASONS,
+  type Document,
+  type UnresolvedCode,
+} from '../api/client'
 
 type Phase = 'idle' | 'signing' | 'submitting' | 'processing' | 'done' | 'error'
 
@@ -34,6 +40,8 @@ export function WriteoffPage() {
   const [thumbprint, setThumbprint] = useState('')
   const [phase, setPhase] = useState<Phase>('idle')
   const [message, setMessage] = useState<string | null>(null)
+  // Марки, которые ЧЗ не смог найти — списать их нельзя, показываем списком.
+  const [unresolved, setUnresolved] = useState<UnresolvedCode[]>([])
 
   useLoadDocument(pendingDoc?.id ?? null)
 
@@ -88,6 +96,7 @@ export function WriteoffPage() {
     setPhase('idle')
     setMessage(null)
     setWriteoffResult(null)
+    setUnresolved([])
   }
 
   // Отвязаться от текущего документа → вернуться к выбору (без F5). Сканы остаются в БД.
@@ -97,6 +106,7 @@ export function WriteoffPage() {
     setPhase('idle')
     setMessage(null)
     setWriteoffResult(null)
+    setUnresolved([])
   }
 
   const canSubmit =
@@ -113,6 +123,7 @@ export function WriteoffPage() {
     if (!document) return
     setMessage(null)
     setWriteoffResult(null)
+    setUnresolved([])
 
     if (!integration?.has_cz) {
       setPhase('error')
@@ -138,6 +149,17 @@ export function WriteoffPage() {
         basis_number: basisNumber.trim() || undefined,
         basis_date: basisDate || undefined,
       })
+
+      setUnresolved(prep.unresolved ?? [])
+
+      // Ни одной марки нельзя списать (все не найдены в ЧЗ) — не подписываем.
+      if (!prep.writeoff_token || prep.parts.length === 0) {
+        setPhase('error')
+        setMessage(
+          'Ни одну марку не удалось подготовить к списанию — см. список ниже.',
+        )
+        return
+      }
 
       const signatures: { pg: string; signature: string }[] = []
       for (const part of prep.parts) {
@@ -293,6 +315,36 @@ export function WriteoffPage() {
             <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
             <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>
           </div>
+          {unresolved.length > 0 && (
+            <div
+              role="alert"
+              style={{
+                margin: '0 0 10px',
+                padding: 10,
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#b91c1c', marginBottom: 6 }}>
+                ⚠ Не удалось списать ({unresolved.length}) — Честный Знак не нашёл эти марки
+              </div>
+              <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {unresolved.map((u) => (
+                  <div key={u.cis} style={{ fontSize: 11, color: '#7f1d1d', display: 'flex', gap: 8 }}>
+                    <code style={{ flex: 1, wordBreak: 'break-all' }}>
+                      {u.cis.slice(0, 40)}{u.cis.length > 40 ? '…' : ''}
+                    </code>
+                    <span style={{ flexShrink: 0, color: '#b91c1c' }}>{u.reason}</span>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: 11, color: '#7f1d1d', marginTop: 6 }}>
+                Остальные марки списываются как обычно. Проверьте эти коды и удалите
+                из документа, если они не подлежат списанию.
+              </div>
+            </div>
+          )}
           <div className="acc-table-wrap">
             <CodesTable />
           </div>
