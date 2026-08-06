@@ -147,6 +147,16 @@ async def list_documents(
     return [_doc_to_response(d, counts.get(d.id, 0)) for d in documents]
 
 
+def _plan_source_kind(doc_kind: str) -> str:
+    """Тип МС-документа, из позиций которого строится план.
+
+    Списание (loss) не имеет собственных позиций в МС — его план берём из
+    привязанной отгрузки (demand): «прикрепляем отгрузку как план списания».
+    Для остальных типов источник плана совпадает с типом документа.
+    """
+    return "demand" if doc_kind == "loss" else doc_kind
+
+
 @router.post("/", response_model=DocumentResponse, status_code=201)
 async def create_document(
     body: CreateDocumentRequest,
@@ -160,7 +170,7 @@ async def create_document(
         # Если МС не подключён или запрос упал — план остаётся пустым (произвольная сборка).
         try:
             ms = await _get_ms_service(current_user, db)
-            plan = await ms.build_plan(body.kind.value, body.moysklad_id)
+            plan = await ms.build_plan(_plan_source_kind(body.kind.value), body.moysklad_id)
         except HTTPException:
             pass
         except Exception as exc:
@@ -208,7 +218,7 @@ async def refresh_plan(
         raise HTTPException(400, "Документ не привязан к МойСклад")
 
     ms = await _get_ms_service(current_user, db)
-    doc.plan = await ms.build_plan(doc.kind.value, doc.moysklad_id)
+    doc.plan = await ms.build_plan(_plan_source_kind(doc.kind.value), doc.moysklad_id)
     await db.commit()
     await db.refresh(doc)
     return _doc_to_response(doc, await _scan_count(db, doc.id))

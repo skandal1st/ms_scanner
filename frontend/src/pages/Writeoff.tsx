@@ -4,6 +4,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
+import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument } from '../hooks/useDocuments'
@@ -250,10 +251,16 @@ export function WriteoffPage() {
 
       <div className="acc-body">
         <div className="acc-left">
-          <DocumentSelector kind="loss" onSelect={handleSelectDoc} selected={document} />
+          <DocumentSelector
+            kind="loss"
+            msKind="demand"
+            onSelect={handleSelectDoc}
+            selected={document}
+          />
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
+          <ProgressTable />
 
           <div className="section" style={{ marginTop: 12 }}>
             <label className="field-label">Причина списания</label>

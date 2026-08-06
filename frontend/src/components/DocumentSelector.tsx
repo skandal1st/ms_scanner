@@ -6,6 +6,10 @@ interface Props {
   kind: DocumentKind
   onSelect: (doc: Document) => void
   selected: Document | null
+  /** Тип документа МС для поиска/привязки, если он отличается от kind самого
+   * документа приложения. Для списания (kind=loss) прикрепляем отгрузку
+   * (msKind=demand) как план списания. По умолчанию совпадает с kind. */
+  msKind?: DocumentKind
 }
 
 const KIND_LABEL: Record<DocumentKind, string> = {
@@ -25,7 +29,9 @@ function msDocLabel(m: MsDocument): string {
   return label
 }
 
-export function DocumentSelector({ kind, onSelect, selected }: Props) {
+export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
+  // Поиск/привязка в МС может идти по другому типу (списание ← отгрузка).
+  const msSearchKind = msKind ?? kind
   const [mode, setMode] = useState<'select' | 'create'>('select')
   const [newName, setNewName] = useState('')
   const [selectedMsId, setSelectedMsId] = useState('')
@@ -42,7 +48,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
     return () => window.clearTimeout(handle)
   }, [search])
 
-  const { data: msDocs, isLoading: msLoading } = useMsDocuments(kind, debounced || undefined)
+  const { data: msDocs, isLoading: msLoading } = useMsDocuments(msSearchKind, debounced || undefined)
   const { data: documents } = useDocuments(kind)
   const createMutation = useCreateDocument()
 
@@ -199,7 +205,7 @@ export function DocumentSelector({ kind, onSelect, selected }: Props) {
                 if (s) setNewName(msDocLabel(s))
               }}
             >
-              <option value="">Привязать {KIND_LABEL[kind]} из МойСклад...</option>
+              <option value="">Привязать {KIND_LABEL[msSearchKind]} из МойСклад...</option>
               {msDocs.map((s) => (
                 <option key={s.id} value={s.id}>{msDocLabel(s)}</option>
               ))}
