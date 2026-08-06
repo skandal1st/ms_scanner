@@ -76,6 +76,26 @@ class CodeInfo:
         return bool(self.children)
 
 
+@dataclass
+class CisCheck:
+    """Результат пробивки одной марки для инструмента «Проверка марок».
+
+    status — cisInfo.status ЧЗ (INTRODUCED / WITHDRAWN / RETIRED / EMITTED и т.п.).
+    package_type — generalPackageType (UNIT/GROUP/BOX). error — причина, если не найдена."""
+    code: str
+    found: bool
+    gtin: Optional[str] = None
+    product_name: Optional[str] = None
+    owner_name: Optional[str] = None
+    owner_inn: Optional[str] = None
+    producer_name: Optional[str] = None
+    product_group: Optional[str] = None
+    status: Optional[str] = None
+    package_type: Optional[str] = None
+    child_count: int = 0
+    error: Optional[str] = None
+
+
 def _flatten_aggregate_leaves(node: Any) -> list[str]:
     """Рекурсивно собрать листовые КМ из дерева cises/aggregated/list.
     Узел = dict{код: поддерево} либо list[код]; лист = код с пустым поддеревом."""
@@ -837,6 +857,102 @@ class ChestnyZnakService:
             if msg and (reason is None or resp.status_code == 404):
                 reason = str(msg)
         return (None, reason or "Марка не найдена в Честном Знаке")
+
+    async def check_codes(self, codes: list[str]) -> list["CisCheck"]:
+        """Пробить список КМ через True API cises/info батчами по товарным группам.
+
+        Один запрос на группу с массивом ещё не распознанных кодов (перебор
+        cz_product_groups_list; сопоставление ответа по requestedCis). Агрегаты не
+        разворачиваем. Возвращает по одному CisCheck на код в исходном порядке.
+        """
+        order = list(dict.fromkeys(codes))  # дедуп с сохранением порядка
+        results: dict[str, CisCheck] = {}
+        if self.mock or not self.token:
+            return [
+                CisCheck(code=c, found=False, error="Нет токена Честного Знака")
+                for c in order
+            ]
+
+        from app.services.cz_logger import log_cz_request
+
+        info_url = f"{self.base_url}/api/v3/true-api/cises/info"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        # Ключ запроса (после strip_ai_brackets) → исходный код пользователя.
+        remaining: dict[str, str] = {strip_ai_brackets(c): c for c in order}
+        reasons: dict[str, str] = {}
+
+        for pg in settings.cz_product_groups_list:
+            if not remaining:
+                break
+            lookup = list(remaining.keys())
+            start = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.post(
+                        info_url, params={"pg": pg}, headers=headers, json=lookup
+                    )
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = None
+                    await log_cz_request(
+                        method="POST",
+                        url=f"{info_url}?pg={pg}",
+                        request_body={"count": len(lookup)},
+                        response_status=resp.status_code,
+                        response_body=None,  # тела большие — не пишем в лог
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                logger.warning("cz.check.http_error", pg=pg, error=str(exc))
+                continue
+            if not isinstance(body, list):
+                continue
+            for entry in body:
+                if not isinstance(entry, dict):
+                    continue
+                ci = entry.get("cisInfo") or {}
+                req = ci.get("requestedCis") or ci.get("cis")
+                if req not in remaining:
+                    continue
+                orig = remaining[req]
+                if entry.get("errorCode"):
+                    msg = entry.get("errorMessage")
+                    if msg and (orig not in reasons or resp.status_code == 404):
+                        reasons[orig] = str(msg)
+                    continue
+                child = [c for c in (ci.get("child") or []) if isinstance(c, str)]
+                results[orig] = CisCheck(
+                    code=orig,
+                    found=True,
+                    gtin=_digits_gtin14_from_value(ci.get("gtin")),
+                    product_name=(ci.get("productName") or None),
+                    owner_name=(ci.get("ownerName") or None),
+                    owner_inn=(ci.get("ownerInn") or None),
+                    producer_name=(
+                        ci.get("producerName") or ci.get("manufacturerName") or None
+                    ),
+                    product_group=(ci.get("productGroup") or pg),
+                    status=(ci.get("status") or None),
+                    package_type=(
+                        ci.get("generalPackageType") or ci.get("packageType") or None
+                    ),
+                    child_count=len(child),
+                )
+                del remaining[req]
+
+        for orig in remaining.values():
+            results[orig] = CisCheck(
+                code=orig,
+                found=False,
+                error=reasons.get(orig) or "Марка не найдена в Честном Знаке",
+            )
+        logger.info("cz.check.done", total=len(order), found=sum(1 for r in results.values() if r.found))
+        return [results[c] for c in order]
 
     @staticmethod
     def build_writeoff_document(

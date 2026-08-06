@@ -357,4 +357,33 @@ export const czApi = {
     writeoff_token: string
     signatures: { pg: string; signature: string }[]
   }) => api.post<{ doc_ids: string[] }>('/integrations/cz/writeoff/submit', body),
+  check: (codes: string[]) =>
+    api.post<CzCheckResult>('/integrations/cz/check', { codes }),
+}
+
+export interface CzCheckDocRef {
+  document_id: string
+  name: string
+  kind: DocumentKind
+  scan_status: string
+}
+
+export interface CzCheckItem {
+  code: string
+  found: boolean
+  product_name: string | null
+  gtin: string | null
+  owner_name: string | null
+  owner_inn: string | null
+  producer_name: string | null
+  product_group: string | null
+  status: string | null
+  package_type: string | null
+  child_count: number
+  error: string | null
+  documents: CzCheckDocRef[]
+}
+
+export interface CzCheckResult {
+  items: CzCheckItem[]
 }

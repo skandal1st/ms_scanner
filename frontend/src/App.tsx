@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ShipmentPage } from './pages/Shipment'
 import { AcceptancePage } from './pages/Acceptance'
 import { WriteoffPage } from './pages/Writeoff'
+import { CzCheckPage } from './pages/CzCheck'
 import { SettingsPage } from './pages/Settings'
 import { LoginPage } from './pages/Login'
 import { MsIframePage } from './pages/MsIframe'
@@ -37,6 +38,9 @@ function Layout({ children }: { children: React.ReactNode }) {
         </NavLink>
         <NavLink to="/writeoff" className={({ isActive }) => (isActive ? 'active' : '')}>
           Списание
+        </NavLink>
+        <NavLink to="/check" className={({ isActive }) => (isActive ? 'active' : '')}>
+          Проверка
         </NavLink>
         <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
           Настройки
@@ -84,6 +88,16 @@ export default function App() {
               <RequireAuth>
                 <Layout>
                   <WriteoffPage />
+                </Layout>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/check"
+            element={
+              <RequireAuth>
+                <Layout>
+                  <CzCheckPage />
                 </Layout>
               </RequireAuth>
             }

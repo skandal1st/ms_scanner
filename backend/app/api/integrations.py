@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional
 import redis.asyncio as aioredis
@@ -516,3 +516,126 @@ async def cz_writeoff_submit(
 
     logger.info("writeoff.submitted", document_id=str(doc.id), docs=len(doc_ids))
     return WriteoffSubmitResponse(doc_ids=[d["doc_id"] for d in doc_ids])
+
+
+# ── Проверка марок через ГИС МТ (только чтение, без отгрузки/списания) ───────────
+
+CZ_CHECK_MAX = 500
+
+
+class CzCheckRequest(BaseModel):
+    codes: list[str]
+
+
+class CzCheckDocRef(BaseModel):
+    document_id: UUID
+    name: str
+    kind: str
+    scan_status: str
+
+
+class CzCheckItem(BaseModel):
+    code: str
+    found: bool
+    product_name: Optional[str] = None
+    gtin: Optional[str] = None
+    owner_name: Optional[str] = None
+    owner_inn: Optional[str] = None
+    producer_name: Optional[str] = None
+    product_group: Optional[str] = None
+    status: Optional[str] = None
+    package_type: Optional[str] = None
+    child_count: int = 0
+    error: Optional[str] = None
+    documents: list[CzCheckDocRef] = []
+
+
+class CzCheckResponse(BaseModel):
+    items: list[CzCheckItem]
+
+
+def _cis_key(code: str) -> str:
+    """КИ для сопоставления с нашими сканами: часть кода до GS (01+GTIN+21+serial)."""
+    return (code or "").split("\x1d", 1)[0].strip()
+
+
+@router.post("/cz/check", response_model=CzCheckResponse)
+async def cz_check(
+    body: CzCheckRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Пробить марки через ГИС МТ (только чтение): товар, владелец, статус + в каких
+    документах приложения они фигурируют. Ничего не пишет ни в ЧЗ, ни в МС."""
+    codes = list(dict.fromkeys(c.strip() for c in body.codes if c and c.strip()))
+    if not codes:
+        return CzCheckResponse(items=[])
+    if len(codes) > CZ_CHECK_MAX:
+        raise HTTPException(
+            status_code=400, detail=f"Слишком много кодов за раз (максимум {CZ_CHECK_MAX})"
+        )
+
+    int_result = await db.execute(
+        select(Integration).where(Integration.user_id == current_user.id)
+    )
+    integration = int_result.scalar_one_or_none()
+    token_ok = bool(integration and integration.cz_token) and (
+        integration.cz_token_expires_at is None
+        or integration.cz_token_expires_at > datetime.now(timezone.utc)
+    )
+    if not token_ok:
+        raise HTTPException(
+            status_code=400,
+            detail="Войдите в Честный Знак по УКЭП (раздел «Настройки»)",
+        )
+
+    cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
+    checks = await cz.check_codes(codes)
+
+    # В каких наших документах фигурируют эти марки — сопоставляем по КИ (код до GS).
+    keys = list({_cis_key(c) for c in codes})
+    docmap: dict[str, list[CzCheckDocRef]] = {}
+    if keys:
+        rows = (
+            await db.execute(
+                select(Scan.code, Scan.status, Document.id, Document.name, Document.kind)
+                .join(Document, Document.id == Scan.document_id)
+                .where(Document.user_id == current_user.id)
+                .where(func.split_part(Scan.code, "\x1d", 1).in_(keys))
+            )
+        ).all()
+        seen: set[tuple[str, str]] = set()
+        for scan_code, scan_status, doc_id, doc_name, doc_kind in rows:
+            k = _cis_key(scan_code)
+            dk = (k, str(doc_id))
+            if dk in seen:
+                continue
+            seen.add(dk)
+            docmap.setdefault(k, []).append(
+                CzCheckDocRef(
+                    document_id=doc_id,
+                    name=doc_name,
+                    kind=getattr(doc_kind, "value", str(doc_kind)),
+                    scan_status=getattr(scan_status, "value", str(scan_status)),
+                )
+            )
+
+    items = [
+        CzCheckItem(
+            code=r.code,
+            found=r.found,
+            product_name=r.product_name,
+            gtin=r.gtin,
+            owner_name=r.owner_name,
+            owner_inn=r.owner_inn,
+            producer_name=r.producer_name,
+            product_group=r.product_group,
+            status=r.status,
+            package_type=r.package_type,
+            child_count=r.child_count,
+            error=r.error,
+            documents=docmap.get(_cis_key(r.code), []),
+        )
+        for r in checks
+    ]
+    return CzCheckResponse(items=items)
