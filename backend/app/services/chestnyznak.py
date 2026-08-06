@@ -170,6 +170,18 @@ def _normalize_bare_gtin_serial_to_gs1_element_string(s: str) -> str:
     return "01" + t[:14] + "21" + t[14:]
 
 
+def strip_ai_brackets(code: str) -> str:
+    """Убрать скобки AI-нотации логистической упаковки: «(02)…(37)…» → «02…37…».
+
+    Скобки удаляются ТОЛЬКО вокруг 2–4-значных AI, а не как попало. Серийный
+    номер КМ (AI 21) в ГИС МТ может СОДЕРЖАТЬ «(» и «)» — их удалять нельзя,
+    иначе КИ укорачивается и ЧЗ отвечает «КМ/КИ не найден». Раньше срезали все
+    скобки подряд (`replace("(","")`), что ломало проверку ~12% кодов с
+    скобками в серии (проверено на проде 2026-08-06: серия «(qbFHlf», «_kI(t%Z»).
+    """
+    return re.sub(r"\((\d{2,4})\)", r"\1", (code or "")).strip()
+
+
 def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     """
     Извлечь GTIN (14 цифр) и серию из сырой GS1-строки скана.
@@ -596,7 +608,7 @@ class ChestnyZnakService:
 
         from app.services.cz_logger import log_cz_request
 
-        cis = code.replace("(", "").replace(")", "").strip()
+        cis = strip_ai_brackets(code)
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
         headers = {
@@ -783,7 +795,7 @@ class ChestnyZnakService:
 
         from app.services.cz_logger import log_cz_request
 
-        code = cis.replace("(", "").replace(")", "").strip()
+        code = strip_ai_brackets(cis)
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         headers = {
             "Authorization": f"Bearer {self.token}",
