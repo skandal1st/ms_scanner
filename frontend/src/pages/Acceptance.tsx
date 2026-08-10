@@ -247,7 +247,34 @@ export function AcceptancePage() {
         width: 240,
         minWidth: 120,
         render: (p) =>
-          p.product_name ?? (
+          p.product_name ? (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                minWidth: 0,
+              }}
+            >
+              <span
+                style={{
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {p.product_name}
+              </span>
+              {p.matched && (
+                <span
+                  className="text-muted"
+                  style={{ fontSize: 11, textDecoration: 'underline', flexShrink: 0 }}
+                >
+                  изменить
+                </span>
+              )}
+            </span>
+          ) : (
             <span className="text-muted">— не сопоставлен —</span>
           ),
       },
