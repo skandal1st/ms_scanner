@@ -7,6 +7,7 @@ import {
 } from '../store/scanStore'
 import type { OffPlanRow } from '../store/scanStore'
 import { scansApi } from '../api/client'
+import { useResizableHeight } from '../hooks/useResizableHeight'
 import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
@@ -42,6 +43,13 @@ export function ProgressTable() {
   }
   const [collapsed, setCollapsed] = useState<boolean>(
     () => localStorage.getItem(COLLAPSE_KEY) === '1',
+  )
+  // Высота списка плана — тянется мышью за разделитель под ним; остаток отдаётся
+  // таблице кодов (она flex:1 в .acc-right). reserveBottom бережёт минимум под коды.
+  const { height: listHeight, startResize } = useResizableHeight(
+    'progress_list_height',
+    280,
+    { min: 100, max: 900, reserveBottom: 220 },
   )
 
   useEffect(() => {
@@ -128,7 +136,7 @@ export function ProgressTable() {
           </button>
         </div>
       )}
-      {!collapsed && <div style={styles.list}>
+      {!collapsed && <div style={{ ...styles.list, maxHeight: listHeight }}>
         {progress.rows.map((item) => {
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
@@ -213,6 +221,15 @@ export function ProgressTable() {
           )
         })}
       </div>}
+      {!collapsed && (
+        <div
+          className="acc-hsplit"
+          onMouseDown={startResize}
+          role="separator"
+          aria-orientation="horizontal"
+          title="Потяните, чтобы изменить высоту панели прогресса"
+        />
+      )}
       {!collapsed && progress.offPlanRows.length > 0 && (
         <div style={styles.offPlanWrap}>
           <div style={styles.offPlanHead}>

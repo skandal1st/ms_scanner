@@ -203,6 +203,29 @@ html, body, #root { height: 100%; }
 .acc-split:active::after {
   background: var(--ms-accent);
 }
+/* Перетаскиваемый горизонтальный разделитель — регулирует высоту панели прогресса,
+   таблица кодов забирает остаток (как ресайз столбцов, только по вертикали). */
+.acc-hsplit {
+  height: 8px;
+  margin: 2px 0;
+  cursor: row-resize;
+  position: relative;
+  background: transparent;
+}
+.acc-hsplit::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 3px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--ms-border-light);
+}
+.acc-hsplit:hover::after,
+.acc-hsplit:active::after {
+  background: var(--ms-accent);
+}
 .acc-right__head {
   display: flex;
   justify-content: space-between;
