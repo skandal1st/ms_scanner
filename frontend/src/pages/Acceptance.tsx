@@ -268,7 +268,12 @@ export function AcceptancePage() {
               {p.matched && (
                 <span
                   className="text-muted"
-                  style={{ fontSize: 11, textDecoration: 'underline', flexShrink: 0 }}
+                  style={{
+                    fontSize: 11,
+                    textDecoration: 'underline',
+                    flexShrink: 0,
+                    cursor: 'pointer',
+                  }}
                 >
                   изменить
                 </span>
@@ -442,7 +447,9 @@ export function AcceptancePage() {
                   documentId={docId}
                   gtin={p.gtin}
                   currentProductName={p.product_name}
-                  canRelink={linkedToMs && !alreadyAccepted}
+                  // Перепривязка (link-gtin, чинит и GtinProductMap) не требует
+                  // выбранного поступления МС — доступна и в режиме «только проверка».
+                  canRelink={!alreadyAccepted}
                   onLinked={refreshAfterLink}
                 />
               )}
