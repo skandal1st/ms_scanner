@@ -298,7 +298,26 @@ async def _resolve_product(
             )
         ).scalar_one_or_none()
         if map_row:
-            return _done((map_row.product_id, map_row.product_name))
+            # product_id стабилен при переименовании товара в МС, а сохранённое
+            # имя — снимок на момент привязки. Подтягиваем свежее имя по id и
+            # переписываем кэш (self-healing), чтобы не показывать старое название.
+            name = map_row.product_name
+            if ms is not None:
+                try:
+                    card = await ms.get_product_by_id(map_row.product_id)
+                except Exception as exc:
+                    logger.warning(
+                        "acceptance.refresh_name_failed",
+                        product_id=map_row.product_id,
+                        error=str(exc),
+                    )
+                    card = None
+                if card:
+                    fresh = (card.get("name") or "").strip() or None
+                    if fresh and fresh != map_row.product_name:
+                        map_row.product_name = fresh
+                        name = fresh
+            return _done((map_row.product_id, name))
 
         # 2. Поиск в каталоге МС по штрихкоду.
         if ms is not None:
