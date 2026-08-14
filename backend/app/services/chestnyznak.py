@@ -628,7 +628,9 @@ class ChestnyZnakService:
 
         from app.services.cz_logger import log_cz_request
 
-        cis = strip_ai_brackets(code)
+        # Голый табачный код (<GTIN><серийник> без 01/21) достраиваем до КИ, иначе
+        # cises/info отвечает 404 «КМ/КИ не найден» (см. _real_verify).
+        cis = _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(code))
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
         headers = {
@@ -815,7 +817,9 @@ class ChestnyZnakService:
 
         from app.services.cz_logger import log_cz_request
 
-        code = strip_ai_brackets(cis)
+        # Голый табачный код достраиваем до полного КИ (01+GTIN+21+серийник),
+        # иначе перебор групп даёт 404 и код уходит в unresolved при списании.
+        code = _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(cis))
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -881,8 +885,11 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
-        # Ключ запроса (после strip_ai_brackets) → исходный код пользователя.
-        remaining: dict[str, str] = {strip_ai_brackets(c): c for c in order}
+        # Ключ запроса (после strip_ai_brackets + достройки голого КИ) → исходный код.
+        remaining: dict[str, str] = {
+            _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(c)): c
+            for c in order
+        }
         reasons: dict[str, str] = {}
 
         for pg in settings.cz_product_groups_list:
