@@ -79,14 +79,6 @@ export function useLoadDocument(documentId: string | null) {
   })
 }
 
-export function useProcessDocument() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (id: string) => documentsApi.process(id).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['documents'] }),
-  })
-}
-
 export function useClearDocumentScans() {
   const qc = useQueryClient()
   const setScans = useScanStore((s) => s.setScans)

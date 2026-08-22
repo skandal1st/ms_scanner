@@ -8,8 +8,9 @@ import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { BulkMarksModal } from '../components/BulkMarksModal'
 import { useScanStore, ownerCheckState } from '../store/scanStore'
-import { useLoadDocument, useProcessDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
+import { useLoadDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
+import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
@@ -19,11 +20,18 @@ export function ShipmentPage() {
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
-  const [closingTab, setClosingTab] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
-  const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
+  const {
+    send: sendToMs,
+    sending,
+    error: sendError,
+    closingTab,
+    setError: setSendError,
+  } = useSendToMoysklad<Document>({
+    fetchDoc: (id) => documentsApi.get(id),
+    onPoll: (fresh) => setDocument(fresh),
+  })
 
   const handleBulkMarks = async (codes: string[]) => {
     if (!document) return
@@ -36,7 +44,6 @@ export function ShipmentPage() {
     }
   }
 
-  const processMutation = useProcessDocument()
   const clearMutation = useClearDocumentScans()
 
   // Владелец подписи (ИНН из сертификата ЧЗ) — для сверки владельца марок в отгрузке.
@@ -100,43 +107,8 @@ export function ShipmentPage() {
 
   const handleProcess = async () => {
     if (!document) return
-    const docId = document.id
     setShowConfirm(false)
-    setSendError(null)
-    setSending(true)
-    try {
-      await processMutation.mutateAsync(docId)
-      // Запись в МС идёт в Celery; опрашиваем статус документа до accepted либо
-      // до появления error_message (напр. «нет на складе»), чтобы не закрыть
-      // вкладку с ложным «Готово».
-      let finalStatus = 'processing'
-      let failReason: string | null = null
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 1500))
-        const { data: fresh } = await documentsApi.get(docId)
-        finalStatus = fresh.status
-        setDocument(fresh)
-        if (fresh.status === 'accepted') break
-        if (fresh.error_message) {
-          failReason = fresh.error_message
-          break
-        }
-      }
-      if (failReason) {
-        setSendError(failReason)
-      } else if (finalStatus === 'accepted' && window.opener && !window.opener.closed) {
-        setClosingTab(true)
-        setTimeout(() => window.close(), 1200)
-      } else if (finalStatus !== 'accepted') {
-        setSendError(
-          'МойСклад ещё обрабатывает документ. Обновите страницу позже, чтобы увидеть результат.',
-        )
-      }
-    } catch {
-      setSendError('Не удалось отправить документ в МойСклад. Попробуйте ещё раз.')
-    } finally {
-      setSending(false)
-    }
+    await sendToMs(document.id)
   }
 
   const hasErrors = stats.invalid > 0 || stats.duplicate > 0

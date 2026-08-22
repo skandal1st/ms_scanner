@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { acceptanceApi, scansApi, productsApi, documentsApi } from '../api/client'
+import { acceptanceApi, scansApi, productsApi } from '../api/client'
 import type {
   AcceptanceDoc,
   ImportUpdResult,
@@ -12,14 +12,13 @@ import { ResizableTable } from '../components/ResizableTable'
 import type { ColumnDef } from '../components/ResizableTable'
 import { UpdImportBar } from '../components/UpdImportBar'
 import { useMatchSuggestions } from '../hooks/useDocuments'
+import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { normalizeGtinKey } from '../store/scanStore'
 
 function errorDetail(e: unknown): string | null {
   const ax = e as { response?: { data?: { detail?: string } } }
   return ax?.response?.data?.detail ?? null
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const rub = (v: number) =>
   v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -31,11 +30,21 @@ export function AcceptancePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
-  const [sendDone, setSendDone] = useState(false)
-
   const docId = doc?.id ?? null
+
+  const {
+    send: sendToMs,
+    sending,
+    error: sendError,
+    done: sendDone,
+    setError: setSendError,
+    reset: resetSend,
+  } = useSendToMoysklad<AcceptanceDoc>({
+    fetchDoc: (id) => acceptanceApi.getDoc(id),
+    onPoll: (fresh) => setDoc(fresh),
+    extractError: errorDetail,
+    closeTabDelayMs: 1500,
+  })
 
   const handleSubmit = async (file: File, group: string, moyskladId: string) => {
     setBusy(true)
@@ -43,8 +52,7 @@ export function AcceptancePage() {
     setResult(null)
     setScans([])
     setDoc(null)
-    setSendError(null)
-    setSendDone(false)
+    resetSend()
     try {
       const { data: created } = await acceptanceApi.createDoc(
         `Приёмка — ${file.name}`,
@@ -72,8 +80,7 @@ export function AcceptancePage() {
   ) => {
     setBusy(true)
     setError(null)
-    setSendError(null)
-    setSendDone(false)
+    resetSend()
     try {
       let target = doc
       if (!target) {
@@ -186,43 +193,7 @@ export function AcceptancePage() {
 
   const handleSend = async () => {
     if (!docId) return
-    setSending(true)
-    setSendError(null)
-    try {
-      await documentsApi.process(docId)
-      // Запись в МС идёт в Celery; опрашиваем статус документа до accepted.
-      let finalStatus = 'processing'
-      let failReason: string | null = null
-      for (let i = 0; i < 20; i++) {
-        await sleep(1500)
-        const { data: fresh } = await acceptanceApi.getDoc(docId)
-        finalStatus = fresh.status
-        setDoc(fresh)
-        if (fresh.status === 'accepted') break
-        // Воркер выставил причину неуспеха (напр. истёк токен ЧЗ) — прекращаем
-        // опрос и показываем её, а не ждём ложное «ещё обрабатывается».
-        if (fresh.error_message) {
-          failReason = fresh.error_message
-          break
-        }
-      }
-      if (failReason) {
-        setSendError(failReason)
-      } else if (finalStatus === 'accepted') {
-        setSendDone(true)
-        if (window.opener && !window.opener.closed) {
-          setTimeout(() => window.close(), 1500)
-        }
-      } else {
-        setSendError(
-          'МойСклад ещё обрабатывает документ. Обновите страницу позже, чтобы увидеть результат.',
-        )
-      }
-    } catch (e) {
-      setSendError(errorDetail(e) ?? 'Не удалось отправить в МойСклад')
-    } finally {
-      setSending(false)
-    }
+    await sendToMs(docId)
   }
 
   const columns: ColumnDef<ImportPositionResult>[] = useMemo(
