@@ -4,7 +4,6 @@ import { useSerialScanner } from '../hooks/useSerialScanner'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { useScannerMode } from '../lib/scannerMode'
 import { useScanStore } from '../store/scanStore'
-import { CameraScanModal } from './CameraScanModal'
 import { CodeSearchModal } from './CodeSearchModal'
 import { Icon } from './Icon'
 
@@ -43,7 +42,6 @@ function swallowChromeInspectorKeys(ev: globalThis.KeyboardEvent): boolean {
 export function ScanInput({ documentId }: Props) {
   const [value, setValue] = useState('')
   const [lastCode, setLastCode] = useState('')
-  const [cameraOpen, setCameraOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { submitCode } = useScanner(documentId)
@@ -71,25 +69,25 @@ export function ScanInput({ documentId }: Props) {
 
   // Keyboard wedge: фокус в input, чтобы сканер всегда туда писал.
   useEffect(() => {
-    if (isComMode || cameraOpen) return
+    if (isComMode) return
     const el = inputRef.current
     if (!el) return
     el.focus()
     const onBlur = () => setTimeout(() => el.focus(), 0)
     el.addEventListener('blur', onBlur)
     return () => el.removeEventListener('blur', onBlur)
-  }, [cameraOpen, isComMode])
+  }, [isComMode])
 
   // Пока фокус в поле скана — глушим шорткаты DevTools (capture: раньше дефолта Chrome).
   useEffect(() => {
-    if (isComMode || !documentId || cameraOpen) return
+    if (isComMode || !documentId) return
     const onCap = (ev: globalThis.KeyboardEvent) => {
       if (document.activeElement !== inputRef.current) return
       swallowChromeInspectorKeys(ev)
     }
     window.addEventListener('keydown', onCap, true)
     return () => window.removeEventListener('keydown', onCap, true)
-  }, [documentId, cameraOpen, isComMode])
+  }, [documentId, isComMode])
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
     swallowChromeInspectorKeys(e.nativeEvent)
@@ -189,18 +187,10 @@ export function ScanInput({ documentId }: Props) {
         <button
           type="button"
           className="button scan-input__camera"
-          disabled={!documentId}
-          onClick={() => setCameraOpen(true)}
-        >
-          Камера
-        </button>
-        <button
-          type="button"
-          className="button scan-input__camera"
           onClick={() => setSearchOpen(true)}
           title="Найти, в каком документе уже есть марка"
         >
-          🔍 Поиск марки
+          <Icon name="filter" size={15} /> Поиск марки
         </button>
       </div>
       {deleteMode && (
@@ -217,11 +207,6 @@ export function ScanInput({ documentId }: Props) {
       {!documentId && (
         <p className="hint">Выберите документ для начала сканирования</p>
       )}
-      <CameraScanModal
-        open={cameraOpen}
-        onClose={() => setCameraOpen(false)}
-        onCode={handleScannedCode}
-      />
       <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   )

@@ -376,51 +376,6 @@ html, body, #root { height: 100%; }
   font-size: 12px;
 }
 
-/* ---------- Сканирование камерой ---------- */
-.camera-scan-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10050;
-  background: rgba(23, 35, 61, 0.72);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
-    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
-  box-sizing: border-box;
-}
-.camera-scan-panel {
-  width: min(520px, 100%);
-  max-height: min(90vh, 100%);
-  background: var(--ms-bg);
-  border: 1px solid var(--ms-border-light);
-  border-radius: var(--r-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  box-shadow: var(--shadow-pop);
-}
-.camera-scan-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--ms-border-light);
-  flex-shrink: 0;
-}
-.camera-scan-title { font-weight: 600; font-size: 15px; }
-.camera-scan-close { margin: 0; }
-.camera-scan-video {
-  width: 100%;
-  max-height: min(60vh, 420px);
-  object-fit: cover;
-  background: #111;
-  display: block;
-}
-.camera-scan-hint, .camera-scan-error { margin: 0; padding: 12px 14px; font-size: 13px; line-height: 1.45; color: var(--ms-text-muted); }
-.camera-scan-error { color: var(--st-err-fg); }
-
 /* ---------- Селектор документа ---------- */
 .doc-list {
   display: flex;
