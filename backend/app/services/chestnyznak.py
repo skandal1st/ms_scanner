@@ -126,6 +126,12 @@ class CisCheck:
     package_type: Optional[str] = None
     child_count: int = 0
     error: Optional[str] = None
+    # Марка выведена из оборота / заблокирована (markWithdraw из cises/info).
+    mark_withdraw: bool = False
+    withdraw_reason: Optional[str] = None
+    # Ответ ЧЗ не получен (таймаут/5xx) — статус НЕ определён. Отличать от found=False
+    # («точно не найдена»): uncertain → повторить проверку, не терминальный статус.
+    uncertain: bool = False
 
 
 def _flatten_aggregate_leaves(node: Any) -> list[str]:
@@ -952,6 +958,11 @@ class ChestnyZnakService:
         }
         reasons: dict[str, str] = {}
 
+        # Была ли инфраструктурная ошибка (таймаут/5xx) — тогда нерезолвленные коды
+        # НЕ помечаем «не найдено», а как uncertain (повторить): они могли быть в
+        # группе, чей запрос упал.
+        had_infra_failure = False
+
         for pg in self.product_groups:
             if not remaining:
                 break
@@ -976,6 +987,10 @@ class ChestnyZnakService:
                     )
             except (httpx.TimeoutException, httpx.HTTPError) as exc:
                 logger.warning("cz.check.http_error", pg=pg, error=str(exc))
+                had_infra_failure = True
+                continue
+            if resp.status_code >= 500:
+                had_infra_failure = True
                 continue
             if not isinstance(body, list):
                 continue
@@ -1009,6 +1024,8 @@ class ChestnyZnakService:
                         ci.get("generalPackageType") or ci.get("packageType") or None
                     ),
                     child_count=len(child),
+                    mark_withdraw=bool(ci.get("markWithdraw")),
+                    withdraw_reason=(ci.get("withdrawReason") or None),
                 )
                 # Засеиваем кэш gtin→pg: последующий get_code_info по этому GTIN
                 # пойдёт сразу в нужную группу (в т.ч. в пакетной verify_document_task).
@@ -1018,12 +1035,24 @@ class ChestnyZnakService:
                 del remaining[req]
 
         for orig in remaining.values():
+            # Ответ по группам, где код мог быть, не получен → uncertain (повторить),
+            # а не «точно не найдена».
             results[orig] = CisCheck(
                 code=orig,
                 found=False,
-                error=reasons.get(orig) or "Марка не найдена в Честном Знаке",
+                uncertain=had_infra_failure,
+                error=(
+                    "Не удалось проверить в Честном Знаке — повторите"
+                    if had_infra_failure
+                    else (reasons.get(orig) or "Марка не найдена в Честном Знаке")
+                ),
             )
-        logger.info("cz.check.done", total=len(order), found=sum(1 for r in results.values() if r.found))
+        logger.info(
+            "cz.check.done",
+            total=len(order),
+            found=sum(1 for r in results.values() if r.found),
+            uncertain=sum(1 for r in results.values() if r.uncertain),
+        )
         return [results[c] for c in order]
 
     @staticmethod

@@ -236,7 +236,7 @@ def verify_code_task(self, scan_id: str, _code: str, user_id: str):
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
-async def _verify_code_async(scan_id: str, user_id: str):
+async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus, Document, Integration
     from app.services.chestnyznak import ChestnyZnakService, verify_code_local_gs1
@@ -251,9 +251,84 @@ async def _verify_code_async(scan_id: str, user_id: str):
             logger.error("verify_code.scan_not_found", scan_id=scan_id)
             return
 
+        # Пакетный флоу: precheck — результат батч-проверки в ЧЗ (check_codes) по этому
+        # коду. Статус берём из ЧЗ (INTRODUCED = в обороте). uncertain (таймаут/5xx ЧЗ)
+        # → НЕ трогаем статус (остаётся scanned), чтобы кнопка «Проверить» повторила код.
+        if precheck is not None:
+            from app.services.chestnyznak import VerifyResult, extract_gtin as _extract_gtin
+
+            if getattr(precheck, "uncertain", False):
+                scan.error_message = (
+                    precheck.error or "Не удалось проверить в ЧЗ — повторите"
+                )
+                await db.commit()
+                await _push_ws_update(
+                    user_id, scan_id, scan.status, scan.product_name,
+                    scan.error_message, gtin=scan.gtin,
+                    moysklad_product_id=scan.moysklad_product_id, is_box=scan.is_box,
+                    box_quantity=scan.box_quantity, owner_name=scan.owner_name,
+                    producer_name=scan.producer_name, owner_inn=scan.owner_inn,
+                    withdrawn=scan.withdrawn, withdraw_reason=scan.withdraw_reason,
+                    child_codes=scan.child_codes,
+                )
+                logger.info("verify_code.uncertain", scan_id=scan_id)
+                return
+
+            valid = precheck.found and str(precheck.status or "").upper() == "INTRODUCED"
+            if valid:
+                # Снимаем возможную ошибку от прошлого неудачного прохода (повтор).
+                scan.error_message = None
+            scan.owner_name = precheck.owner_name
+            scan.owner_inn = precheck.owner_inn
+            scan.producer_name = precheck.producer_name
+            scan.withdrawn = bool(precheck.mark_withdraw)
+            scan.withdraw_reason = precheck.withdraw_reason
+            out_gtin = precheck.gtin or scan.gtin
+            name_override = precheck.product_name
+            # Агрегат (блок/короб): развернуть в листовые КМ — отдельный запрос (редко).
+            if valid and precheck.child_count and not scan.child_codes:
+                tok = await _get_cz_token(db, user_id)
+                if tok:
+                    grp = await _get_cz_product_groups(db, user_id)
+                    agg = None
+                    try:
+                        agg = await ChestnyZnakService(
+                            token=tok, mock=False, product_groups=grp
+                        ).get_code_info(scan.code)
+                    except Exception as exc:
+                        logger.warning(
+                            "verify_code.aggregate_failed", scan_id=scan_id, error=str(exc)
+                        )
+                    if agg and agg.is_aggregate:
+                        scan.child_codes = agg.children
+                        scan.box_quantity = len(agg.children)
+                        cg = _extract_gtin(agg.children[0]) if agg.children else None
+                        if cg:
+                            out_gtin = cg
+                        if agg.product_name:
+                            name_override = agg.product_name
+            verify_result = VerifyResult(
+                valid=valid,
+                gtin=out_gtin,
+                serial=scan.serial,  # серию не трогаем (задана при локальном скане)
+                status="IN_CIRCULATION" if valid else (precheck.status or "NOT_FOUND"),
+                error=(
+                    None
+                    if valid
+                    else (
+                        precheck.error
+                        or (
+                            f"Статус в ЧЗ: {precheck.status}"
+                            if precheck.found
+                            else "Марка не найдена в ЧЗ"
+                        )
+                    )
+                ),
+                product_name=name_override,
+            )
         # Проверка КМ: в mock-режиме сервера — имитация ЧЗ; иначе только формат GS1
         # (без УКЭП и без API ЧЗ). МойСклад проверит CIS при записи в документ.
-        if settings.CZ_MOCK_MODE:
+        elif settings.CZ_MOCK_MODE:
             int_q = await db.execute(
                 select(Integration).where(Integration.user_id == user_id)
             )
@@ -334,8 +409,10 @@ async def _verify_code_async(scan_id: str, user_id: str):
 
         # Сведения ЧЗ: владелец/производитель + детект агрегата (блок/короб) → разворот.
         # Реальный режим, есть токен ЧЗ, ещё не SSCC-короб и не развёрнут.
+        # В пакетном флоу (precheck) владелец/withdrawn/агрегат уже получены из check_codes —
+        # per-code get_code_info пропускаем.
         # Короб (02/37) приходит со status=invalid (не КИ) — проверяем независимо от статуса.
-        if not settings.CZ_MOCK_MODE and not scan.is_box and not scan.child_codes:
+        if precheck is None and not settings.CZ_MOCK_MODE and not scan.is_box and not scan.child_codes:
             cz_token2 = await _get_cz_token(db, user_id)
             if not cz_token2:
                 # Нет/истёк токен ЧЗ — коды не распознаём через ЧЗ (блоки/короба
@@ -498,45 +575,106 @@ def verify_document_task(self, document_id: str, user_id: str):
 
 async def _verify_document_async(document_id: str, user_id: str):
     import asyncio
+    import redis.asyncio as aioredis
 
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus
+    from app.services.chestnyznak import ChestnyZnakService, CisCheck
     from sqlalchemy import select
 
-    async with AsyncSessionLocal() as db:
-        res = await db.execute(
-            select(Scan.id)
-            .where(
-                Scan.document_id == document_id,
-                Scan.status == ScanStatus.scanned,
-                Scan.is_box.is_(False),
+    # #1 Идемпотентность: один активный verify на документ. Redis SET NX — второй
+    # вызов (двойной клик / вторая вкладка / ретрай) не плодит параллельную проверку.
+    lock_key = f"verify:lock:{document_id}"
+    r = aioredis.from_url(settings.REDIS_URL)
+    got_lock = await r.set(lock_key, user_id, nx=True, ex=900)
+    if not got_lock:
+        await r.aclose()
+        logger.info("verify_document.already_running", document_id=document_id)
+        return
+
+    try:
+        async with AsyncSessionLocal() as db:
+            res = await db.execute(
+                select(Scan)
+                .where(
+                    Scan.document_id == document_id,
+                    Scan.status == ScanStatus.scanned,
+                    Scan.is_box.is_(False),
+                )
+                .order_by(Scan.scanned_at.asc())
             )
-            .order_by(Scan.scanned_at.asc())
-        )
-        scan_ids = [str(row[0]) for row in res.all()]
+            scans = res.scalars().all()
+            scan_ids = [str(s.id) for s in scans]
+            codes = [s.code for s in scans]
+            cz_token = await _get_cz_token(db, user_id)
+            cz_groups = await _get_cz_product_groups(db, user_id)
 
-    logger.info("verify_document.start", document_id=document_id, count=len(scan_ids))
+        logger.info("verify_document.start", document_id=document_id, count=len(scan_ids))
 
-    # Переиспускаем проверенную логику одиночного скана (ЧЗ-статус, владелец, withdrawn,
-    # разворот блоков/коробов, план/overflow, сопоставление товара МС) — она сама
-    # публикует WS scan_update по каждому скану, так что фронт видит прогресс.
-    # Ограниченный параллелизм: быстрее, но щадим рейт-лимиты ЧЗ/МС.
-    sem = asyncio.Semaphore(6)
-
-    async def _one(scan_id: str) -> None:
-        async with sem:
+        # #2 Батч-проверка статуса в ЧЗ: один запрос на товарную группу на всю пачку
+        # (check_codes). В mock/без токена — прежний per-scan путь (precheck=None).
+        use_batch = bool(codes) and bool(cz_token) and not settings.CZ_MOCK_MODE
+        checks_by_code: dict[str, CisCheck] = {}
+        if use_batch:
             try:
-                await _verify_code_async(scan_id, user_id)
+                results = await ChestnyZnakService(
+                    token=cz_token, mock=False, product_groups=cz_groups
+                ).check_codes(codes)
+                checks_by_code = {c.code: c for c in results}
             except Exception as exc:
+                # Весь батч не удался → все коды uncertain (останутся scanned, повтор).
                 logger.warning(
-                    "verify_document.scan_failed", scan_id=scan_id, error=str(exc)
+                    "verify_document.check_codes_failed",
+                    document_id=document_id,
+                    error=str(exc),
                 )
 
-    if scan_ids:
-        await asyncio.gather(*(_one(sid) for sid in scan_ids))
+        sem = asyncio.Semaphore(6)
+        failed = 0
 
-    await _push_verify_done(user_id, document_id, len(scan_ids))
-    logger.info("verify_document.done", document_id=document_id, count=len(scan_ids))
+        async def _one(scan_id: str, code: str) -> None:
+            nonlocal failed
+            async with sem:
+                precheck = None
+                if use_batch:
+                    precheck = checks_by_code.get(code)
+                    if precheck is None:
+                        # check_codes упал целиком / код не вернулся — не терминируем.
+                        precheck = CisCheck(
+                            code=code,
+                            found=False,
+                            uncertain=True,
+                            error="Не удалось проверить в ЧЗ — повторите",
+                        )
+                    if precheck.uncertain:
+                        failed += 1
+                try:
+                    await _verify_code_async(scan_id, user_id, precheck=precheck)
+                except Exception as exc:
+                    logger.warning(
+                        "verify_document.scan_failed", scan_id=scan_id, error=str(exc)
+                    )
+
+        if scan_ids:
+            await asyncio.gather(
+                *(_one(sid, code) for sid, code in zip(scan_ids, codes))
+            )
+
+        await _push_verify_done(
+            user_id, document_id, checked=len(scan_ids) - failed, failed=failed
+        )
+        logger.info(
+            "verify_document.done",
+            document_id=document_id,
+            count=len(scan_ids),
+            failed=failed,
+        )
+    finally:
+        try:
+            await r.delete(lock_key)
+            await r.aclose()
+        except Exception:
+            pass
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_box")
@@ -694,8 +832,10 @@ async def _push_cz_token_expired(user_id: str):
     await r.aclose()
 
 
-async def _push_verify_done(user_id: str, document_id: str, count: int):
-    """Сообщить фронту, что пакетная проверка марок документа завершена."""
+async def _push_verify_done(
+    user_id: str, document_id: str, checked: int, failed: int = 0
+):
+    """Сообщить фронту, что пакетная проверка марок завершена (+ сколько не удалось)."""
     import redis.asyncio as aioredis
     import json
     from app.core.config import settings
@@ -704,7 +844,12 @@ async def _push_verify_done(user_id: str, document_id: str, count: int):
     await r.publish(
         f"ws:{user_id}",
         json.dumps(
-            {"type": "verify_done", "document_id": document_id, "count": count}
+            {
+                "type": "verify_done",
+                "document_id": document_id,
+                "checked": checked,
+                "failed": failed,
+            }
         ),
     )
     await r.aclose()

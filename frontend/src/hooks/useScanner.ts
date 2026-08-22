@@ -85,8 +85,10 @@ export function useScanner(documentId: string | null) {
       }
       if (data.type === 'verify_done') {
         // Пакетная проверка марок в ЧЗ завершена — один сигнал, снимаем «идёт проверка».
+        // Не удалось проверить часть (таймаут/5xx ЧЗ) — они остаются «Не проверено»,
+        // кнопка «Проверить марки (N)» повторит только их. Сигналим ошибкой.
         useScanStore.getState().setVerifying(false)
-        playBeep('ok')
+        playBeep(data.failed && data.failed > 0 ? 'error' : 'ok')
         return
       }
       if (data.type === 'scan_update') {
