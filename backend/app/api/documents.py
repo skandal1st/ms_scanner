@@ -30,6 +30,7 @@ class DocumentResponse(BaseModel):
     status: DocumentStatus
     scan_count: int = 0
     plan: List[PlanItem] = []
+    error_message: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -62,6 +63,7 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
         status=doc.status,
         scan_count=scan_count,
         plan=doc.plan or [],
+        error_message=doc.error_message,
         created_at=doc.created_at,
     )
 

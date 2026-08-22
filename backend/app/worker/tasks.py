@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -6,6 +7,28 @@ from typing import Optional
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key, extract_gtin
+
+
+def _extract_moysklad_error(body: str) -> Optional[str]:
+    """Достать человекочитаемый текст ошибки из тела ответа МС ({"errors":[{"error":...}]}).
+
+    МС возвращает текст на русском (например «Нельзя отгрузить товар, которого нет
+    на складе») — показываем его кладовщику как есть. Возвращает None, если тело
+    не разобрать.
+    """
+    try:
+        data = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    errors = data.get("errors") if isinstance(data, dict) else None
+    if not isinstance(errors, list) or not errors:
+        return None
+    parts = [
+        str(e.get("error")).strip()
+        for e in errors
+        if isinstance(e, dict) and e.get("error")
+    ]
+    return "; ".join(p for p in parts if p) or None
 
 
 def _cis_matches_ms_error_message(scan_code: str, ms_snippet: str) -> bool:
@@ -907,14 +930,29 @@ async def _process_document_async(document_id: str, user_id: str):
                     )
                     bad_code = m.group(1) if m else None
                     if not bad_code:
+                        # 412 не про формат кода (напр. error_3007 «Нельзя отгрузить
+                        # товар, которого нет на складе»). Это бизнес-ошибка МС, а не
+                        # битый КМ — показываем кладовщику текст МС и не роняем задачу
+                        # необработанным исключением (иначе документ навсегда виснет
+                        # в «Обрабатывается»).
+                        ms_reason = _extract_moysklad_error(body)
                         logger.error(
-                            "process_document.moysklad_412_unparsed",
+                            "process_document.moysklad_412_business",
                             document_id=document_id,
+                            reason=ms_reason,
                             body=body[:800],
                         )
-                        raise RuntimeError(
-                            "МойСклад отклонил сохранение документа (412): не удалось извлечь код из ответа."
+                        doc.error_message = (
+                            f"МойСклад отклонил документ: {ms_reason}"
+                            if ms_reason
+                            else "МойСклад отклонил сохранение документа (412). "
+                            "Проверьте остатки и позиции документа в МойСклад."
                         )
+                        # Возвращаем в draft — «Обрабатывается» не должно врать;
+                        # кладовщик видит причину и может повторить после исправления.
+                        doc.status = DocumentStatus.draft
+                        await db.commit()
+                        return
                     bad_scan = next(
                         (
                             s

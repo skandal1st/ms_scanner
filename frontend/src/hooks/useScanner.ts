@@ -5,17 +5,35 @@ import { decodeJwtSub } from '../lib/jwt'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
 
-function playBeep(type: 'ok' | 'error') {
+// Одиночный тон.
+function tone(freq: number, start: number, dur: number, wave: OscillatorType = 'sine') {
   const osc = audioCtx.createOscillator()
   const gain = audioCtx.createGain()
   osc.connect(gain)
   gain.connect(audioCtx.destination)
-  osc.type = 'sine'
-  osc.frequency.value = type === 'ok' ? 880 : 220
-  gain.gain.setValueAtTime(0.3, audioCtx.currentTime)
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + (type === 'ok' ? 0.15 : 0.4))
-  osc.start()
-  osc.stop(audioCtx.currentTime + (type === 'ok' ? 0.15 : 0.4))
+  osc.type = wave
+  osc.frequency.value = freq
+  gain.gain.setValueAtTime(0.3, start)
+  gain.gain.exponentialRampToValueAtTime(0.001, start + dur)
+  osc.start(start)
+  osc.stop(start + dur)
+}
+
+// 'ok' — высокий короткий, 'error' — низкий длинный, 'unknown' — отдельный
+// характерный двойной сигнал для несопоставленной позиции (валидный КМ, но
+// товар не найден в плане/каталоге — кладовщику нужно сопоставить вручную).
+function playBeep(type: 'ok' | 'error' | 'unknown') {
+  const now = audioCtx.currentTime
+  if (type === 'ok') {
+    tone(880, now, 0.15)
+  } else if (type === 'error') {
+    tone(220, now, 0.4)
+  } else {
+    // Двойной «вопросительный» блип: восходящая пара, тембр square — не спутать
+    // ни с успехом, ни с ошибкой.
+    tone(500, now, 0.12, 'square')
+    tone(760, now + 0.16, 0.14, 'square')
+  }
 }
 
 function resolveWsUserId(): string | null {
@@ -93,11 +111,9 @@ export function useScanner(documentId: string | null) {
             : {}),
         })
         if (data.status === 'valid') playBeep('ok')
-        else if (
-          data.status === 'invalid' ||
-          data.status === 'overflow' ||
-          data.status === 'unknown_product'
-        )
+        // Несопоставленная позиция — отдельный сигнал, не как обычная ошибка.
+        else if (data.status === 'unknown_product') playBeep('unknown')
+        else if (data.status === 'invalid' || data.status === 'overflow')
           playBeep('error')
       }
     }

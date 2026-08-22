@@ -22,6 +22,8 @@ export function ShipmentPage() {
   const [closingTab, setClosingTab] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState<string | null>(null)
 
   const handleBulkMarks = async (codes: string[]) => {
     if (!document) return
@@ -98,11 +100,42 @@ export function ShipmentPage() {
 
   const handleProcess = async () => {
     if (!document) return
-    await processMutation.mutateAsync(document.id)
+    const docId = document.id
     setShowConfirm(false)
-    if (window.opener && !window.opener.closed) {
-      setClosingTab(true)
-      setTimeout(() => window.close(), 1200)
+    setSendError(null)
+    setSending(true)
+    try {
+      await processMutation.mutateAsync(docId)
+      // Запись в МС идёт в Celery; опрашиваем статус документа до accepted либо
+      // до появления error_message (напр. «нет на складе»), чтобы не закрыть
+      // вкладку с ложным «Готово».
+      let finalStatus = 'processing'
+      let failReason: string | null = null
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 1500))
+        const { data: fresh } = await documentsApi.get(docId)
+        finalStatus = fresh.status
+        setDocument(fresh)
+        if (fresh.status === 'accepted') break
+        if (fresh.error_message) {
+          failReason = fresh.error_message
+          break
+        }
+      }
+      if (failReason) {
+        setSendError(failReason)
+      } else if (finalStatus === 'accepted' && window.opener && !window.opener.closed) {
+        setClosingTab(true)
+        setTimeout(() => window.close(), 1200)
+      } else if (finalStatus !== 'accepted') {
+        setSendError(
+          'МойСклад ещё обрабатывает документ. Обновите страницу позже, чтобы увидеть результат.',
+        )
+      }
+    } catch {
+      setSendError('Не удалось отправить документ в МойСклад. Попробуйте ещё раз.')
+    } finally {
+      setSending(false)
     }
   }
 
@@ -163,6 +196,34 @@ export function ShipmentPage() {
             type="button"
             className="button"
             onClick={() => setCzTokenExpired(false)}
+            aria-label="Скрыть"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {sendError && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            margin: '0 0 12px',
+            padding: '10px 14px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            borderRadius: 8,
+            color: '#b91c1c',
+            fontSize: 13,
+          }}
+        >
+          <span style={{ flex: 1 }}>{sendError}</span>
+          <button
+            type="button"
+            className="button"
+            onClick={() => setSendError(null)}
             aria-label="Скрыть"
           >
             ✕
@@ -252,7 +313,7 @@ export function ShipmentPage() {
           disabled={
             !document ||
             scans.length === 0 ||
-            processMutation.isPending ||
+            sending ||
             stats.unknown_product > 0
           }
           title={
@@ -262,7 +323,7 @@ export function ShipmentPage() {
           }
           onClick={() => setShowConfirm(true)}
         >
-          {processMutation.isPending
+          {sending
             ? 'Обрабатывается…'
             : stats.unknown_product > 0
               ? `Сопоставьте товары (${stats.unknown_product})`

@@ -61,6 +61,8 @@ export interface Document {
   scan_count: number
   plan: PlanItem[]
   writeoff_reason?: string | null
+  /** Причина неуспешной отправки в МС (напр. «нет на складе»), если была. */
+  error_message?: string | null
   created_at: string
 }
 
