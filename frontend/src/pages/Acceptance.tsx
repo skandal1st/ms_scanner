@@ -374,9 +374,11 @@ export function AcceptancePage() {
                 onClick={confirmAllSuggestions}
                 disabled={confirmingAll}
               >
-                {confirmingAll
-                  ? 'Привязываю…'
-                  : `✓ Подтвердить все точные (${highUnmatched.length})`}
+                {confirmingAll ? (
+                  'Привязываю…'
+                ) : (
+                  <><Icon name="check" size={15} /> Подтвердить все точные ({highUnmatched.length})</>
+                )}
               </button>
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -468,7 +470,7 @@ export function AcceptancePage() {
             onClick={handleSend}
           >
             {alreadyAccepted
-              ? 'Отправлено в МС ✓'
+              ? 'Отправлено в МС'
               : sending
                 ? 'Отправка в МС…'
                 : unmatched.length > 0
@@ -627,8 +629,10 @@ function InlineProductPicker({
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ms-text-muted)' }}>
-              {suggestion.confidence === 'high' ? '✓ Точное совпадение' : '≈ Проверьте'}
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ms-text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              {suggestion.confidence === 'high'
+                ? <><Icon name="check" size={12} /> Точное совпадение</>
+                : <><Icon name="warning" size={12} /> Проверьте</>}
             </div>
             <div style={{ fontWeight: 500, fontSize: 13 }}>{suggestion.best.name}</div>
             {suggestion.best.article && (

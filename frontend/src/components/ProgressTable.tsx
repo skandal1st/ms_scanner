@@ -8,6 +8,7 @@ import {
 import type { OffPlanRow } from '../store/scanStore'
 import { scansApi } from '../api/client'
 import { useResizableHeight } from '../hooks/useResizableHeight'
+import { Icon } from './Icon'
 import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
@@ -86,7 +87,15 @@ export function ProgressTable() {
         aria-expanded={!collapsed}
       >
         <span style={styles.title}>
-          <span style={styles.chevron}>{collapsed ? '▸' : '▾'}</span>
+          <Icon
+            name="chevron"
+            size={15}
+            style={{
+              ...styles.chevron,
+              transform: collapsed ? 'rotate(-90deg)' : 'none',
+              transition: 'transform 0.15s ease',
+            }}
+          />
           {title}
         </span>
         {progress.hasPlan ? (
@@ -237,7 +246,7 @@ export function ProgressTable() {
       {!collapsed && progress.offPlanRows.length > 0 && (
         <div style={styles.offPlanWrap}>
           <div style={styles.offPlanHead}>
-            ⚠ Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
+            <Icon name="warning" size={14} /> Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
           </div>
           {progress.offPlanRows.map((row) => (
             <div key={row.gtin} style={styles.offPlanRow}>
@@ -256,7 +265,7 @@ export function ProgressTable() {
                 onClick={() => void handleDeleteOffPlan(row)}
                 disabled={deletingOff === row.gtin}
               >
-                {deletingOff === row.gtin ? 'Удаляю…' : '✕ Удалить'}
+                {deletingOff === row.gtin ? 'Удаляю…' : <><Icon name="close" size={13} /> Удалить</>}
               </button>
             </div>
           ))}
@@ -299,8 +308,7 @@ const styles: Record<string, CSSProperties> = {
   },
   chevron: {
     color: 'var(--ms-text-subtle)',
-    fontSize: 11,
-    userSelect: 'none',
+    flexShrink: 0,
   },
   totals: {
     fontSize: 13,
@@ -357,14 +365,14 @@ const styles: Record<string, CSSProperties> = {
   barcodeTag: {
     display: 'inline-block',
     marginLeft: 6,
-    padding: '0 7px',
+    padding: '0 6px',
     fontSize: 10,
     fontWeight: 600,
     lineHeight: '16px',
     color: 'var(--st-info-fg)',
     background: 'var(--st-info-bg)',
     border: '1px solid var(--st-info-bd)',
-    borderRadius: 'var(--r-pill)',
+    borderRadius: 'var(--r-sm)',
     verticalAlign: 'middle',
   },
   count: {
@@ -410,6 +418,9 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
     fontWeight: 600,
     color: 'var(--st-err-fg)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
   },
   offPlanRow: {
     display: 'flex',

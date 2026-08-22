@@ -3,6 +3,7 @@ import { acceptanceApi } from '../api/client'
 import type { ProductGroup, MsDocument } from '../api/client'
 import { useMsDocuments } from '../hooks/useDocuments'
 import { BulkMarksModal } from './BulkMarksModal'
+import { Icon } from './Icon'
 
 interface UpdImportBarProps {
   busy: boolean
@@ -146,7 +147,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks }: UpdImportBarProp
             : 'Сначала выберите товарную группу'
         }
       >
-        📋 Список марок
+        <Icon name="upload" size={15} /> Список марок
       </button>
 
       <BulkMarksModal

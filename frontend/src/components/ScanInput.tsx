@@ -182,7 +182,7 @@ export function ScanInput({ documentId }: Props) {
               : 'Короб сохраняется целиком (transportpack). Нажмите, чтобы раскрывать на штучные КМ.'
           }
         >
-          {unpackBox ? '📦 Короб: раскрывать' : '📦 Короб: целиком'}
+          <Icon name="box" size={15} /> {unpackBox ? 'Короб: раскрывать' : 'Короб: целиком'}
         </button>
         <button
           type="button"

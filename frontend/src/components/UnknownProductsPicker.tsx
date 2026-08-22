@@ -3,6 +3,7 @@ import { productsApi } from '../api/client'
 import type { ProductSearchItem, Scan, MatchSuggestion } from '../api/client'
 import { useScanStore, normalizeGtinKey } from '../store/scanStore'
 import { useMatchSuggestions } from '../hooks/useDocuments'
+import { Icon } from './Icon'
 import type { CSSProperties } from 'react'
 
 interface UnknownGroup {
@@ -89,8 +90,8 @@ export function UnknownProductsPicker() {
   return (
     <div style={styles.wrap}>
       <div style={styles.head}>
-        <span style={styles.title}>
-          ⚠ Нужно сопоставить с товаром в МС: {groups.length}
+        <span style={{ ...styles.title, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+          <Icon name="warning" size={14} /> Нужно сопоставить с товаром в МС: {groups.length}
         </span>
         <span style={styles.subtitle}>
           Эти коды не уйдут в отгрузку без привязки к товару
@@ -106,9 +107,11 @@ export function UnknownProductsPicker() {
             onClick={confirmAll}
             disabled={confirmingAll}
           >
-            {confirmingAll
-              ? 'Привязываю…'
-              : `✓ Подтвердить все точные (${highGroups.length})`}
+            {confirmingAll ? (
+              'Привязываю…'
+            ) : (
+              <><Icon name="check" size={15} /> Подтвердить все точные ({highGroups.length})</>
+            )}
           </button>
         )}
       </div>
@@ -207,8 +210,10 @@ function UnknownGroupRow({
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={styles.suggestBadge}>
-              {suggestion.confidence === 'high' ? '✓ Точное совпадение' : '≈ Проверьте'}
+            <div style={{ ...styles.suggestBadge, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              {suggestion.confidence === 'high'
+                ? <><Icon name="check" size={12} /> Точное совпадение</>
+                : <><Icon name="warning" size={12} /> Проверьте</>}
             </div>
             <div style={styles.resultName}>{suggestion.best.name}</div>
             {suggestion.best.article && (

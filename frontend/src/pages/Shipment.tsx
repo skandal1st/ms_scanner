@@ -241,18 +241,18 @@ export function ShipmentPage() {
         <div className="acc-footer__spacer" />
         {withdrawnCount > 0 && (
           <span
-            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-err-fg)', whiteSpace: 'nowrap', fontWeight: 600 }}
+            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-err-fg)', whiteSpace: 'nowrap', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}
             title="Эти марки выведены из оборота / заблокированы. Отгрузку это не блокирует, но требует подтверждения."
           >
-            ⛔ {withdrawnCount} выведены из оборота
+            <Icon name="warning" size={14} /> {withdrawnCount} выведены из оборота
           </span>
         )}
         {(ownerWarnings.mismatch > 0 || ownerWarnings.unknown > 0) && (
           <span
-            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-warn-fg)', whiteSpace: 'nowrap' }}
+            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-warn-fg)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 5 }}
             title="Владельца этих марок стоит проверить. Отгрузку это не блокирует."
           >
-            ⚠{' '}
+            <Icon name="warning" size={14} />{' '}
             {ownerWarnings.mismatch > 0 && `${ownerWarnings.mismatch} с чужим владельцем`}
             {ownerWarnings.mismatch > 0 && ownerWarnings.unknown > 0 && ' · '}
             {ownerWarnings.unknown > 0 && `${ownerWarnings.unknown} не проверено`}

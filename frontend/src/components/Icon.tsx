@@ -20,6 +20,8 @@ type IconName =
   | 'upload'
   | 'link'
   | 'trash'
+  | 'box'
+  | 'warning'
 
 const PATHS: Record<IconName, JSX.Element> = {
   // Отгрузка — коробка со стрелкой вверх/наружу
@@ -97,6 +99,18 @@ const PATHS: Record<IconName, JSX.Element> = {
   trash: (
     <>
       <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12" />
+    </>
+  ),
+  box: (
+    <>
+      <path d="M3 8.5 12 4l9 4.5v7L12 20l-9-4.5v-7Z" />
+      <path d="M3 8.5 12 13l9-4.5M12 13v7" />
+    </>
+  ),
+  warning: (
+    <>
+      <path d="M12 4 2.5 20h19L12 4Z" />
+      <path d="M12 10v4M12 17.5h.01" />
     </>
   ),
 }

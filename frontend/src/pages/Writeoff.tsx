@@ -192,7 +192,7 @@ export function WriteoffPage() {
     signing: 'Подпишите документ…',
     submitting: 'Отправка в ЧЗ…',
     processing: 'Обрабатывается в ЧЗ…',
-    done: 'Списано ✓',
+    done: 'Списано',
     error: `Списать ${writeoffCount}`,
   }
 

@@ -6,6 +6,7 @@ import {
   ownerCheckState,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
+import { Icon } from './Icon'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
@@ -170,8 +171,12 @@ function ScanRow({
         onClick={onToggle}
       >
         <td className="is-code">
-          {scan.is_box || isAggregate ? '📦 ' : ''}
-          {scan.is_barcode ? '🏷️ ' : ''}
+          {(scan.is_box || isAggregate) && (
+            <Icon name="box" size={13} style={{ verticalAlign: '-2px', marginRight: 4, color: 'var(--ms-text-muted)' }} />
+          )}
+          {scan.is_barcode && (
+            <Icon name="scan" size={13} style={{ verticalAlign: '-2px', marginRight: 4, color: 'var(--ms-text-muted)' }} />
+          )}
           {scan.code.slice(0, 20)}{scan.code.length > 20 ? '…' : ''}
         </td>
         <td>
