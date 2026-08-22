@@ -297,12 +297,24 @@ export interface Integration {
   cz_auth_method: string
   cz_box_mode_enabled: boolean
   cz_inn: string | null
+  cz_product_groups: string[]
+}
+
+export interface ProductGroup {
+  code: string
+  label: string
 }
 
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
-  update: (data: { moysklad_token?: string; cz_box_mode_enabled?: boolean; cz_inn?: string }) =>
-    api.put<Integration>('/integrations/', data),
+  update: (data: {
+    moysklad_token?: string
+    cz_box_mode_enabled?: boolean
+    cz_inn?: string
+    cz_product_groups?: string[]
+  }) => api.put<Integration>('/integrations/', data),
+  productGroups: () =>
+    api.get<ProductGroup[]>('/integrations/cz/product-groups'),
 }
 
 export interface CzChallenge {

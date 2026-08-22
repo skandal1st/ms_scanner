@@ -79,6 +79,10 @@ class Integration(Base):
     cz_auth_method = Column(String(16), nullable=False, default="mock", server_default="mock")
     cz_box_mode_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
     cz_inn = Column(String(12), nullable=True)           # ИНН участника оборота для тела документов ЧЗ
+    # Товарные группы (pg) ЧЗ, которые маркирует этот клиент. Задаёт, какие группы
+    # перебирать в True API (cises/info и т.п.). Пустой список → fallback на глобальный
+    # settings.CZ_PRODUCT_GROUPS. Сужение перебора = меньше запросов в ЧЗ = быстрее скан.
+    cz_product_groups = Column(JSONB, nullable=False, default=list, server_default="[]")
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")

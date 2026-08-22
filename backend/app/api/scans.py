@@ -431,7 +431,9 @@ async def _resolve_cz_for_boxes(
             status_code=403,
             detail="Нужен действующий вход в Честный Знак (УКЭП) для работы с коробами.",
         )
-    return ChestnyZnakService(token=cz_token, mock=False)
+    return ChestnyZnakService(
+        token=cz_token, mock=False, product_groups=integration.cz_product_groups
+    )
 
 
 async def _create_box_scans_core(

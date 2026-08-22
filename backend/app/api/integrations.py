@@ -18,7 +18,13 @@ from app.api.deps import get_current_user
 from app.core.security import encrypt_token, decrypt_token
 from app.core.config import settings
 from app.core.logging import logger
-from app.services.chestnyznak import ChestnyZnakService, CZApiError, WRITEOFF_REASONS
+from app.services.chestnyznak import (
+    ChestnyZnakService,
+    CZApiError,
+    WRITEOFF_REASONS,
+    CZ_PRODUCT_GROUP_CATALOG,
+    normalize_product_groups,
+)
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -73,6 +79,7 @@ class IntegrationResponse(BaseModel):
     cz_auth_method: str = "mock"
     cz_box_mode_enabled: bool = False
     cz_inn: Optional[str] = None
+    cz_product_groups: list[str] = []
 
 
 class UpdateIntegrationRequest(BaseModel):
@@ -80,6 +87,12 @@ class UpdateIntegrationRequest(BaseModel):
     cz_token: Optional[str] = None
     cz_box_mode_enabled: Optional[bool] = None
     cz_inn: Optional[str] = None
+    cz_product_groups: Optional[list[str]] = None
+
+
+class ProductGroupItem(BaseModel):
+    code: str
+    label: str
 
 
 class CzChallengeResponse(BaseModel):
@@ -107,6 +120,7 @@ def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
             has_cz=False,
             cz_auth_method=settings.CZ_AUTH_METHOD,
             cz_box_mode_enabled=False,
+            cz_product_groups=[],
         )
     has_cz = bool(integration.cz_token) and (
         integration.cz_token_expires_at is None
@@ -121,6 +135,7 @@ def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
         cz_auth_method=integration.cz_auth_method or settings.CZ_AUTH_METHOD,
         cz_box_mode_enabled=bool(integration.cz_box_mode_enabled),
         cz_inn=integration.cz_inn,
+        cz_product_groups=list(integration.cz_product_groups or []),
     )
 
 
@@ -160,10 +175,21 @@ async def update_integration(
         integration.cz_box_mode_enabled = body.cz_box_mode_enabled
     if body.cz_inn is not None:
         integration.cz_inn = body.cz_inn.strip() or None
+    if body.cz_product_groups is not None:
+        # Нормализуем по справочнику: отсекаем неизвестные коды и дубли, порядок каталога.
+        integration.cz_product_groups = normalize_product_groups(body.cz_product_groups)
 
     await db.commit()
     await db.refresh(integration)
     return _to_response(integration)
+
+
+@router.get("/cz/product-groups", response_model=list[ProductGroupItem])
+async def list_cz_product_groups(
+    current_user: User = Depends(get_current_user),
+):
+    """Справочник товарных групп ЧЗ для чекбоксов в настройках."""
+    return [ProductGroupItem(**g) for g in CZ_PRODUCT_GROUP_CATALOG]
 
 
 @router.post("/cz/challenge", response_model=CzChallengeResponse)
@@ -392,7 +418,10 @@ async def cz_writeoff_prepare(
     if not cises:
         raise HTTPException(status_code=400, detail="Нет валидных марок для списания")
 
-    cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
+    cz = ChestnyZnakService(
+        token=decrypt_token(integration.cz_token),
+        product_groups=integration.cz_product_groups,
+    )
 
     # Группируем КМ по товарной группе (pg). Марки, которые ЧЗ не находит (нельзя
     # списать физически), не роняют весь документ — собираем их отдельным списком.
@@ -589,7 +618,10 @@ async def cz_check(
             detail="Войдите в Честный Знак по УКЭП (раздел «Настройки»)",
         )
 
-    cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
+    cz = ChestnyZnakService(
+        token=decrypt_token(integration.cz_token),
+        product_groups=integration.cz_product_groups,
+    )
     checks = await cz.check_codes(codes)
 
     # В каких наших документах фигурируют эти марки — сопоставляем по КИ (код до GS).

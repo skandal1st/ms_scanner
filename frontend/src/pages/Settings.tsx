@@ -294,6 +294,29 @@ function ChestnyZnakSection({
   useEffect(() => {
     setInnDraft(integration?.cz_inn ?? '')
   }, [integration?.cz_inn])
+
+  // Товарные группы клиента: определяют, какие группы перебирать в ЧЗ при сканировании.
+  const { data: productGroups } = useQuery({
+    queryKey: ['cz-product-groups'],
+    queryFn: () => integrationsApi.productGroups().then((r) => r.data),
+    staleTime: Infinity,
+  })
+  const groupsMutation = useMutation({
+    mutationFn: (codes: string[]) =>
+      integrationsApi.update({ cz_product_groups: codes }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
+  })
+  const [groupsDraft, setGroupsDraft] = useState<string[]>([])
+  useEffect(() => {
+    setGroupsDraft(integration?.cz_product_groups ?? [])
+  }, [integration?.cz_product_groups])
+  const toggleGroup = (code: string) =>
+    setGroupsDraft((prev) =>
+      prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code],
+    )
+  const groupsDirty =
+    JSON.stringify([...groupsDraft].sort()) !==
+    JSON.stringify([...(integration?.cz_product_groups ?? [])].sort())
   const [pluginAvailable, setPluginAvailable] = useState<boolean | null>(null)
   const [certs, setCerts] = useState<CzCertificate[]>([])
   const [selectedThumbprint, setSelectedThumbprint] = useState('')
@@ -406,6 +429,43 @@ function ChestnyZnakSection({
         Авторизация через УКЭП — позволяет проверять статус кодов маркировки
         напрямую в ЧЗ во время сканирования и распаковывать SSCC-коробки.
       </p>
+
+      <div className="mt-12">
+        <label className="field-label">Какие товары вы маркируете</label>
+        <div className="hint" style={{ marginBottom: 6 }}>
+          Отметьте только свои товарные группы — сканер будет проверять коды в ЧЗ
+          быстрее (меньше лишних запросов). Если ничего не выбрано, проверяются все
+          настроенные на сервере группы.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {(productGroups ?? []).map((g) => (
+            <label
+              key={g.code}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+            >
+              <input
+                type="checkbox"
+                checked={groupsDraft.includes(g.code)}
+                onChange={() => toggleGroup(g.code)}
+              />
+              <span>{g.label}</span>
+            </label>
+          ))}
+        </div>
+        <div className="field-row mt-8">
+          <button
+            type="button"
+            className="button"
+            disabled={groupsMutation.isPending || !groupsDirty}
+            onClick={() => groupsMutation.mutate(groupsDraft)}
+          >
+            {groupsMutation.isPending ? 'Сохраняю…' : 'Сохранить группы'}
+          </button>
+        </div>
+        {groupsMutation.isError && (
+          <div className="alert alert--error mt-8">Не удалось сохранить группы</div>
+        )}
+      </div>
 
       {isConnected && (
         <div className="hint mt-8">

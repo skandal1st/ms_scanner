@@ -162,6 +162,16 @@ async def _get_cz_token(db, user_id) -> Optional[str]:
         return None
 
 
+async def _get_cz_product_groups(db, user_id) -> list[str]:
+    """Товарные группы (pg) клиента для сужения перебора в ЧЗ. [] → глобальный дефолт."""
+    from sqlalchemy import select
+    from app.db.models import Integration
+
+    q = await db.execute(select(Integration).where(Integration.user_id == user_id))
+    integ = q.scalar_one_or_none()
+    return list(integ.cz_product_groups or []) if integ else []
+
+
 async def _count_valid_units_for_gtin(db, document_id, scan_key: str, exclude_id) -> int:
     """Сколько единиц товара GTIN уже набрано валидными сканами документа.
     Короб/блок считается как box_quantity единиц, обычный скан — как 1. Нужно для
@@ -333,9 +343,10 @@ async def _verify_code_async(scan_id: str, user_id: str):
                 await _push_cz_token_expired(user_id)
             if cz_token2:
                 info = None
+                cz_groups = await _get_cz_product_groups(db, user_id)
                 try:
                     info = await ChestnyZnakService(
-                        token=cz_token2, mock=False
+                        token=cz_token2, mock=False, product_groups=cz_groups
                     ).get_code_info(scan.code)
                 except Exception as exc:
                     logger.warning(
@@ -791,7 +802,10 @@ async def _process_document_async(document_id: str, user_id: str):
                     return
                 await _push_cz_token_expired(user_id)
             else:
-                cz = ChestnyZnakService(token=cz_token, mock=False)
+                cz_groups = await _get_cz_product_groups(db, user_id)
+                cz = ChestnyZnakService(
+                    token=cz_token, mock=False, product_groups=cz_groups
+                )
                 for s in boxes_to_expand:
                     try:
                         info = await cz.get_code_info(s.code)

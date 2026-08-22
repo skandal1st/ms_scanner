@@ -15,6 +15,38 @@ from app.core.config import settings
 from app.core.logging import logger
 
 
+# Справочник товарных групп ЧЗ (pg в True API) → человекочитаемое название для UI.
+# ЕДИНЫЙ источник правды: чекбоксы в настройках клиента, выбор группы при приёмке УПД
+# (см. acceptance.py, импортирует отсюда), валидация. Порядок = порядок отрисовки.
+# Новые группы CRPT добавлять сюда после пиннинга кода pg из справочника True API.
+CZ_PRODUCT_GROUP_CATALOG: list[dict[str, str]] = [
+    {"code": "milk", "label": "Молочная продукция"},
+    {"code": "water", "label": "Упакованная вода"},
+    {"code": "beer", "label": "Пиво и слабоалкогольные напитки"},
+    {"code": "softdrinks", "label": "Безалкогольные напитки и соки"},
+    {"code": "tobacco", "label": "Табачная продукция"},
+    {"code": "otp", "label": "Альтернативная табачная продукция"},
+    {"code": "ncp", "label": "Никотиносодержащая продукция"},
+    {"code": "shoes", "label": "Обувные товары"},
+    {"code": "lp", "label": "Товары лёгкой промышленности"},
+    {"code": "perfumery", "label": "Духи и туалетная вода"},
+    {"code": "tires", "label": "Шины и покрышки"},
+    {"code": "photo", "label": "Фотокамеры и лампы-вспышки"},
+    {"code": "bio", "label": "БАД к пище"},
+    {"code": "antiseptic", "label": "Антисептики"},
+]
+
+CZ_PRODUCT_GROUP_CODES: set[str] = {g["code"] for g in CZ_PRODUCT_GROUP_CATALOG}
+
+
+def normalize_product_groups(groups: Optional[list[str]]) -> list[str]:
+    """Отфильтровать/дедуплицировать pg-коды по справочнику, сохранив порядок каталога."""
+    if not groups:
+        return []
+    incoming = {str(g).strip().lower() for g in groups if str(g).strip()}
+    return [g["code"] for g in CZ_PRODUCT_GROUP_CATALOG if g["code"] in incoming]
+
+
 # Причины списания (вывод из оборота ЧЗ): код для UI/БД → {action True API, человекочитаемая метка}.
 # Причины без прямого кода в True API кодируются как OWN_USE, метка дублируется в
 # primary_document_custom_name (решение пользователя). См. справочник «Причины выбытия».
@@ -358,10 +390,28 @@ def cis_string_for_moysklad_api(
 
 
 class ChestnyZnakService:
-    def __init__(self, token: Optional[str] = None, mock: Optional[bool] = None):
+    def __init__(
+        self,
+        token: Optional[str] = None,
+        mock: Optional[bool] = None,
+        product_groups: Optional[list[str]] = None,
+    ):
         self.token = token
         self.mock = mock if mock is not None else settings.CZ_MOCK_MODE
         self.base_url = settings.CZ_API_BASE_URL
+        # Товарные группы этого клиента (pg) для перебора в True API. Пусто → глобальный
+        # дефолт из настроек (обратная совместимость). Сужение = меньше запросов в ЧЗ.
+        self.product_groups = (
+            normalize_product_groups(product_groups) or settings.cz_product_groups_list
+        )
+
+    def _ordered_groups(self, cached_pg: Optional[str]) -> list[str]:
+        """Порядок перебора групп: закэшированная для GTIN — первой (если клиент её маркирует)."""
+        groups = list(self.product_groups)
+        if cached_pg and cached_pg in groups:
+            groups.remove(cached_pg)
+            groups.insert(0, cached_pg)
+        return groups
 
     async def verify_code(self, code: str) -> VerifyResult:
         """Проверить код маркировки (CIS в запросах — сырая строка, без пересборки)."""
@@ -506,7 +556,7 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
-        for pg in settings.cz_product_groups_list:
+        for pg in self.product_groups:
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=15) as client:
@@ -627,6 +677,7 @@ class ChestnyZnakService:
             return None
 
         from app.services.cz_logger import log_cz_request
+        from app.services.cz_pg_cache import get_cached_pg, set_cached_pg
 
         # Голый табачный код (<GTIN><серийник> без 01/21) достраиваем до КИ, иначе
         # cises/info отвечает 404 «КМ/КИ не найден» (см. _real_verify).
@@ -638,7 +689,10 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
-        for pg in settings.cz_product_groups_list:
+        # Кэш gtin→pg: нужную группу пробуем первой, минуя промахи по остальным.
+        gtin_key = normalize_gtin_key(extract_gtin(cis))
+        cached_pg = await get_cached_pg(gtin_key)
+        for pg in self._ordered_groups(cached_pg):
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -703,6 +757,7 @@ class ChestnyZnakService:
                 mark_withdraw=bool(ci.get("markWithdraw")),
                 withdraw_reason=(ci.get("withdrawReason") or None),
             )
+            await set_cached_pg(gtin_key, pg)
             logger.info(
                 "cz.code_info.ok",
                 pg=pg,
@@ -711,7 +766,7 @@ class ChestnyZnakService:
                 is_aggregate=info.is_aggregate,
             )
             return info
-        logger.info("cz.code_info.not_found", groups=len(settings.cz_product_groups_list))
+        logger.info("cz.code_info.not_found", groups=len(self.product_groups))
         return None
 
     async def accept_batch(self, codes: list[str], document_id: str) -> bool:
@@ -812,10 +867,11 @@ class ChestnyZnakService:
         В mock возвращает первую сконфигурированную группу.
         """
         if self.mock or not self.token:
-            groups = settings.cz_product_groups_list
+            groups = self.product_groups
             return (groups[0] if groups else None, None)
 
         from app.services.cz_logger import log_cz_request
+        from app.services.cz_pg_cache import get_cached_pg, set_cached_pg
 
         # Голый табачный код достраиваем до полного КИ (01+GTIN+21+серийник),
         # иначе перебор групп даёт 404 и код уходит в unresolved при списании.
@@ -826,8 +882,10 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
+        gtin_key = normalize_gtin_key(extract_gtin(code))
+        cached_pg = await get_cached_pg(gtin_key)
         reason: Optional[str] = None
-        for pg in settings.cz_product_groups_list:
+        for pg in self._ordered_groups(cached_pg):
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -853,6 +911,7 @@ class ChestnyZnakService:
                 continue
             entry = body[0] if isinstance(body[0], dict) else {}
             if resp.status_code == 200 and not entry.get("errorCode"):
+                await set_cached_pg(gtin_key, pg)
                 return (pg, None)  # код найден в этой группе
             # Код в этой группе не найден (404) / нет доступа (403) — запомним
             # причину из ответа для итогового сообщения. 403 не перетираем 404-ошибкой
@@ -892,7 +951,7 @@ class ChestnyZnakService:
         }
         reasons: dict[str, str] = {}
 
-        for pg in settings.cz_product_groups_list:
+        for pg in self.product_groups:
             if not remaining:
                 break
             lookup = list(remaining.keys())

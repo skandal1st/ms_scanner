@@ -30,31 +30,18 @@ from app.services.chestnyznak import (
     normalize_gtin_key,
     parse_gs1_km_gtin_serial,
     is_sscc,
+    CZ_PRODUCT_GROUP_CATALOG,
+    CZ_PRODUCT_GROUP_CODES,
 )
 from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition, ParsedUpd
 
 router = APIRouter(prefix="/acceptance", tags=["acceptance"])
 
 
-# Товарные группы маркировки для выпадающего списка перед загрузкой УПД.
-# code совпадает с pg-кодами Честного Знака (используются при будущей обработке КМ).
-PRODUCT_GROUPS: list[dict[str, str]] = [
-    {"code": "milk", "label": "Молочная продукция"},
-    {"code": "water", "label": "Упакованная вода"},
-    {"code": "beer", "label": "Пиво и слабоалкогольные напитки"},
-    {"code": "softdrinks", "label": "Безалкогольные напитки и соки"},
-    {"code": "tobacco", "label": "Табачная продукция"},
-    {"code": "otp", "label": "Альтернативная табачная продукция"},
-    {"code": "ncp", "label": "Никотиносодержащая продукция"},
-    {"code": "shoes", "label": "Обувные товары"},
-    {"code": "lp", "label": "Товары лёгкой промышленности"},
-    {"code": "perfumery", "label": "Духи и туалетная вода"},
-    {"code": "tires", "label": "Шины и покрышки"},
-    {"code": "photo", "label": "Фотокамеры и лампы-вспышки"},
-    {"code": "bio", "label": "БАД к пище"},
-    {"code": "antiseptic", "label": "Антисептики"},
-]
-_PRODUCT_GROUP_CODES = {g["code"] for g in PRODUCT_GROUPS}
+# Товарные группы маркировки — единый справочник из сервиса ЧЗ (тот же список, что и
+# чекбоксы в настройках клиента). code совпадает с pg-кодами Честного Знака.
+PRODUCT_GROUPS = CZ_PRODUCT_GROUP_CATALOG
+_PRODUCT_GROUP_CODES = CZ_PRODUCT_GROUP_CODES
 
 
 class ProductGroup(BaseModel):
