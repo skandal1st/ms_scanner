@@ -16,7 +16,7 @@ import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
-  const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired } = useScanStore()
+  const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
@@ -110,6 +110,21 @@ export function ShipmentPage() {
     if (!document) return
     setShowConfirm(false)
     await sendToMs(document.id)
+  }
+
+  // Пакетная проверка марок в ЧЗ (основной флоу: скан — локально, проверка — здесь).
+  // Завершение придёт по WS (verify_done) → setVerifying(false). Прогресс по каждой
+  // марке — через scan_update, статусы обновятся в таблице сами.
+  const handleVerify = async () => {
+    if (!document || verifying) return
+    setVerifying(true)
+    try {
+      await documentsApi.verify(document.id)
+    } catch (err) {
+      setVerifying(false)
+      console.error('Verify error:', err)
+      window.alert('Не удалось запустить проверку марок. Попробуйте ещё раз.')
+    }
   }
 
   const hasErrors = stats.invalid > 0 || stats.duplicate > 0
@@ -258,6 +273,19 @@ export function ShipmentPage() {
             {ownerWarnings.unknown > 0 && `${ownerWarnings.unknown} не проверено`}
           </span>
         )}
+        {stats.scanned > 0 && (
+          <button
+            type="button"
+            className="button"
+            disabled={!document || verifying}
+            onClick={handleVerify}
+            style={{ marginRight: 8 }}
+          >
+            {verifying
+              ? 'Проверяю марки…'
+              : `Проверить марки (${stats.scanned})`}
+          </button>
+        )}
         <button
           type="button"
           className="button button--success"
@@ -265,20 +293,26 @@ export function ShipmentPage() {
             !document ||
             scans.length === 0 ||
             sending ||
+            verifying ||
+            stats.scanned > 0 ||
             stats.unknown_product > 0
           }
           title={
-            stats.unknown_product > 0
-              ? `Сначала сопоставьте товары для ${stats.unknown_product} кодов`
-              : undefined
+            stats.scanned > 0
+              ? `Сначала проверьте марки (${stats.scanned} не проверено)`
+              : stats.unknown_product > 0
+                ? `Сначала сопоставьте товары для ${stats.unknown_product} кодов`
+                : undefined
           }
           onClick={() => setShowConfirm(true)}
         >
           {sending
             ? 'Обрабатывается…'
-            : stats.unknown_product > 0
-              ? `Сопоставьте товары (${stats.unknown_product})`
-              : progress.hasPlan
+            : stats.scanned > 0
+              ? `Проверьте марки (${stats.scanned})`
+              : stats.unknown_product > 0
+                ? `Сопоставьте товары (${stats.unknown_product})`
+                : progress.hasPlan
                 ? stats.overflow > 0
                   ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
                   : `Отгрузить ${progress.total.scanned}/${progress.total.expected}`

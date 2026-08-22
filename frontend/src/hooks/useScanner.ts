@@ -57,6 +57,9 @@ export function useScanner(documentId: string | null) {
     if (!documentId) return false
     return s.scans.some((x) => x.document_id === documentId && x.status === 'pending')
   })
+  // Во время пакетной проверки марок опрашиваем список как фолбэк, если WS-события
+  // scan_update потерялись (статусы scanned→valid приходят по WS, но подстрахуемся).
+  const verifying = useScanStore((s) => s.verifying)
 
   // WebSocket — обновления статусов от Celery
   useEffect(() => {
@@ -78,6 +81,12 @@ export function useScanner(documentId: string | null) {
           status: data.status,
           error: data.error_message ?? null,
         })
+        return
+      }
+      if (data.type === 'verify_done') {
+        // Пакетная проверка марок в ЧЗ завершена — один сигнал, снимаем «идёт проверка».
+        useScanStore.getState().setVerifying(false)
+        playBeep('ok')
         return
       }
       if (data.type === 'scan_update') {
@@ -110,11 +119,9 @@ export function useScanner(documentId: string | null) {
             ? { child_codes: data.child_codes as string[] }
             : {}),
         })
-        if (data.status === 'valid') playBeep('ok')
-        // Несопоставленная позиция — отдельный сигнал, не как обычная ошибка.
-        else if (data.status === 'unknown_product') playBeep('unknown')
-        else if (data.status === 'invalid' || data.status === 'overflow')
-          playBeep('error')
+        // Бип на скане теперь играется сразу по ответу /scans/ (локальная проверка).
+        // WS scan_update приходит из пакетной проверки — обновляем только визуально,
+        // без звука на каждый код (иначе при проверке пачки — какофония).
       }
     }
 
@@ -128,15 +135,24 @@ export function useScanner(documentId: string | null) {
     }
   }, [updateScan])
 
-  // Если WS недоступен — опрашиваем список сканов, пока есть pending
+  // Если WS недоступен — опрашиваем список сканов, пока есть pending либо идёт проверка
   useEffect(() => {
-    if (!documentId || !hasPending) return
+    if (!documentId || (!hasPending && !verifying)) return
     const docId = documentId
 
     async function poll() {
       try {
         const { data } = await scansApi.list(docId)
-        useScanStore.getState().setScans(data)
+        const store = useScanStore.getState()
+        store.setScans(data)
+        // Подстраховка на случай потерянного WS-события verify_done: если проверка
+        // шла и непроверенных марок больше не осталось — снимаем флаг.
+        if (
+          store.verifying &&
+          !data.some((s) => s.document_id === docId && s.status === 'scanned')
+        ) {
+          store.setVerifying(false)
+        }
       } catch {
         /* сеть / 401 обработает axios */
       }
@@ -145,7 +161,7 @@ export function useScanner(documentId: string | null) {
     void poll()
     const interval = window.setInterval(() => void poll(), 1500)
     return () => clearInterval(interval)
-  }, [documentId, hasPending])
+  }, [documentId, hasPending, verifying])
 
   const submitCode = useCallback(
     async (code: string) => {
@@ -210,10 +226,12 @@ export function useScanner(documentId: string | null) {
           return
         }
         addScan(scan)
-        // Штрихкод немаркированного товара проверку ЧЗ не проходит (нет WS-события) —
-        // подтверждаем звуком сразу.
-        if (scan.is_barcode) playBeep('ok')
-        if (scan.status === 'used_in_other_doc') playBeep('error')
+        // Основной флоу: КМ проверяется локально при скане, статус приходит сразу в
+        // ответе (scanned = принят локально; invalid = кривой формат). Бип — здесь,
+        // мгновенно, без ожидания ЧЗ. Проверка в ЧЗ — потом, по кнопке «Проверить марки».
+        if (scan.status === 'invalid' || scan.status === 'used_in_other_doc')
+          playBeep('error')
+        else playBeep('ok')
       } catch (err: unknown) {
         playBeep('error')
         const ax = err as { response?: { data?: { detail?: unknown } } }

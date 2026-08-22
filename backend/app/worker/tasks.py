@@ -482,6 +482,63 @@ async def _verify_code_async(scan_id: str, user_id: str):
         )
 
 
+@celery_app.task(bind=True, max_retries=2, default_retry_delay=5, name="verify_document")
+def verify_document_task(self, document_id: str, user_id: str):
+    """Пакетная проверка марок документа в ЧЗ по кнопке «Проверить марки».
+
+    Основной флоу: при скане КМ проверяется только локально (формат GS1) и получает
+    статус `scanned`. Здесь проверяем все такие сканы в ЧЗ разом — статус/владелец/
+    withdrawn/разворот агрегатов/план/сопоставление товара МС."""
+    try:
+        _run(_verify_document_async(document_id, user_id))
+    except Exception as exc:
+        logger.error("verify_document.error", document_id=document_id, error=str(exc))
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
+async def _verify_document_async(document_id: str, user_id: str):
+    import asyncio
+
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Scan, ScanStatus
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(
+            select(Scan.id)
+            .where(
+                Scan.document_id == document_id,
+                Scan.status == ScanStatus.scanned,
+                Scan.is_box.is_(False),
+            )
+            .order_by(Scan.scanned_at.asc())
+        )
+        scan_ids = [str(row[0]) for row in res.all()]
+
+    logger.info("verify_document.start", document_id=document_id, count=len(scan_ids))
+
+    # Переиспускаем проверенную логику одиночного скана (ЧЗ-статус, владелец, withdrawn,
+    # разворот блоков/коробов, план/overflow, сопоставление товара МС) — она сама
+    # публикует WS scan_update по каждому скану, так что фронт видит прогресс.
+    # Ограниченный параллелизм: быстрее, но щадим рейт-лимиты ЧЗ/МС.
+    sem = asyncio.Semaphore(6)
+
+    async def _one(scan_id: str) -> None:
+        async with sem:
+            try:
+                await _verify_code_async(scan_id, user_id)
+            except Exception as exc:
+                logger.warning(
+                    "verify_document.scan_failed", scan_id=scan_id, error=str(exc)
+                )
+
+    if scan_ids:
+        await asyncio.gather(*(_one(sid) for sid in scan_ids))
+
+    await _push_verify_done(user_id, document_id, len(scan_ids))
+    logger.info("verify_document.done", document_id=document_id, count=len(scan_ids))
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="verify_box")
 def verify_box_task(self, scan_id: str, user_id: str):
     """Подтвердить скан-короб (SSCC «целиком»): агрегат уже проверен через sscc_check,
@@ -634,6 +691,22 @@ async def _push_cz_token_expired(user_id: str):
 
     r = aioredis.from_url(settings.REDIS_URL)
     await r.publish(f"ws:{user_id}", json.dumps({"type": "cz_token_expired"}))
+    await r.aclose()
+
+
+async def _push_verify_done(user_id: str, document_id: str, count: int):
+    """Сообщить фронту, что пакетная проверка марок документа завершена."""
+    import redis.asyncio as aioredis
+    import json
+    from app.core.config import settings
+
+    r = aioredis.from_url(settings.REDIS_URL)
+    await r.publish(
+        f"ws:{user_id}",
+        json.dumps(
+            {"type": "verify_done", "document_id": document_id, "count": count}
+        ),
+    )
     await r.aclose()
 
 

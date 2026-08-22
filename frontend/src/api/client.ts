@@ -77,6 +77,10 @@ export const documentsApi = {
     api.post<Document>('/documents/', { name, kind, moysklad_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
+  verify: (id: string) =>
+    api.post<{ status: string; document_id: string; count: number }>(
+      `/documents/${id}/verify`,
+    ),
   process: (id: string) => api.post(`/documents/${id}/process`),
   exportXlsx: (id: string) =>
     api.get<Blob>(`/documents/${id}/export.xlsx`, { responseType: 'blob' }),
@@ -88,6 +92,7 @@ export function isSscc(code: string): boolean {
 
 export type ScanStatus =
   | 'pending'
+  | 'scanned'
   | 'valid'
   | 'invalid'
   | 'duplicate'

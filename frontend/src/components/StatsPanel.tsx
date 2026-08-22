@@ -7,12 +7,14 @@ export function StatsPanel() {
     stats.invalid +
     stats.duplicate +
     stats.pending +
+    stats.scanned +
     stats.overflow +
     stats.unknown_product
 
   return (
     <div className="stats">
       <Row label="Всего" value={total} />
+      {stats.scanned > 0 && <Row label="Не проверено" value={stats.scanned} variant="warn" />}
       <Row label="Валидных" value={stats.valid} variant="ok" />
       {stats.overflow > 0 && <Row label="Сверх плана" value={stats.overflow} variant="error" />}
       {stats.unknown_product > 0 && (

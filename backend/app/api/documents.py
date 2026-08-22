@@ -327,6 +327,45 @@ async def export_document_xlsx(
     )
 
 
+@router.post("/{document_id}/verify")
+async def verify_document(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Пакетно проверить в ЧЗ все локально отсканированные марки (status=scanned).
+
+    Основной флоу: скан ставит `scanned` (только формат GS1, без ЧЗ), а проверка
+    в ЧЗ идёт здесь одной операцией. Прогресс — через WS scan_update по каждому скану,
+    завершение — событие verify_done.
+    """
+    result = await db.execute(
+        select(Document).where(
+            Document.id == document_id,
+            Document.user_id == current_user.id,
+        )
+    )
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    from sqlalchemy import func
+    from app.db.models import Scan, ScanStatus
+
+    pending_q = await db.execute(
+        select(func.count(Scan.id)).where(
+            Scan.document_id == document_id,
+            Scan.status == ScanStatus.scanned,
+            Scan.is_box.is_(False),
+        )
+    )
+    to_check = pending_q.scalar_one()
+
+    from app.worker.tasks import verify_document_task
+    verify_document_task.delay(str(document_id), str(current_user.id))
+    return {"status": "verifying", "document_id": str(document_id), "count": to_check}
+
+
 @router.post("/{document_id}/process")
 async def process_document(
     document_id: UUID,
@@ -348,11 +387,28 @@ async def process_document(
         raise HTTPException(status_code=404, detail="Document not found")
     _ensure_supported_kind(doc.kind.value)
 
-    # Блокируем процесс, если есть сканы со статусом unknown_product —
-    # их нельзя отправить в МС без сопоставления товара.
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus
 
+    # Не отправляем в МС непроверенные марки: сначала «Проверить марки».
+    scanned_q = await db.execute(
+        select(func.count(Scan.id)).where(
+            Scan.document_id == document_id,
+            Scan.status == ScanStatus.scanned,
+        )
+    )
+    scanned_count = scanned_q.scalar_one()
+    if scanned_count:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Сначала проверьте марки ({scanned_count} не проверено) — "
+                f"нажмите «Проверить марки»"
+            ),
+        )
+
+    # Блокируем процесс, если есть сканы со статусом unknown_product —
+    # их нельзя отправить в МС без сопоставления товара.
     unknown_q = await db.execute(
         select(func.count(Scan.id)).where(
             Scan.document_id == document_id,

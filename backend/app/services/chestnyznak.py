@@ -937,6 +937,7 @@ class ChestnyZnakService:
             ]
 
         from app.services.cz_logger import log_cz_request
+        from app.services.cz_pg_cache import set_cached_pg
 
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         headers = {
@@ -1008,6 +1009,11 @@ class ChestnyZnakService:
                         ci.get("generalPackageType") or ci.get("packageType") or None
                     ),
                     child_count=len(child),
+                )
+                # Засеиваем кэш gtin→pg: последующий get_code_info по этому GTIN
+                # пойдёт сразу в нужную группу (в т.ч. в пакетной verify_document_task).
+                await set_cached_pg(
+                    normalize_gtin_key(_digits_gtin14_from_value(ci.get("gtin"))), pg
                 )
                 del remaining[req]
 

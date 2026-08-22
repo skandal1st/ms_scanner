@@ -10,6 +10,7 @@ import { Icon } from './Icon'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
+  scanned:           { label: 'Отсканирован',      cls: 'badge--pending' },
   valid:             { label: 'Валиден',           cls: 'badge--ok' },
   invalid:           { label: 'Ошибка',            cls: 'badge--error' },
   duplicate:         { label: 'Дубль',             cls: 'badge--warn' },

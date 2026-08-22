@@ -12,6 +12,7 @@ import { useLoadDocument } from '../hooks/useDocuments'
 import { listCertificates, signDetachedBase64, type CzCertificate } from '../lib/cprob'
 import {
   czApi,
+  documentsApi,
   integrationsApi,
   WRITEOFF_REASONS,
   type Document,
@@ -31,6 +32,8 @@ export function WriteoffPage() {
     setCzTokenExpired,
     writeoffResult,
     setWriteoffResult,
+    verifying,
+    setVerifying,
   } = useScanStore()
   const qc = useQueryClient()
 
@@ -114,12 +117,26 @@ export function WriteoffPage() {
   const canSubmit =
     !!document &&
     scans.length > 0 &&
+    stats.scanned === 0 &&
     stats.valid + stats.overflow > 0 &&
     phase !== 'signing' &&
     phase !== 'submitting' &&
     phase !== 'processing'
 
   const writeoffCount = stats.valid + stats.overflow
+
+  // Пакетная проверка марок в ЧЗ перед списанием (скан — локально, проверка — тут).
+  const handleVerify = async () => {
+    if (!document || verifying) return
+    setVerifying(true)
+    try {
+      await documentsApi.verify(document.id)
+    } catch (err) {
+      setVerifying(false)
+      console.error('Verify error:', err)
+      setMessage('Не удалось запустить проверку марок. Попробуйте ещё раз.')
+    }
+  }
 
   const handleWriteoff = async () => {
     if (!document) return
@@ -350,14 +367,29 @@ export function WriteoffPage() {
         {message && phase === 'error' && (
           <span style={{ color: 'var(--st-err-fg)', fontSize: 12, marginRight: 12 }}>{message}</span>
         )}
+        {stats.scanned > 0 && (
+          <button
+            type="button"
+            className="button"
+            disabled={!document || verifying}
+            onClick={handleVerify}
+            style={{ marginRight: 8 }}
+          >
+            {verifying ? 'Проверяю марки…' : `Проверить марки (${stats.scanned})`}
+          </button>
+        )}
         <button
           type="button"
           className="button button--success"
           disabled={!canSubmit}
-          title={reasonLabel}
+          title={
+            stats.scanned > 0
+              ? `Сначала проверьте марки (${stats.scanned} не проверено)`
+              : reasonLabel
+          }
           onClick={handleWriteoff}
         >
-          {phaseText[phase]}
+          {stats.scanned > 0 ? `Проверьте марки (${stats.scanned})` : phaseText[phase]}
         </button>
       </footer>
     </div>

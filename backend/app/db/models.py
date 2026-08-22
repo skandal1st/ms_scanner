@@ -42,6 +42,7 @@ class DocumentKind(str, PyEnum):
 
 class ScanStatus(str, PyEnum):
     pending = "pending"
+    scanned = "scanned"  # формат GS1 локально валиден, но КМ ещё не проверена в ЧЗ (пакетная проверка по кнопке)
     valid = "valid"
     invalid = "invalid"
     duplicate = "duplicate"

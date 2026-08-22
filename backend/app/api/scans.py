@@ -21,6 +21,7 @@ from app.services.chestnyznak import (
     extract_gtin,
     is_sscc,
     normalize_gtin_key,
+    verify_code_local_gs1,
 )
 
 router = APIRouter(prefix="/scans", tags=["scans"])
@@ -177,6 +178,7 @@ async def _create_scan_record(
                     ScanStatus.valid,
                     ScanStatus.overflow,
                     ScanStatus.pending,
+                    ScanStatus.scanned,
                     ScanStatus.unknown_product,
                 ]
             ),
@@ -185,22 +187,38 @@ async def _create_scan_record(
     )
     conflict_doc_name = conflict_q.scalar_one_or_none()
 
+    # Пакетный флоу: обычный КМ проверяем ЛОКАЛЬНО при скане (формат GS1 + контрольная
+    # сумма GTIN) — мгновенно, без ЧЗ. Статус `scanned` = «принят, ждёт пакетной проверки
+    # в ЧЗ по кнопке». Кривой формат → сразу `invalid`. Короб «целиком» (is_box) остаётся
+    # на прежней задаче verify_box_task (агрегат подтверждён sscc_check, не КМ).
+    local_status = ScanStatus.scanned
+    local_error: Optional[str] = None
+    local_serial: Optional[str] = None
+    if conflict_doc_name is not None:
+        local_status = ScanStatus.used_in_other_doc
+        local_error = f"Код уже используется в документе «{conflict_doc_name}»"
+    elif not is_box:
+        vr = verify_code_local_gs1(code)
+        if vr.valid:
+            local_status = ScanStatus.scanned
+            gtin = normalize_gtin_key(vr.gtin) or gtin
+            local_serial = vr.serial
+        else:
+            local_status = ScanStatus.invalid
+            local_error = vr.error
+            gtin = (normalize_gtin_key(vr.gtin) if vr.gtin else None) or gtin
+    else:
+        local_status = ScanStatus.pending  # короб «целиком» → verify_box_task
+
     scan = Scan(
         document_id=document_id,
         code=code,
         gtin=gtin,
+        serial=local_serial,
         moysklad_product_id=moysklad_product_id,
-        status=(
-            ScanStatus.used_in_other_doc
-            if conflict_doc_name is not None
-            else ScanStatus.pending
-        ),
+        status=local_status,
         product_name=initial_name,
-        error_message=(
-            f"Код уже используется в документе «{conflict_doc_name}»"
-            if conflict_doc_name is not None
-            else None
-        ),
+        error_message=local_error,
         is_box=is_box,
         box_quantity=box_quantity,
     )
@@ -241,22 +259,21 @@ async def _create_scan_record(
         )
         return scan, False
 
-    # Очередь Celery: проверка формата кода / mock ЧЗ.
-    # Короб «целиком» проверяется отдельной задачей (агрегат уже подтверждён sscc_check).
+    # Обычный КМ уже проверен локально (status=scanned/invalid) — в ЧЗ не ходим,
+    # это делает пакетная задача verify_document_task по кнопке «Проверить марки».
+    # Короб «целиком» проверяется отдельной задачей (агрегат подтверждён sscc_check).
     logger.info(
         "scan.created",
         document_id=str(document_id),
         scan_id=str(scan.id),
         gtin=scan.gtin,
+        status=scan.status,
         is_box=is_box,
         user_id=str(current_user_id),
     )
     if is_box:
         from app.worker.tasks import verify_box_task
         verify_box_task.delay(str(scan.id), str(current_user_id))
-    else:
-        from app.worker.tasks import verify_code_task
-        verify_code_task.delay(str(scan.id), code, str(current_user_id))
     return scan, False
 
 

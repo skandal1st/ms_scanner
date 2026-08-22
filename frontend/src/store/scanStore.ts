@@ -6,9 +6,17 @@ interface Stats {
   invalid: number
   duplicate: number
   pending: number
+  scanned: number
   overflow: number
   unknown_product: number
   used_in_other_doc: number
+}
+
+/** Статусы, которые оптимистично считаем «добавленными» в документ до пакетной проверки:
+ * valid/overflow — подтверждены ЧЗ, scanned — принят локально, ждёт проверки. */
+const ADDED_STATUSES = ['valid', 'overflow', 'scanned'] as const
+function isAdded(status: string): boolean {
+  return (ADDED_STATUSES as readonly string[]).includes(status)
 }
 
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
@@ -85,6 +93,9 @@ interface ScanStore {
   flashScanId: string | null
   /** Подсветить строку скана: выставить id и через ~1.2с сбросить. */
   flashScan: (id: string) => void
+  /** Идёт пакетная проверка марок в ЧЗ (между «Проверить марки» и событием verify_done). */
+  verifying: boolean
+  setVerifying: (v: boolean) => void
   /** Результат списания (вывод из оборота ЧЗ): приходит по WS после опроса статуса. */
   writeoffResult: { status: 'done' | 'error'; error?: string | null } | null
   setWriteoffResult: (v: { status: 'done' | 'error'; error?: string | null } | null) => void
@@ -104,7 +115,7 @@ function calcStats(scans: Scan[]): Stats {
       acc[s.status] = (acc[s.status] || 0) + 1
       return acc
     },
-    { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
+    { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
   )
 }
 
@@ -210,9 +221,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       const planProductId = (p.product_id as string) || null
       const addedTotal = sumUnits(
         scans.filter(
-          (s) =>
-            (s.status === 'valid' || s.status === 'overflow') &&
-            scanMatchesPlanRow(s, planKey, planProductId),
+          (s) => isAdded(s.status) && scanMatchesPlanRow(s, planKey, planProductId),
         ),
       )
       const scanned = sumUnits(
@@ -247,7 +256,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       planRefs.some((r) => scanMatchesPlanRow(s, r.key, r.pid))
     const offGroups = new Map<string, OffPlanRow>()
     for (const s of scans) {
-      if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
+      if (!['valid', 'overflow', 'pending', 'scanned'].includes(s.status)) continue
       if (inPlan(s)) continue
       const k = groupKey(s)
       let g = offGroups.get(k)
@@ -279,7 +288,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
     { gtin: string; productNames: string[]; list: Scan[] }
   >()
   for (const s of scans) {
-    if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
+    if (!['valid', 'overflow', 'pending', 'scanned'].includes(s.status)) continue
     const k = groupKey(s)
     let g = groups.get(k)
     if (!g) {
@@ -292,9 +301,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 
   const rows: ProgressRow[] = Array.from(groups.values())
     .map((g) => {
-      const addedTotal = sumUnits(
-        g.list.filter((s) => s.status === 'valid' || s.status === 'overflow'),
-      )
+      const addedTotal = sumUnits(g.list.filter((s) => isAdded(s.status)))
       const scanned = addedTotal
       const pendingCount = sumUnits(g.list.filter((s) => s.status === 'pending'))
       const displayName = g.productNames[0] || g.gtin || 'Без GTIN'
@@ -330,15 +337,17 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
-  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
   targetProductId: null,
   selection: null,
   deleteMode: false,
   unpackBox: true,
   czTokenExpired: false,
   flashScanId: null,
+  verifying: false,
   writeoffResult: null,
 
+  setVerifying: (v) => set({ verifying: v }),
   setWriteoffResult: (v) => set({ writeoffResult: v }),
   setTargetProductId: (id) => set({ targetProductId: id }),
   setSelection: (sel) => set({ selection: sel }),
@@ -391,10 +400,11 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     set({
       document: null,
       scans: [],
-      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
       targetProductId: null,
       selection: null,
       deleteMode: false,
+      verifying: false,
     }),
 
   getProgress: () => {
