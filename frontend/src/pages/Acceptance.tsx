@@ -11,6 +11,7 @@ import type {
 import { ResizableTable } from '../components/ResizableTable'
 import type { ColumnDef } from '../components/ResizableTable'
 import { UpdImportBar } from '../components/UpdImportBar'
+import { Icon } from '../components/Icon'
 import { useMatchSuggestions } from '../hooks/useDocuments'
 import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { normalizeGtinKey } from '../store/scanStore'
@@ -321,7 +322,7 @@ export function AcceptancePage() {
             {result.unmatched_gtins.length > 0 && (
               <>
                 {' '}
-                · <span style={{ color: '#9a3412' }}>
+                · <span style={{ color: 'var(--st-warn-fg)' }}>
                   не сопоставлено GTIN: {result.unmatched_gtins.length}
                 </span>
               </>
@@ -335,7 +336,7 @@ export function AcceptancePage() {
             {linkedToMs ? (
               <> · привязано к поступлению МС</>
             ) : (
-              <> · <span style={{ color: '#9a3412' }}>без записи в МС</span></>
+              <> · <span style={{ color: 'var(--st-warn-fg)' }}>без записи в МС</span></>
             )}
           </div>
         )}
@@ -347,15 +348,15 @@ export function AcceptancePage() {
         <div style={{ padding: '12px 16px 0' }}>
           <div
             style={{
-              background: '#fffbeb',
-              border: '1px solid #fde68a',
-              borderRadius: 8,
+              background: 'var(--st-warn-bg)',
+              border: '1px solid var(--st-warn-bd)',
+              borderRadius: 'var(--r-md)',
               padding: 12,
             }}
           >
             <div
               className="field-label"
-              style={{ margin: 0, marginBottom: 8, color: '#92400e' }}
+              style={{ margin: 0, marginBottom: 8, color: 'var(--st-warn-fg)' }}
             >
               Сопоставьте товары МойСклад ({unmatched.length}) — без этого приёмку
               нельзя отправить в МС
@@ -444,7 +445,7 @@ export function AcceptancePage() {
             </span>
           )}
           {sendError && (
-            <span style={{ fontSize: 12, color: '#b91c1c' }}>{sendError}</span>
+            <span style={{ fontSize: 12, color: 'var(--st-err-fg)' }}>{sendError}</span>
           )}
           <div className="acc-footer__spacer" />
           <button
@@ -478,23 +479,13 @@ export function AcceptancePage() {
       )}
 
       {sendDone && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(255,255,255,0.92)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            fontFamily: 'system-ui, -apple-system, sans-serif',
-          }}
-        >
-          <div style={{ textAlign: 'center', color: '#1f2937' }}>
-            <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
-              Приёмка отправлена в МойСклад ✓
+        <div className="done-overlay">
+          <div className="done-overlay__card">
+            <div className="done-overlay__check">
+              <Icon name="check" size={32} />
             </div>
-            <div style={{ fontSize: 13, color: '#6b7280' }}>
+            <div className="done-overlay__title">Приёмка отправлена в МойСклад</div>
+            <div className="done-overlay__sub">
               Коды маркировки записаны в позиции поступления.
             </div>
           </div>
@@ -629,14 +620,14 @@ function InlineProductPicker({
             gap: 8,
             padding: 8,
             marginBottom: 8,
-            borderRadius: 6,
+            borderRadius: 'var(--r-sm)',
             border: '1px solid',
-            background: suggestion.confidence === 'high' ? '#f0fdf4' : '#fffbeb',
-            borderColor: suggestion.confidence === 'high' ? '#86efac' : '#fde68a',
+            background: suggestion.confidence === 'high' ? 'var(--st-ok-bg)' : 'var(--st-warn-bg)',
+            borderColor: suggestion.confidence === 'high' ? 'var(--st-ok-bd)' : 'var(--st-warn-bd)',
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: '#374151' }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--ms-text-muted)' }}>
               {suggestion.confidence === 'high' ? '✓ Точное совпадение' : '≈ Проверьте'}
             </div>
             <div style={{ fontWeight: 500, fontSize: 13 }}>{suggestion.best.name}</div>

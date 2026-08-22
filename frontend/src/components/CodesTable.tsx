@@ -117,13 +117,13 @@ const styles: Record<string, CSSProperties> = {
     flexWrap: 'wrap',
     padding: '6px 10px',
     marginBottom: 8,
-    background: '#eff6ff',
-    border: '1px solid #bfdbfe',
-    borderRadius: 6,
+    background: 'var(--brand-weak)',
+    border: '1px solid var(--st-info-bd)',
+    borderRadius: 'var(--r-md)',
   },
   filterText: {
     fontSize: 12,
-    color: '#1e40af',
+    color: 'var(--brand-strong)',
     fontVariantNumeric: 'tabular-nums',
   },
   filterBtn: {
@@ -181,17 +181,17 @@ function ScanRow({
             <span className="text-muted">—</span>
           )}
           {scan.is_box ? (
-            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
               Короб · {scan.box_quantity ?? '?'} шт.
             </div>
           ) : null}
           {isAggregate ? (
-            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
               Упаковка · {scan.box_quantity ?? childCount} шт.
             </div>
           ) : null}
           {scan.is_barcode ? (
-            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--ms-accent, #2563eb)' }}>
+            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
               Штрихкод · {scan.box_quantity ?? 1} шт.
             </div>
           ) : null}

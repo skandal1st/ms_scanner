@@ -57,16 +57,16 @@ export function ManualProductTargetBar() {
 const styles: Record<string, CSSProperties> = {
   wrap: {
     marginBottom: 12,
-    padding: 10,
-    background: '#f8fafc',
-    border: '1px solid #e2e8f0',
-    borderRadius: 8,
+    padding: 12,
+    background: 'var(--surface-2)',
+    border: '1px solid var(--ms-border-light)',
+    borderRadius: 'var(--r-md)',
   },
   label: {
     display: 'block',
     fontSize: 12,
     fontWeight: 600,
-    color: '#334155',
+    color: 'var(--ms-text)',
     marginBottom: 8,
   },
   row: {
@@ -79,13 +79,13 @@ const styles: Record<string, CSSProperties> = {
     flex: '1 1 200px',
     minWidth: 180,
     padding: '8px 10px',
-    border: '1px solid #cbd5e1',
-    borderRadius: 6,
+    border: '1px solid var(--ms-input-border)',
+    borderRadius: 'var(--r-sm)',
     fontSize: 13,
   },
   hint: {
     marginTop: 8,
     fontSize: 11,
-    color: '#64748b',
+    color: 'var(--ms-text-muted)',
   },
 }

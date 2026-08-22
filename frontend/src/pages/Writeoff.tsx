@@ -6,6 +6,7 @@ import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
+import { Icon } from '../components/Icon'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument } from '../hooks/useDocuments'
 import { listCertificates, signDetachedBase64, type CzCertificate } from '../lib/cprob'
@@ -205,11 +206,11 @@ export function WriteoffPage() {
           {document && (
             <button
               type="button"
-              className="button"
+              className="button button--sm"
               onClick={handleDetach}
               title="Отвязаться и выбрать другой документ (сканы остаются)"
             >
-              ✕ Отвязаться
+              <Icon name="close" size={14} /> Отвязаться
             </button>
           )}
         </div>
@@ -217,34 +218,20 @@ export function WriteoffPage() {
       </header>
 
       {czTokenExpired && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            margin: '0 0 12px',
-            padding: '10px 14px',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
-            color: '#b91c1c',
-            fontSize: 13,
-          }}
-        >
-          <span style={{ flex: 1 }}>
+        <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
+          <span className="alert__spacer">
             Войдите в Честный Знак — без авторизации списание невозможно.
           </span>
-          <a href="/settings" className="button" style={{ whiteSpace: 'nowrap' }}>
+          <a href="/settings" className="button button--sm" style={{ whiteSpace: 'nowrap' }}>
             Войти в ЧЗ
           </a>
           <button
             type="button"
-            className="button"
+            className="button button--sm"
             onClick={() => setCzTokenExpired(false)}
             aria-label="Скрыть"
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}
@@ -327,26 +314,26 @@ export function WriteoffPage() {
               role="alert"
               style={{
                 margin: '0 0 10px',
-                padding: 10,
-                background: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: 6,
+                padding: 12,
+                background: 'var(--st-err-bg)',
+                border: '1px solid var(--st-err-bd)',
+                borderRadius: 'var(--r-md)',
               }}
             >
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#b91c1c', marginBottom: 6 }}>
-                ⚠ Не удалось списать ({unresolved.length}) — Честный Знак не нашёл эти марки
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--st-err-fg)', marginBottom: 6 }}>
+                Не удалось списать ({unresolved.length}) — Честный Знак не нашёл эти марки
               </div>
               <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {unresolved.map((u) => (
-                  <div key={u.cis} style={{ fontSize: 11, color: '#7f1d1d', display: 'flex', gap: 8 }}>
+                  <div key={u.cis} style={{ fontSize: 11, color: 'var(--st-err-fg)', display: 'flex', gap: 8 }}>
                     <code style={{ flex: 1, wordBreak: 'break-all' }}>
                       {u.cis.slice(0, 40)}{u.cis.length > 40 ? '…' : ''}
                     </code>
-                    <span style={{ flexShrink: 0, color: '#b91c1c' }}>{u.reason}</span>
+                    <span style={{ flexShrink: 0, color: 'var(--st-err-fg)', fontWeight: 600 }}>{u.reason}</span>
                   </div>
                 ))}
               </div>
-              <div style={{ fontSize: 11, color: '#7f1d1d', marginTop: 6 }}>
+              <div style={{ fontSize: 11, color: 'var(--st-err-fg)', marginTop: 6, opacity: 0.85 }}>
                 Остальные марки списываются как обычно. Проверьте эти коды и удалите
                 из документа, если они не подлежат списанию.
               </div>
@@ -361,7 +348,7 @@ export function WriteoffPage() {
       <footer className="acc-footer">
         <div className="acc-footer__spacer" />
         {message && phase === 'error' && (
-          <span style={{ color: '#b91c1c', fontSize: 12, marginRight: 12 }}>{message}</span>
+          <span style={{ color: 'var(--st-err-fg)', fontSize: 12, marginRight: 12 }}>{message}</span>
         )}
         <button
           type="button"

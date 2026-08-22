@@ -93,7 +93,7 @@ export function ProgressTable() {
           <span style={styles.totals}>
             В плане: {progress.total.scanned} / {progress.total.expected}
             {progress.total.addedTotal !== progress.total.scanned && (
-              <span style={{ marginLeft: 8, color: '#6b7280' }}>
+              <span style={{ marginLeft: 8, color: 'var(--ms-text-subtle)' }}>
                 · кодов: {progress.total.addedTotal}
               </span>
             )}
@@ -110,7 +110,11 @@ export function ProgressTable() {
             style={{
               ...styles.bar,
               width: `${overallPct}%`,
-              background: overallOver ? '#dc2626' : overallPct >= 100 ? '#16a34a' : '#f59e0b',
+              background: overallOver
+                ? 'var(--st-err-fg)'
+                : overallPct >= 100
+                  ? 'var(--st-ok-fg)'
+                  : 'var(--st-warn-fg)',
             }}
           />
         </div>
@@ -124,7 +128,7 @@ export function ProgressTable() {
             style={{
               ...styles.targetBtn,
               ...(!targetProductId
-                ? { background: '#eff6ff', borderColor: '#93c5fd', color: '#1e40af' }
+                ? { background: 'var(--brand-weak)', borderColor: 'var(--brand)', color: 'var(--brand-strong)' }
                 : {}),
             }}
             onClick={() => {
@@ -147,14 +151,14 @@ export function ProgressTable() {
                 : 0
           const ratio = item.expected > 0 ? item.addedTotal / item.expected : item.addedTotal > 0 ? 1 : 0
           const color = overLine
-            ? '#dc2626' // перевыполнено — красная полоска
+            ? 'var(--st-err-fg)' // перевыполнено — красная полоска
             : item.addedTotal === 0 && !item.pendingCount
-              ? '#9ca3af'
+              ? 'var(--ms-text-subtle)'
               : ratio >= 1 && item.expected > 0
-                ? '#16a34a'
+                ? 'var(--st-ok-fg)'
                 : item.addedTotal > 0 || item.pendingCount
-                  ? '#f59e0b'
-                  : '#9ca3af'
+                  ? 'var(--st-warn-fg)'
+                  : 'var(--ms-text-subtle)'
 
           const countLabel = progress.hasPlan
             ? `Добавлено ${item.addedTotal}${item.expected > 0 ? ` из ${item.expected}` : ''}`
@@ -169,7 +173,7 @@ export function ProgressTable() {
           const rowStyle: CSSProperties = {
             ...styles.row,
             cursor: selectable ? 'pointer' : 'default',
-            outline: isTarget || isSelected ? '2px solid #2563eb' : undefined,
+            outline: isTarget || isSelected ? '2px solid var(--brand)' : undefined,
             outlineOffset: 2,
             borderRadius: 6,
             padding: selectable ? '2px 4px' : undefined,
@@ -203,7 +207,7 @@ export function ProgressTable() {
                 <span style={{ ...styles.count, color }} title={item.gtin}>
                   {countLabel}
                   {item.pendingCount ? (
-                    <span style={{ color: '#6b7280', fontWeight: 400, marginLeft: 6 }}>
+                    <span style={{ color: 'var(--ms-text-subtle)', fontWeight: 400, marginLeft: 6 }}>
                       · на проверке {item.pendingCount}
                     </span>
                   ) : null}
@@ -261,7 +265,7 @@ export function ProgressTable() {
       {!collapsed && overflow > 0 && progress.hasPlan && (
         <div style={styles.overflowNote}>
           Всего сверх плана: {overflow}{' '}
-          <span style={{ color: '#9ca3af' }}>— уйдут в отгрузку вместе с валидными</span>
+          <span style={{ color: 'var(--ms-text-subtle)' }}>— уйдут в отгрузку вместе с валидными</span>
         </div>
       )}
     </div>
@@ -270,11 +274,12 @@ export function ProgressTable() {
 
 const styles: Record<string, CSSProperties> = {
   wrap: {
-    background: '#fff',
-    border: '1px solid #e5e7eb',
-    borderRadius: 8,
-    padding: 12,
+    background: 'var(--ms-bg)',
+    border: '1px solid var(--ms-border-light)',
+    borderRadius: 'var(--r-md)',
+    padding: 14,
     marginBottom: 12,
+    boxShadow: 'var(--shadow-1)',
   },
   head: {
     display: 'flex',
@@ -287,19 +292,19 @@ const styles: Record<string, CSSProperties> = {
   title: {
     fontSize: 13,
     fontWeight: 600,
-    color: '#1f2937',
+    color: 'var(--ms-text)',
     display: 'inline-flex',
     alignItems: 'center',
     gap: 6,
   },
   chevron: {
-    color: '#6b7280',
+    color: 'var(--ms-text-subtle)',
     fontSize: 11,
     userSelect: 'none',
   },
   totals: {
     fontSize: 13,
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
     fontVariantNumeric: 'tabular-nums',
   },
   targetBar: {
@@ -309,11 +314,11 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
     marginBottom: 10,
     paddingBottom: 10,
-    borderBottom: '1px solid #f1f5f9',
+    borderBottom: '1px solid var(--ms-border-light)',
   },
   targetLabel: {
     fontSize: 12,
-    color: '#64748b',
+    color: 'var(--ms-text-muted)',
   },
   targetBtn: {
     fontSize: 12,
@@ -322,7 +327,7 @@ const styles: Record<string, CSSProperties> = {
   list: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
+    gap: 10,
     // Большая отгрузка = много позиций в плане: список не должен вытеснять таблицу
     // кодов и упираться в низ экрана без прокрутки. Ограничиваем высоту и скроллим
     // сам список позиций.
@@ -342,7 +347,7 @@ const styles: Record<string, CSSProperties> = {
     gap: 8,
   },
   name: {
-    color: '#1f2937',
+    color: 'var(--ms-text)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -352,14 +357,14 @@ const styles: Record<string, CSSProperties> = {
   barcodeTag: {
     display: 'inline-block',
     marginLeft: 6,
-    padding: '0 6px',
+    padding: '0 7px',
     fontSize: 10,
     fontWeight: 600,
     lineHeight: '16px',
-    color: '#3730a3',
-    background: '#eef2ff',
-    border: '1px solid #c7d2fe',
-    borderRadius: 4,
+    color: 'var(--st-info-fg)',
+    background: 'var(--st-info-bg)',
+    border: '1px solid var(--st-info-bd)',
+    borderRadius: 'var(--r-pill)',
     verticalAlign: 'middle',
   },
   count: {
@@ -370,32 +375,33 @@ const styles: Record<string, CSSProperties> = {
   },
   barWrap: {
     height: 6,
-    background: '#f3f4f6',
-    borderRadius: 3,
+    background: 'var(--surface-2)',
+    borderRadius: 'var(--r-pill)',
     overflow: 'hidden',
   },
   bar: {
     height: '100%',
-    transition: 'width 0.2s ease, background 0.2s ease',
+    borderRadius: 'var(--r-pill)',
+    transition: 'width 0.25s ease, background 0.25s ease',
   },
   rowOver: {
     fontSize: 11,
-    color: '#b45309',
+    color: 'var(--st-warn-fg)',
     marginTop: 4,
   },
   overflowNote: {
     marginTop: 10,
     paddingTop: 10,
-    borderTop: '1px dashed #fecaca',
+    borderTop: '1px dashed var(--st-err-bd)',
     fontSize: 12,
-    color: '#b91c1c',
+    color: 'var(--st-err-fg)',
   },
   offPlanWrap: {
     marginTop: 10,
-    padding: 10,
-    background: '#fef2f2',
-    border: '1px solid #fecaca',
-    borderRadius: 6,
+    padding: 12,
+    background: 'var(--st-err-bg)',
+    border: '1px solid var(--st-err-bd)',
+    borderRadius: 'var(--r-md)',
     display: 'flex',
     flexDirection: 'column',
     gap: 8,
@@ -403,7 +409,7 @@ const styles: Record<string, CSSProperties> = {
   offPlanHead: {
     fontSize: 12,
     fontWeight: 600,
-    color: '#b91c1c',
+    color: 'var(--st-err-fg)',
   },
   offPlanRow: {
     display: 'flex',
@@ -413,7 +419,7 @@ const styles: Record<string, CSSProperties> = {
   },
   offPlanName: {
     fontSize: 12,
-    color: '#1f2937',
+    color: 'var(--ms-text)',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -421,14 +427,14 @@ const styles: Record<string, CSSProperties> = {
     flex: 1,
   },
   offPlanCount: {
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
     fontVariantNumeric: 'tabular-nums',
   },
   offPlanDel: {
     fontSize: 12,
     padding: '4px 10px',
-    color: '#b91c1c',
-    borderColor: '#fca5a5',
+    color: 'var(--st-err-fg)',
+    borderColor: 'var(--st-err-bd)',
     flexShrink: 0,
   },
 }

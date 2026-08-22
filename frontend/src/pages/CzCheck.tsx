@@ -116,16 +116,9 @@ export function CzCheckPage() {
       </header>
 
       {needCz && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 12px',
-            padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca',
-            borderRadius: 8, color: '#b91c1c', fontSize: 13,
-          }}
-        >
-          <span style={{ flex: 1 }}>Войдите в Честный Знак — без авторизации проверка невозможна.</span>
-          <a href="/settings" className="button" style={{ whiteSpace: 'nowrap' }}>Войти в ЧЗ</a>
+        <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
+          <span className="alert__spacer">Войдите в Честный Знак — без авторизации проверка невозможна.</span>
+          <a href="/settings" className="button button--sm" style={{ whiteSpace: 'nowrap' }}>Войти в ЧЗ</a>
         </div>
       )}
 
@@ -156,7 +149,7 @@ export function CzCheckPage() {
             </button>
           )}
           {error && !needCz && (
-            <span style={{ color: '#b91c1c', fontSize: 12 }}>{error}</span>
+            <span style={{ color: 'var(--st-err-fg)', fontSize: 12 }}>{error}</span>
           )}
         </div>
       </div>
@@ -198,7 +191,7 @@ export function CzCheckPage() {
                     <td>
                       {i.product_name || <span className="text-muted">—</span>}
                       {pkg && (
-                        <div style={{ fontSize: 10, color: '#2563eb', marginTop: 2 }}>{pkg}</div>
+                        <div style={{ fontSize: 10, color: 'var(--brand)', marginTop: 2 }}>{pkg}</div>
                       )}
                     </td>
                     <td>

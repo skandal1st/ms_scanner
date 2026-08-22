@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Icon } from './components/Icon'
+import type { IconName } from './components/Icon'
 import { ShipmentPage } from './pages/Shipment'
 import { AcceptancePage } from './pages/Acceptance'
 import { WriteoffPage } from './pages/Writeoff'
@@ -19,6 +21,14 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children
 }
 
+const NAV_ITEMS: { to: string; label: string; icon: IconName }[] = [
+  { to: '/shipment', label: 'Отгрузка', icon: 'shipment' },
+  { to: '/acceptance', label: 'Приёмка', icon: 'acceptance' },
+  { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
+  { to: '/check', label: 'Проверка', icon: 'check' },
+  { to: '/settings', label: 'Настройки', icon: 'settings' },
+]
+
 function Layout({ children }: { children: React.ReactNode }) {
   const handleLogout = () => {
     localStorage.removeItem('access_token')
@@ -30,23 +40,27 @@ function Layout({ children }: { children: React.ReactNode }) {
   return (
     <>
       <nav className="app-nav" aria-label="Навигация">
-        <NavLink to="/shipment" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Отгрузка
-        </NavLink>
-        <NavLink to="/acceptance" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Приёмка
-        </NavLink>
-        <NavLink to="/writeoff" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Списание
-        </NavLink>
-        <NavLink to="/check" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Проверка
-        </NavLink>
-        <NavLink to="/settings" className={({ isActive }) => (isActive ? 'active' : '')}>
-          Настройки
-        </NavLink>
-        <span className="app-nav__sep" />
-        <button type="button" onClick={handleLogout}>Выйти</button>
+        <span className="app-nav__brand">
+          <span className="app-nav__logo">
+            <Icon name="scan" size={18} />
+          </span>
+          Скандата
+        </span>
+        {NAV_ITEMS.map((item) => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) => (isActive ? 'active' : '')}
+          >
+            <Icon name={item.icon} size={17} className="app-nav__icon" />
+            {item.label}
+          </NavLink>
+        ))}
+        <span className="app-nav__spacer" />
+        <button type="button" onClick={handleLogout}>
+          <Icon name="logout" size={16} className="app-nav__icon" />
+          Выйти
+        </button>
       </nav>
       {children}
     </>

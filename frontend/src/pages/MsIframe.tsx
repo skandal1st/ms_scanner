@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
+import { Icon } from '../components/Icon'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 interface LaunchPayload {
@@ -81,7 +82,7 @@ export function MsIframePage() {
     <div style={styles.page}>
       <header style={styles.header}>
         <div>
-          <div style={styles.brand}>МС-Сканер</div>
+          <div style={styles.brand}>Скандата — сканер маркировки</div>
           {employee_name && (
             <div style={styles.muted}>
               {employee_name}
@@ -91,7 +92,7 @@ export function MsIframePage() {
         </div>
         <div style={styles.ctaGroup}>
           <button type="button" style={styles.cta} onClick={openShipment}>
-            Начать отгрузку
+            <Icon name="shipment" size={17} /> Начать отгрузку
           </button>
         </div>
       </header>
@@ -112,29 +113,30 @@ const styles: Record<string, CSSProperties> = {
     minHeight: '100vh',
     display: 'flex',
     flexDirection: 'column',
-    fontFamily: 'system-ui, -apple-system, sans-serif',
-    background: '#f5f6f8',
+    fontFamily: 'var(--ms-font)',
+    background: 'var(--ms-bg-alt)',
   },
   header: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 16,
-    padding: '14px 20px',
-    background: '#fff',
-    borderBottom: '1px solid #e5e7eb',
+    padding: '16px 20px',
+    background: 'var(--ms-bg)',
+    borderBottom: '1px solid var(--ms-border-light)',
     position: 'sticky',
     top: 0,
     zIndex: 10,
   },
   brand: {
-    fontSize: 16,
-    fontWeight: 600,
-    color: '#1f2937',
+    fontSize: 17,
+    fontWeight: 700,
+    color: 'var(--ms-text)',
+    letterSpacing: '-0.01em',
   },
   muted: {
     fontSize: 12,
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
     marginTop: 2,
   },
   ctaGroup: {
@@ -144,15 +146,19 @@ const styles: Record<string, CSSProperties> = {
     justifyContent: 'flex-end',
   },
   cta: {
-    background: '#16a34a',
+    background: 'var(--brand)',
     color: '#fff',
     border: 'none',
-    borderRadius: 8,
-    padding: '10px 18px',
+    borderRadius: 'var(--r-md)',
+    padding: '11px 20px',
     fontSize: 14,
-    fontWeight: 500,
+    fontWeight: 600,
     cursor: 'pointer',
     whiteSpace: 'nowrap',
+    boxShadow: 'var(--shadow-1)',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 8,
   },
   main: {
     flex: 1,
@@ -161,7 +167,7 @@ const styles: Record<string, CSSProperties> = {
   footer: {
     padding: '10px 20px 14px',
     fontSize: 11,
-    color: '#9ca3af',
+    color: 'var(--ms-text-subtle)',
     textAlign: 'center',
   },
   centered: {
@@ -170,13 +176,13 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
-    fontFamily: 'system-ui, -apple-system, sans-serif',
+    fontFamily: 'var(--ms-font)',
   },
   errorBox: {
-    color: '#b91c1c',
-    background: '#fef2f2',
-    border: '1px solid #fecaca',
-    borderRadius: 8,
+    color: 'var(--st-err-fg)',
+    background: 'var(--st-err-bg)',
+    border: '1px solid var(--st-err-bd)',
+    borderRadius: 'var(--r-md)',
     padding: 16,
     maxWidth: 480,
     fontSize: 13,

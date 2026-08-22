@@ -277,10 +277,10 @@ function UnknownGroupRow({
 const styles: Record<string, CSSProperties> = {
   wrap: {
     marginBottom: 12,
-    padding: 12,
-    background: '#fff7ed',
-    border: '1px solid #fdba74',
-    borderRadius: 8,
+    padding: 14,
+    background: 'var(--st-warn-bg)',
+    border: '1px solid var(--st-warn-bd)',
+    borderRadius: 'var(--r-md)',
   },
   head: {
     marginBottom: 10,
@@ -291,17 +291,17 @@ const styles: Record<string, CSSProperties> = {
   title: {
     fontSize: 13,
     fontWeight: 600,
-    color: '#9a3412',
+    color: 'var(--st-warn-fg)',
   },
   subtitle: {
     fontSize: 11,
-    color: '#9a3412',
+    color: 'var(--st-warn-fg)',
     opacity: 0.85,
   },
   row: {
-    background: '#fff',
-    border: '1px solid #fed7aa',
-    borderRadius: 6,
+    background: 'var(--ms-bg)',
+    border: '1px solid var(--st-warn-bd)',
+    borderRadius: 'var(--r-sm)',
     padding: 10,
     marginBottom: 8,
     display: 'flex',
@@ -316,38 +316,38 @@ const styles: Record<string, CSSProperties> = {
   },
   gtin: {
     fontSize: 12,
-    fontFamily: 'monospace',
-    color: '#1f2937',
+    fontFamily: 'var(--ms-font-mono)',
+    color: 'var(--ms-text)',
   },
   count: {
     fontSize: 11,
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
     fontVariantNumeric: 'tabular-nums',
   },
   suggestedName: {
     fontSize: 11,
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
   },
   suggestBox: {
     display: 'flex',
     alignItems: 'center',
     gap: 8,
     padding: 8,
-    borderRadius: 6,
+    borderRadius: 'var(--r-sm)',
     border: '1px solid',
   },
   suggestHigh: {
-    background: '#f0fdf4',
-    borderColor: '#86efac',
+    background: 'var(--st-ok-bg)',
+    borderColor: 'var(--st-ok-bd)',
   },
   suggestLow: {
-    background: '#fffbeb',
-    borderColor: '#fde68a',
+    background: 'var(--st-warn-bg)',
+    borderColor: 'var(--st-warn-bd)',
   },
   suggestBadge: {
     fontSize: 10,
     fontWeight: 600,
-    color: '#374151',
+    color: 'var(--ms-text-muted)',
     marginBottom: 2,
   },
   searchRow: {
@@ -358,14 +358,14 @@ const styles: Record<string, CSSProperties> = {
   input: {
     flex: 1,
     padding: '8px 10px',
-    border: '1px solid #cbd5e1',
-    borderRadius: 6,
+    border: '1px solid var(--ms-input-border)',
+    borderRadius: 'var(--r-sm)',
     fontSize: 13,
     minWidth: 0,
   },
   muted: {
     fontSize: 11,
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
   },
   results: {
     listStyle: 'none',
@@ -383,10 +383,10 @@ const styles: Record<string, CSSProperties> = {
   resultBtn: {
     width: '100%',
     textAlign: 'left',
-    padding: '6px 8px',
-    border: '1px solid #e5e7eb',
-    background: '#f9fafb',
-    borderRadius: 4,
+    padding: '7px 9px',
+    border: '1px solid var(--ms-border-light)',
+    background: 'var(--ms-bg)',
+    borderRadius: 'var(--r-sm)',
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
@@ -394,11 +394,11 @@ const styles: Record<string, CSSProperties> = {
     fontSize: 12,
   },
   resultName: {
-    color: '#1f2937',
+    color: 'var(--ms-text)',
     fontWeight: 500,
   },
   resultMeta: {
-    color: '#6b7280',
+    color: 'var(--ms-text-muted)',
     fontSize: 11,
     display: 'flex',
     gap: 10,
@@ -406,7 +406,7 @@ const styles: Record<string, CSSProperties> = {
   },
   empty: {
     fontSize: 12,
-    color: '#6b7280',
-    fontStyle: 'italic',
+    color: 'var(--ms-text-muted)',
+    fontStyle: 'normal',
   },
 }

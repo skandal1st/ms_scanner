@@ -172,17 +172,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
               </button>
             ))}
             {createError && (
-              <div
-                style={{
-                  marginTop: 8,
-                  padding: 8,
-                  background: '#fef2f2',
-                  border: '1px solid #fecaca',
-                  borderRadius: 6,
-                  color: '#b91c1c',
-                  fontSize: 12,
-                }}
-              >
+              <div className="alert alert--error" style={{ marginTop: 8 }}>
                 {createError}
               </div>
             )}
@@ -227,18 +217,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
             {createMutation.isPending ? 'Создаю...' : 'Создать'}
           </button>
           {createError && (
-            <div
-              style={{
-                padding: 8,
-                background: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: 6,
-                color: '#b91c1c',
-                fontSize: 12,
-              }}
-            >
-              {createError}
-            </div>
+            <div className="alert alert--error">{createError}</div>
           )}
         </div>
       )}

@@ -6,6 +6,7 @@ import { useScannerMode } from '../lib/scannerMode'
 import { useScanStore } from '../store/scanStore'
 import { CameraScanModal } from './CameraScanModal'
 import { CodeSearchModal } from './CodeSearchModal'
+import { Icon } from './Icon'
 
 interface Props {
   documentId: string | null
@@ -104,7 +105,7 @@ export function ScanInput({ documentId }: Props) {
   }
 
   const inputStyle = deleteMode
-    ? { borderColor: '#dc2626', background: '#fef2f2' }
+    ? { borderColor: 'var(--st-err-fg)', background: 'var(--st-err-bg)' }
     : undefined
 
   return (
@@ -119,14 +120,14 @@ export function ScanInput({ documentId }: Props) {
               flexDirection: 'column',
               alignItems: 'flex-start',
               gap: 6,
-              ...(deleteMode ? { border: '2px solid #dc2626', background: '#fef2f2', padding: 6, borderRadius: 6 } : {}),
+              ...(deleteMode ? { border: '2px solid #dc2626', background: 'var(--st-err-bg)', padding: 6, borderRadius: 6 } : {}),
             }}
           >
             {serial.connected ? (
-              <span className="badge badge--ok">🔌 COM-порт подключён</span>
+              <span className="badge badge--ok"><span className="badge__dot" /> COM-порт подключён</span>
             ) : (
               <span className="badge badge--warn">
-                ⚠ COM-порт не подключён — настройте в разделе «Настройки»
+                <span className="badge__dot" /> COM-порт не подключён — настройте в разделе «Настройки»
               </span>
             )}
             {serial.error && (
@@ -157,7 +158,7 @@ export function ScanInput({ documentId }: Props) {
           onClick={() => setDeleteMode(!deleteMode)}
           style={
             deleteMode
-              ? { background: '#dc2626', borderColor: '#dc2626', color: '#fff' }
+              ? { background: 'var(--st-err-fg)', borderColor: 'var(--st-err-fg)', color: '#fff' }
               : undefined
           }
           title={
@@ -166,7 +167,11 @@ export function ScanInput({ documentId }: Props) {
               : 'Включить режим: следующий отсканированный код будет удалён из списка'
           }
         >
-          {deleteMode ? '✕ Удаление' : '🗑 Удалить'}
+          {deleteMode ? (
+            <><Icon name="close" size={15} /> Удаление</>
+          ) : (
+            <><Icon name="trash" size={15} /> Удалить</>
+          )}
         </button>
         <button
           type="button"

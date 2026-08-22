@@ -7,6 +7,7 @@ import { ProgressTable } from '../components/ProgressTable'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { BulkMarksModal } from '../components/BulkMarksModal'
+import { Icon } from '../components/Icon'
 import { useScanStore, ownerCheckState } from '../store/scanStore'
 import { useLoadDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
@@ -128,11 +129,11 @@ export function ShipmentPage() {
           {document && (
             <button
               type="button"
-              className="button"
+              className="button button--sm"
               onClick={handleDetach}
               title="Отвязаться и выбрать другую отгрузку (сканы остаются в документе)"
             >
-              ✕ Отвязаться
+              <Icon name="close" size={14} /> Отвязаться
             </button>
           )}
         </div>
@@ -142,63 +143,35 @@ export function ShipmentPage() {
       </header>
 
       {czTokenExpired && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            margin: '0 0 12px',
-            padding: '10px 14px',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
-            color: '#b91c1c',
-            fontSize: 13,
-          }}
-        >
-          <span style={{ flex: 1 }}>
+        <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
+          <span className="alert__spacer">
             Войдите в Честный Знак — без авторизации коды не распознаются (блоки и
             короба не разворачиваются).
           </span>
-          <a href="/settings" className="button" style={{ whiteSpace: 'nowrap' }}>
+          <a href="/settings" className="button button--sm" style={{ whiteSpace: 'nowrap' }}>
             Войти в ЧЗ
           </a>
           <button
             type="button"
-            className="button"
+            className="button button--sm"
             onClick={() => setCzTokenExpired(false)}
             aria-label="Скрыть"
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}
 
       {sendError && (
-        <div
-          role="alert"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-            margin: '0 0 12px',
-            padding: '10px 14px',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
-            color: '#b91c1c',
-            fontSize: 13,
-          }}
-        >
-          <span style={{ flex: 1 }}>{sendError}</span>
+        <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
+          <span className="alert__spacer">{sendError}</span>
           <button
             type="button"
-            className="button"
+            className="button button--sm"
             onClick={() => setSendError(null)}
             aria-label="Скрыть"
           >
-            ✕
+            <Icon name="close" size={14} />
           </button>
         </div>
       )}
@@ -211,11 +184,11 @@ export function ShipmentPage() {
           <button
             type="button"
             className="button"
-            style={{ marginTop: 8, width: '100%' }}
+            style={{ marginTop: 8, width: '100%', justifyContent: 'center' }}
             disabled={!document}
             onClick={() => setBulkOpen(true)}
           >
-            📋 Загрузить список марок
+            <Icon name="upload" size={16} /> Загрузить список марок
           </button>
           <StatsPanel />
         </div>
@@ -257,12 +230,18 @@ export function ShipmentPage() {
           onClick={handleExportXlsx}
           title="Выгрузить структуру заказа (наименование + марка) в XLSX"
         >
-          {exporting ? 'Выгрузка…' : '⬇ Выгрузить в XLSX'}
+          {exporting ? (
+            'Выгрузка…'
+          ) : (
+            <>
+              <Icon name="upload" size={15} style={{ transform: 'rotate(180deg)' }} /> Выгрузить в XLSX
+            </>
+          )}
         </button>
         <div className="acc-footer__spacer" />
         {withdrawnCount > 0 && (
           <span
-            style={{ marginRight: 12, fontSize: 12, color: '#b30000', whiteSpace: 'nowrap', fontWeight: 600 }}
+            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-err-fg)', whiteSpace: 'nowrap', fontWeight: 600 }}
             title="Эти марки выведены из оборота / заблокированы. Отгрузку это не блокирует, но требует подтверждения."
           >
             ⛔ {withdrawnCount} выведены из оборота
@@ -270,7 +249,7 @@ export function ShipmentPage() {
         )}
         {(ownerWarnings.mismatch > 0 || ownerWarnings.unknown > 0) && (
           <span
-            style={{ marginRight: 12, fontSize: 12, color: '#8a3008', whiteSpace: 'nowrap' }}
+            style={{ marginRight: 12, fontSize: 12, color: 'var(--st-warn-fg)', whiteSpace: 'nowrap' }}
             title="Владельца этих марок стоит проверить. Отгрузку это не блокирует."
           >
             ⚠{' '}
@@ -317,25 +296,13 @@ export function ShipmentPage() {
       />
 
       {closingTab && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(255,255,255,0.92)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            fontFamily: 'system-ui, -apple-system, sans-serif',
-          }}
-        >
-          <div style={{ textAlign: 'center', color: '#1f2937' }}>
-            <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 6 }}>
-              Готово ✓
+        <div className="done-overlay">
+          <div className="done-overlay__card">
+            <div className="done-overlay__check">
+              <Icon name="check" size={32} />
             </div>
-            <div style={{ fontSize: 13, color: '#6b7280' }}>
-              Возвращаемся в МойСклад…
-            </div>
+            <div className="done-overlay__title">Отгружено</div>
+            <div className="done-overlay__sub">Возвращаемся в МойСклад…</div>
           </div>
         </div>
       )}
@@ -369,18 +336,7 @@ export function ShipmentPage() {
                 </div>
               </div>
               {withdrawnCount > 0 && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 10,
-                    background: '#fde8e8',
-                    border: '1px solid #f5b3b3',
-                    borderRadius: 6,
-                    fontSize: 12,
-                    color: '#b30000',
-                    fontWeight: 600,
-                  }}
-                >
+                <div className="alert alert--error" style={{ marginTop: 10, fontWeight: 600 }}>
                   Внимание: {withdrawnCount}{' '}
                   {withdrawnCount === 1 ? 'марка выведена' : 'марок выведены'} из оборота
                   (заблокированы). Всё равно отгрузить?
@@ -394,34 +350,13 @@ export function ShipmentPage() {
                 </p>
               )}
               {progress.hasPlan && progress.total.scanned < progress.total.expected && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 10,
-                    background: '#fffbeb',
-                    border: '1px solid #fde68a',
-                    borderRadius: 6,
-                    fontSize: 12,
-                    color: '#92400e',
-                  }}
-                >
+                <div className="alert alert--warn" style={{ marginTop: 10 }}>
                   Сборка не завершена: {progress.total.scanned} из {progress.total.expected}.
                   Будет отгружена только собранная часть.
                 </div>
               )}
               {progress.offPlanRows.length > 0 && (
-                <div
-                  style={{
-                    marginTop: 10,
-                    padding: 10,
-                    background: '#fef2f2',
-                    border: '1px solid #fecaca',
-                    borderRadius: 6,
-                    fontSize: 12,
-                    color: '#b91c1c',
-                    fontWeight: 600,
-                  }}
-                >
+                <div className="alert alert--error" style={{ marginTop: 10, fontWeight: 600 }}>
                   Есть {progress.offPlanRows.length}{' '}
                   {progress.offPlanRows.length === 1 ? 'позиция' : 'позиции(й)'} не из плана —
                   они тоже уйдут в отгрузку. Удалите их в блоке «Не входят в план», если это ошибка.
@@ -469,13 +404,7 @@ export function ShipmentPage() {
               </button>
               <button
                 type="button"
-                className="button"
-                style={{
-                  color: '#ffffff',
-                  border: '1px solid var(--ms-error)',
-                  backgroundImage: 'none',
-                  background: 'var(--ms-error)',
-                }}
+                className="button button--danger"
                 disabled={clearMutation.isPending}
                 onClick={async () => {
                   if (!document) return

@@ -53,29 +53,30 @@ export function LaunchPage() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontFamily: 'var(--ms-font)',
+        background: 'var(--ms-bg-alt)',
         padding: 24,
       }}
     >
       {error ? (
         <div
           style={{
-            color: '#b91c1c',
-            background: '#fef2f2',
-            border: '1px solid #fecaca',
-            borderRadius: 8,
+            color: 'var(--st-err-fg)',
+            background: 'var(--st-err-bg)',
+            border: '1px solid var(--st-err-bd)',
+            borderRadius: 'var(--r-md)',
             padding: 16,
             maxWidth: 420,
           }}
         >
-          <div style={{ fontWeight: 500, marginBottom: 6 }}>Не удалось открыть приложение</div>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Не удалось открыть приложение</div>
           <div style={{ fontSize: 13 }}>{error}</div>
-          <div style={{ fontSize: 12, color: '#6b7280', marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--ms-text-muted)', marginTop: 12 }}>
             Вернитесь в МойСклад и снова откройте приложение из карточки решения.
           </div>
         </div>
       ) : (
-        <div style={{ color: '#6b7280' }}>Открываем отгрузку...</div>
+        <div style={{ color: 'var(--ms-text-muted)' }}>Открываем отгрузку...</div>
       )}
     </div>
   )
