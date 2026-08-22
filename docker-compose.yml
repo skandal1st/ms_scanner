@@ -56,7 +56,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=4 -B -s /tmp/celerybeat-schedule
     volumes:
       - ./backend:/app
     environment:

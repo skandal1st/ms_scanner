@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 from app.core.config import settings
 
 celery_app = Celery(
@@ -20,3 +21,11 @@ celery_app.conf.update(
     task_default_retry_delay=5,
     task_max_retries=3,
 )
+
+# Периодические задачи (Celery Beat запускается встроенно в воркере: `-B`).
+celery_app.conf.beat_schedule = {
+    "cleanup-stale-processing": {
+        "task": "cleanup_stale_processing",
+        "schedule": crontab(minute=0),  # раз в час, в начале часа
+    },
+}

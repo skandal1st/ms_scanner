@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.worker.celery_app import celery_app
@@ -667,6 +667,53 @@ def process_document_task(document_id: str, user_id: str):
 @celery_app.task(name="accept_document")
 def accept_document_task(document_id: str, user_id: str):
     process_document_task(document_id, user_id)
+
+
+# Сколько документ может провисеть в processing до авто-сброса.
+STALE_PROCESSING_HOURS = 24
+
+
+@celery_app.task(name="cleanup_stale_processing")
+def cleanup_stale_processing_task():
+    """Сбросить в draft документы, зависшие в processing дольше суток.
+
+    Отправка в МС могла не завершиться (краш воркера, ранний выход по истёкшему
+    токену ЧЗ и т.п.) — «Обрабатывается» не должно висеть вечно. Возвращаем в
+    draft, чтобы кладовщик мог повторить. Запускается Celery Beat раз в час.
+    """
+    return _run(_cleanup_stale_processing_async())
+
+
+async def _cleanup_stale_processing_async() -> int:
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Document, DocumentStatus
+    from sqlalchemy import select
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_PROCESSING_HOURS)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(Document).where(
+                Document.status == DocumentStatus.processing,
+                Document.updated_at < cutoff,
+            )
+        )
+        docs = result.scalars().all()
+        for doc in docs:
+            doc.status = DocumentStatus.draft
+            # Не затираем информативную причину (напр. истёк токен ЧЗ), если она есть.
+            if not doc.error_message:
+                doc.error_message = (
+                    "Отправка в МойСклад не завершилась за 24 ч — документ сброшен "
+                    "в черновик. Проверьте и повторите отправку."
+                )
+        if docs:
+            await db.commit()
+        logger.info(
+            "cleanup_stale_processing.done",
+            reset=len(docs),
+            cutoff_hours=STALE_PROCESSING_HOURS,
+        )
+        return len(docs)
 
 
 async def _process_document_async(document_id: str, user_id: str):

@@ -65,7 +65,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=2 -B -s /tmp/celerybeat-schedule
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
