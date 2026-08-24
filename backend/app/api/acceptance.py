@@ -82,6 +82,9 @@ class ImportPositionResult(BaseModel):
     product_name: Optional[str] = None
     matched: bool = False
     line_number: Optional[int] = None
+    # Цена за единицу (ЦенаТов, руб.) и ставка НДС (НалСт, %) из УПД — для предпросмотра.
+    price: Optional[float] = None
+    vat: Optional[int] = None
 
 
 class ImportUpdResponse(BaseModel):
@@ -492,6 +495,8 @@ async def import_upd(
                     product_name=None,
                     matched=False,
                     line_number=pos.line_number,
+                    price=pos.price,
+                    vat=pos.vat,
                 )
             )
             continue
@@ -584,6 +589,8 @@ async def import_upd(
                     product_name=product_name,
                     matched=matched,
                     line_number=pos.line_number,
+                    price=pos.price,
+                    vat=pos.vat,
                 )
             )
 

@@ -271,6 +271,23 @@ export function AcceptancePage() {
         render: (p) => (p.quantity ?? '—'),
       },
       {
+        key: 'price',
+        header: 'Цена',
+        width: 110,
+        minWidth: 80,
+        render: (p) =>
+          p.price != null ? (
+            <>
+              {rub(p.price)} ₽
+              {p.vat != null && (
+                <span className="text-muted"> · НДС {p.vat}%</span>
+              )}
+            </>
+          ) : (
+            '—'
+          ),
+      },
+      {
         key: 'codes',
         header: 'Марок',
         width: 90,
