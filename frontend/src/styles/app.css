@@ -148,6 +148,11 @@ html, body, #root { height: 100%; }
   justify-content: center;
   color: #fff;
 }
+.app-nav__logo-img {
+  height: 26px;
+  width: auto;
+  display: block;
+}
 .app-nav__spacer { flex: 1; }
 .app-nav a, .app-nav button {
   font-family: var(--ms-font);

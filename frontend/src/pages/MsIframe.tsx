@@ -82,7 +82,7 @@ export function MsIframePage() {
     <div style={styles.page}>
       <header style={styles.header}>
         <div>
-          <div style={styles.brand}>Скандата — сканер маркировки</div>
+          <img src="/logo.svg" alt="Скандата" style={styles.brandLogo} />
           {employee_name && (
             <div style={styles.muted}>
               {employee_name}
@@ -133,6 +133,11 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 700,
     color: 'var(--ms-text)',
     letterSpacing: '-0.01em',
+  },
+  brandLogo: {
+    height: 30,
+    width: 'auto',
+    display: 'block',
   },
   muted: {
     fontSize: 12,

@@ -41,10 +41,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     <>
       <nav className="app-nav" aria-label="Навигация">
         <span className="app-nav__brand">
-          <span className="app-nav__logo">
-            <Icon name="scan" size={18} />
-          </span>
-          Скандата
+          <img src="/logo-light.svg" alt="Скандата" className="app-nav__logo-img" />
         </span>
         {NAV_ITEMS.map((item) => (
           <NavLink
