@@ -33,7 +33,8 @@ class ParsedPosition:
     codes: list[str] = field(default_factory=list)
     # Номера упаковок (НомУпак/ИдентТрансУпак): SSCC/агрегаты/короба — храним как есть.
     packages: list[str] = field(default_factory=list)
-    # Цена за единицу (ЦенаТов, руб.) и ставка НДС (НалСт, напр. 20 из «20%»).
+    # Цена за единицу С УЧЁТОМ НДС (руб.) и ставка НДС (НалСт, напр. 20 из «20%»).
+    # ЦенаТов в УПД — без НДС, поэтому цену считаем из СтТовУчНал/КолТов (см. _unit_price_with_vat).
     price: Optional[float] = None
     vat: Optional[int] = None
     # Номер строки позиции в таблице УПД (НомСтр из <СведТов>).
@@ -157,6 +158,27 @@ def _vat_rate(raw: Optional[str]) -> Optional[int]:
         return None
 
 
+def _unit_price_with_vat(tov: ET.Element) -> Optional[float]:
+    """Цена за единицу С НДС (руб.).
+
+    В УПД ЦенаТов — цена без НДС, а нам для приёмки в МС нужна цена с НДС.
+    Считаем из стоимости строки с учётом налога: СтТовУчНал / КолТов.
+    Фолбэки: ЦенаТов * (1 + НалСт/100), затем сама ЦенаТов (если ставки нет).
+    """
+    qty = _quantity(tov.get("КолТов"))
+    total_with_vat = _quantity(tov.get("СтТовУчНал"))
+    if total_with_vat is not None and qty:
+        return round(total_with_vat / qty, 2)
+
+    base = _quantity(tov.get("ЦенаТов"))
+    if base is None:
+        return None
+    vat = _vat_rate(tov.get("НалСт"))
+    if vat:
+        return round(base * (1 + vat / 100), 2)
+    return base
+
+
 def _info_gtin(tov: ET.Element) -> Optional[str]:
     """GTIN из ``<ИнфПолФХЖ2 Идентиф="GTIN" Значен="…"/>`` (прямой потомок СведТов)."""
     for el in _iter_by_localname(tov, "ИнфПолФХЖ2"):
@@ -251,7 +273,7 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
                 quantity=quantity,
                 codes=codes,
                 packages=packages,
-                price=_quantity(tov.get("ЦенаТов")),
+                price=_unit_price_with_vat(tov),
                 vat=_vat_rate(tov.get("НалСт")),
                 line_number=_int(tov.get("НомСтр")),
             )

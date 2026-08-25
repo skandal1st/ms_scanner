@@ -82,7 +82,7 @@ class ImportPositionResult(BaseModel):
     product_name: Optional[str] = None
     matched: bool = False
     line_number: Optional[int] = None
-    # Цена за единицу (ЦенаТов, руб.) и ставка НДС (НалСт, %) из УПД — для предпросмотра.
+    # Цена за единицу С НДС (руб.) и ставка НДС (НалСт, %) из УПД — для предпросмотра.
     price: Optional[float] = None
     vat: Optional[int] = None
 

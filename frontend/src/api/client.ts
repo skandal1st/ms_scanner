@@ -253,7 +253,7 @@ export interface ImportPositionResult {
   matched: boolean
   /** Номер строки позиции в таблице УПД (НомСтр). */
   line_number: number | null
-  /** Цена за единицу (ЦенаТов, руб.) из УПД. */
+  /** Цена за единицу С НДС (руб.) из УПД. */
   price: number | null
   /** Ставка НДС (НалСт, %) из УПД. */
   vat: number | null
