@@ -577,6 +577,7 @@ async def _verify_document_async(document_id: str, user_id: str):
     import asyncio
     import redis.asyncio as aioredis
 
+    from app.core.config import settings
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus
     from app.services.chestnyznak import ChestnyZnakService, CisCheck
