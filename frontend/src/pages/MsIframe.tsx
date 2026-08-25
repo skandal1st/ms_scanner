@@ -135,7 +135,7 @@ const styles: Record<string, CSSProperties> = {
     letterSpacing: '-0.01em',
   },
   brandLogo: {
-    height: 30,
+    height: 40,
     width: 'auto',
     display: 'block',
   },
