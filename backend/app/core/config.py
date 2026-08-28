@@ -1,10 +1,18 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import computed_field
+from pydantic import computed_field, model_validator
 from typing import List, Literal
+
+
+# Дефолтное (небезопасное) значение SECRET_KEY — в проде запрещено.
+_DEFAULT_SECRET_KEY = "dev-secret-key-change-in-production"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Окружение: dev (по умолчанию) | production. В production включается проверка
+    # секретов (см. _guard_prod_secrets) — приложение не стартует со слабыми ключами.
+    APP_ENV: str = "dev"
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/ms_scaner"
@@ -67,6 +75,32 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> List[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",")]
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() in ("prod", "production")
+
+    @model_validator(mode="after")
+    def _guard_prod_secrets(self) -> "Settings":
+        """В production запрещаем старт со слабыми/пустыми ключами шифрования.
+
+        Без этого при пустом ENCRYPTION_KEY все токены МС/ЧЗ шифруются ключом,
+        детерминированно выведенным из SECRET_KEY (см. security._get_fernet) — то
+        есть фактически восстановимым. Падаем на старте, а не молча ослабляем крипту.
+        """
+        if self.is_production:
+            problems: List[str] = []
+            if not self.SECRET_KEY or self.SECRET_KEY == _DEFAULT_SECRET_KEY:
+                problems.append("SECRET_KEY не задан или равен дефолтному")
+            if not self.ENCRYPTION_KEY:
+                problems.append("ENCRYPTION_KEY не задан (обязателен в production)")
+            if problems:
+                raise ValueError(
+                    "Небезопасная конфигурация при APP_ENV=production: "
+                    + "; ".join(problems)
+                    + ". Задайте сильные SECRET_KEY и ENCRYPTION_KEY в .env."
+                )
+        return self
 
 
 settings = Settings()

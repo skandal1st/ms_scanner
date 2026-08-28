@@ -11,10 +11,44 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// Единый refresh на параллельные 401: чтобы пачка одновременных запросов не
+// дёргала /auth/refresh многократно. Раздаётся один промис на всех.
+let refreshPromise: Promise<string | null> | null = null
+
+async function tryRefresh(): Promise<string | null> {
+  const rt = localStorage.getItem('refresh_token')
+  if (!rt) return null
+  try {
+    // Прямой axios (не `api`) — минуем этот же интерцептор, без рекурсии на 401.
+    const resp = await axios.post<{ access_token: string; refresh_token: string }>(
+      '/api/auth/refresh',
+      { refresh_token: rt },
+    )
+    localStorage.setItem('access_token', resp.data.access_token)
+    if (resp.data.refresh_token) {
+      localStorage.setItem('refresh_token', resp.data.refresh_token)
+    }
+    return resp.data.access_token
+  } catch {
+    return null
+  }
+}
+
 api.interceptors.response.use(
   (r) => r,
-  (error) => {
-    if (error.response?.status === 401) {
+  async (error) => {
+    const original = error.config
+    if (error.response?.status === 401 && original && !original._retry) {
+      original._retry = true
+      refreshPromise = refreshPromise ?? tryRefresh()
+      const newToken = await refreshPromise
+      refreshPromise = null
+      if (newToken) {
+        original.headers = original.headers ?? {}
+        original.headers.Authorization = `Bearer ${newToken}`
+        return api(original)
+      }
+      // Refresh не удался — сессия действительно закончилась.
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')
       localStorage.removeItem('user_id')
@@ -25,13 +59,6 @@ api.interceptors.response.use(
 )
 
 export default api
-
-export const authApi = {
-  login: (email: string, password: string) =>
-    api.post<{ access_token: string; refresh_token: string }>('/auth/login', { email, password }),
-  register: (email: string, password: string) =>
-    api.post<{ access_token: string; refresh_token: string }>('/auth/register', { email, password }),
-}
 
 export type DocumentKind = 'demand' | 'loss' | 'supply'
 

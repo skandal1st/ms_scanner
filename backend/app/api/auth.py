@@ -1,20 +1,19 @@
 import secrets
 import time
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
-from jose import jwt
+from jose import jwt, JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 import redis.asyncio as aioredis
 
 from app.db.session import get_db
 from app.db.models import User, Integration, OAuthState
 from app.core.security import (
-    hash_password, verify_password,
     create_access_token, create_refresh_token,
-    encrypt_token, decrypt_token,
+    encrypt_token, decrypt_token, decode_token,
 )
 from app.core.config import settings
 from app.core.logging import logger
@@ -26,49 +25,40 @@ LAUNCH_TOKEN_PREFIX = "ms_launch:"
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
-
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(User).where(User.email == body.email))
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    user = User(email=body.email, password_hash=hash_password(body.password))
-    db.add(user)
-    await db.flush()
-
-    integration = Integration(user_id=user.id)
-    db.add(integration)
-    await db.commit()
-
-    logger.info("user.registered", email=body.email)
-    return _issue_tokens(str(user.id))
+class RefreshRequest(BaseModel):
+    refresh_token: str
 
 
-@router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(User).where(User.email == body.email))
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    """Обновить пару токенов по refresh-токену.
+
+    Нужен, чтобы кладовщика не выкидывало при истечении короткого access-токена
+    (иначе пришлось бы заново открывать приложение из МойСклад каждый час).
+    """
+    invalid = HTTPException(status_code=401, detail="Недействительный refresh-токен")
+    try:
+        payload = decode_token(body.refresh_token)
+    except JWTError:
+        raise invalid
+    if payload.get("type") != "refresh":
+        raise invalid
+    user_id = payload.get("sub")
+    if not user_id:
+        raise invalid
+
+    result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if user is None or not user.is_active:
+        raise invalid
 
-    logger.info("user.login", user_id=str(user.id))
-    return _issue_tokens(str(user.id))
+    return _issue_tokens(str(user_id))
 
 
 @router.get("/moysklad/login")
@@ -158,14 +148,13 @@ async def moysklad_callback(code: str, state: str, db: AsyncSession = Depends(ge
     await db.delete(oauth_state)
     await db.commit()
 
-    tokens = _issue_tokens(str(user_id))
-    redirect_url = (
-        f"{settings.MOYSKLAD_REDIRECT_URI.replace('/auth/callback', '')}"
-        f"/auth/callback"
-        f"?access_token={tokens.access_token}"
-        f"&refresh_token={tokens.refresh_token}"
-    )
-    return RedirectResponse(redirect_url)
+    # JWT не отдаём в query-параметрах (утечка в историю браузера, Referer, логи).
+    # Кладём пользователя под одноразовый launch_token и редиректим на /launch —
+    # он обменяет код на JWT через POST /auth/launch (тот же безопасный путь, что
+    # и в iframe-флоу).
+    launch_token = await _issue_launch_token(str(user_id))
+    base = settings.MOYSKLAD_REDIRECT_URI.replace("/auth/callback", "")
+    return RedirectResponse(f"{base}/launch?t={launch_token}")
 
 
 def _issue_tokens(user_id: str) -> TokenResponse:
@@ -173,6 +162,23 @@ def _issue_tokens(user_id: str) -> TokenResponse:
         access_token=create_access_token({"sub": user_id}),
         refresh_token=create_refresh_token({"sub": user_id}),
     )
+
+
+async def _issue_launch_token(user_id: str) -> str:
+    """Одноразовый код (Redis, TTL 60с), который обменивается на JWT через
+    POST /auth/launch. Используется и iframe-лаунчером, и OAuth-callback'ом —
+    чтобы JWT никогда не светился в URL (история браузера, Referer, логи)."""
+    launch_token = secrets.token_urlsafe(32)
+    redis = aioredis.from_url(settings.REDIS_URL)
+    try:
+        await redis.set(
+            f"{LAUNCH_TOKEN_PREFIX}{launch_token}",
+            user_id,
+            ex=LAUNCH_TOKEN_TTL_SECONDS,
+        )
+    finally:
+        await redis.aclose()
+    return launch_token
 
 
 class MsLaunchRequest(BaseModel):
@@ -267,18 +273,8 @@ async def moysklad_launch(
         )
 
     employee_name = ctx.get("name") or ctx.get("fullName")
-    launch_token = secrets.token_urlsafe(32)
     user_id = str(integration.user_id)
-
-    redis = aioredis.from_url(settings.REDIS_URL)
-    try:
-        await redis.set(
-            f"{LAUNCH_TOKEN_PREFIX}{launch_token}",
-            user_id,
-            ex=LAUNCH_TOKEN_TTL_SECONDS,
-        )
-    finally:
-        await redis.aclose()
+    launch_token = await _issue_launch_token(user_id)
 
     logger.info(
         "ms_launch.issued",

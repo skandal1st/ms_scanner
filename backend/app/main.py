@@ -6,9 +6,11 @@ from typing import Dict
 import redis.asyncio as aioredis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from jose import JWTError
 
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
+from app.core.security import decode_token
 from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance
 
 
@@ -102,6 +104,23 @@ app.include_router(acceptance.router)
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    # Аутентификация: JWT передаётся в query-параметре ?token= (браузер не даёт
+    # слать заголовки при открытии WebSocket). Пускаем только валидный access-токен,
+    # чей sub совпадает с user_id из пути — иначе любой мог бы слушать чужие сканы
+    # (коды маркировки, ИНН владельца, движение документов).
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        await websocket.close(code=1008)
+        return
+    if payload.get("type") != "access" or payload.get("sub") != user_id:
+        await websocket.close(code=1008)
+        return
+
     await ws_manager.connect(user_id, websocket)
     try:
         while True:

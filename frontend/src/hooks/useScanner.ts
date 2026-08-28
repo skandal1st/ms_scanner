@@ -64,9 +64,12 @@ export function useScanner(documentId: string | null) {
   // WebSocket — обновления статусов от Celery
   useEffect(() => {
     const userId = resolveWsUserId()
-    if (!userId) return
+    const token = localStorage.getItem('access_token')
+    if (!userId || !token) return
 
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/${userId}`
+    // Токен уходит в query-параметре: браузер не даёт слать заголовки при открытии
+    // WebSocket. Бэк валидирует его и сверяет sub с userId (см. main.py).
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/${userId}?token=${encodeURIComponent(token)}`
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
