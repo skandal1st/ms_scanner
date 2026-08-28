@@ -1,0 +1,5 @@
+# Зависимости для локального прогона тестов (в прод-образ не входят).
+# Запуск:  docker compose run --rm --no-deps backend sh -c "pip install -r requirements-dev.txt && pytest"
+-r requirements.txt
+pytest==8.3.4
+pytest-asyncio==0.24.0
