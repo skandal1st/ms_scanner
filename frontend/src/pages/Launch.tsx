@@ -9,7 +9,9 @@ export function LaunchPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
-    const target = '/shipment'
+    // mode задаёт, какой раздел открыть в новой вкладке: приёмка или отгрузка.
+    const mode = params.get('mode')
+    const target = mode === 'acceptance' ? '/acceptance' : '/shipment'
 
     if (localStorage.getItem('access_token')) {
       navigate(target, { replace: true })
@@ -76,7 +78,11 @@ export function LaunchPage() {
           </div>
         </div>
       ) : (
-        <div style={{ color: 'var(--ms-text-muted)' }}>Открываем отгрузку...</div>
+        <div style={{ color: 'var(--ms-text-muted)' }}>
+          {new URLSearchParams(window.location.search).get('mode') === 'acceptance'
+            ? 'Открываем приёмку...'
+            : 'Открываем отгрузку...'}
+        </div>
       )}
     </div>
   )

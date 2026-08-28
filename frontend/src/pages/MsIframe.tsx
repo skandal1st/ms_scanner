@@ -54,10 +54,25 @@ export function MsIframePage() {
       })
   }, [])
 
-  const openShipment = () => {
+  const openInNewTab = async (mode: 'shipment' | 'acceptance') => {
     if (state.kind !== 'ready') return
-    const t = encodeURIComponent(state.payload.launch_token)
-    window.open(`/launch?t=${t}&mode=shipment`, '_blank')
+    // Окно открываем СРАЗУ в обработчике клика (иначе popup-блокер), затем
+    // подставляем адрес. launch_token одноразовый — берём свежий на каждый клик
+    // через /auth/relaunch (по JWT iframe), чтобы отгрузка и приёмка открывались
+    // независимо. Без noopener — чтобы новая вкладка потом смогла window.close().
+    const win = window.open('', '_blank')
+    try {
+      const resp = await fetch('/api/auth/relaunch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${state.payload.access_token}` },
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.launch_token) throw new Error('relaunch failed')
+      const t = encodeURIComponent(data.launch_token)
+      if (win) win.location.href = `/launch?t=${t}&mode=${mode}`
+    } catch {
+      if (win) win.close()
+    }
   }
 
   if (state.kind === 'loading') {
@@ -91,7 +106,10 @@ export function MsIframePage() {
           )}
         </div>
         <div style={styles.ctaGroup}>
-          <button type="button" style={styles.cta} onClick={openShipment}>
+          <button type="button" style={styles.cta} onClick={() => void openInNewTab('acceptance')}>
+            <Icon name="acceptance" size={17} /> Начать приёмку
+          </button>
+          <button type="button" style={styles.cta} onClick={() => void openInNewTab('shipment')}>
             <Icon name="shipment" size={17} /> Начать отгрузку
           </button>
         </div>
@@ -102,7 +120,7 @@ export function MsIframePage() {
       </main>
 
       <footer style={styles.footer}>
-        Сборка отгрузки откроется в новой вкладке, чтобы USB-сканер оставался в фокусе.
+        Приёмка и отгрузка откроются в новой вкладке, чтобы USB-сканер оставался в фокусе.
       </footer>
     </div>
   )

@@ -256,6 +256,28 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
                   Сохранить
                 </button>
               </div>
+
+              {integration?.has_moysklad && (
+                <div className="field-row mt-12">
+                  <button
+                    type="button"
+                    className="button button--danger"
+                    disabled={patchIntegration.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          'Отвязать МойСклад? Приложение потеряет доступ к документам и записи ' +
+                            'кодов маркировки, пока вы не подключите его снова.',
+                        )
+                      ) {
+                        patchIntegration.mutate({ moysklad_token: '' })
+                      }
+                    }}
+                  >
+                    Отвязать МойСклад
+                  </button>
+                </div>
+              )}
             </>
           )}
 

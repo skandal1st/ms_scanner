@@ -11,6 +11,7 @@ import redis.asyncio as aioredis
 
 from app.db.session import get_db
 from app.db.models import User, Integration, OAuthState
+from app.api.deps import get_current_user
 from app.core.security import (
     create_access_token, create_refresh_token,
     encrypt_token, decrypt_token, decode_token,
@@ -313,3 +314,19 @@ async def exchange_launch_token(body: LaunchExchangeRequest):
 
     logger.info("launch.exchanged", user_id=user_id)
     return _issue_tokens(user_id)
+
+
+class RelaunchResponse(BaseModel):
+    launch_token: str
+
+
+@router.post("/relaunch", response_model=RelaunchResponse)
+async def relaunch(current_user: User = Depends(get_current_user)):
+    """Выдать свежий одноразовый launch_token авторизованному пользователю iframe.
+
+    Нужен, чтобы из лаунчера можно было открыть несколько разделов (отгрузка,
+    приёмка) — каждый в своей вкладке. launch_token из /auth/ms-launch одноразовый
+    (GETDEL при обмене), поэтому на каждую кнопку берём новый по JWT самого iframe.
+    """
+    launch_token = await _issue_launch_token(str(current_user.id))
+    return RelaunchResponse(launch_token=launch_token)
