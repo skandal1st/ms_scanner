@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     def cz_product_groups_list(self) -> List[str]:
         return [g.strip() for g in self.CZ_PRODUCT_GROUPS.split(",") if g.strip()]
 
+    # Мониторинг (отправка событий/таймингов в ERP Elements Platform).
+    # Выключено по умолчанию; включается только заданием URL+ключа в проде.
+    MONITORING_ENABLED: bool = False
+    MONITORING_URL: str = ""          # напр. https://erp.example/api/v1/monitoring
+    MONITORING_KEY: str = ""          # ключ проекта (совпадает с X-Api-Key в ERP)
+    MONITORING_PROJECT: str = "ms_scaner"
+    MONITORING_TIMEOUT: float = 2.0
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"
 

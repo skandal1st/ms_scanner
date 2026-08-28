@@ -1,11 +1,13 @@
 import asyncio
 import json
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
+from app.core.monitoring import emit as monitoring_emit
 from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key, extract_gtin
 
 
@@ -670,6 +672,14 @@ async def _verify_document_async(document_id: str, user_id: str):
             count=len(scan_ids),
             failed=failed,
         )
+        await monitoring_emit(
+            "verify_document.done",
+            level="warning" if failed else "info",
+            document_id=document_id,
+            count=len(scan_ids),
+            checked=len(scan_ids) - failed,
+            failed=failed,
+        )
     finally:
         try:
             await r.delete(lock_key)
@@ -890,6 +900,14 @@ def process_document_task(document_id: str, user_id: str):
         _run(_process_document_async(document_id, user_id))
     except Exception as exc:
         logger.error("process_document.error", document_id=document_id, error=str(exc))
+        _run(
+            monitoring_emit(
+                "process_document.error",
+                level="error",
+                document_id=document_id,
+                error=str(exc),
+            )
+        )
         raise
 
 
@@ -963,6 +981,7 @@ async def _process_document_async(document_id: str, user_id: str):
             logger.error("process_document.not_found", document_id=document_id)
             return
 
+        t0 = time.monotonic()
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
         # demand — отгрузка, supply — приёмка по УПД. Обе ветки пишут trackingCodes
         # в позиции МС-документа одним и тем же механизмом (update_document).
@@ -1018,6 +1037,14 @@ async def _process_document_async(document_id: str, user_id: str):
                     if not settings.CZ_MOCK_MODE:
                         await _push_cz_token_expired(user_id)
                     await db.commit()
+                    await monitoring_emit(
+                        "process_document.cz_token_missing",
+                        level="warning",
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                        document_id=document_id,
+                        kind=kind,
+                        boxes=len(boxes_to_expand),
+                    )
                     return
                 await _push_cz_token_expired(user_id)
             else:
@@ -1232,6 +1259,14 @@ async def _process_document_async(document_id: str, user_id: str):
                         # кладовщик видит причину и может повторить после исправления.
                         doc.status = DocumentStatus.draft
                         await db.commit()
+                        await monitoring_emit(
+                            "process_document.rejected",
+                            level="error",
+                            duration_ms=int((time.monotonic() - t0) * 1000),
+                            document_id=document_id,
+                            kind=kind,
+                            reason=ms_reason,
+                        )
                         return
                     bad_scan = next(
                         (
@@ -1298,6 +1333,13 @@ async def _process_document_async(document_id: str, user_id: str):
 
         logger.info(
             "process_document.done",
+            document_id=document_id,
+            kind=kind,
+            valid_count=len(valid_scans),
+        )
+        await monitoring_emit(
+            "process_document.done",
+            duration_ms=int((time.monotonic() - t0) * 1000),
             document_id=document_id,
             kind=kind,
             valid_count=len(valid_scans),
@@ -1372,6 +1414,12 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
             await db.commit()
             logger.info("writeoff.poll.done", document_id=document_id)
             await _push_writeoff_status(str(user_id), str(document_id), "done", None)
+            await monitoring_emit(
+                "writeoff.done",
+                source="worker",
+                document_id=str(document_id),
+                docs=len(items),
+            )
         else:
             # Не финализируем как accepted; возвращаем в draft, чтобы можно было повторить.
             doc.status = DocumentStatus.draft
@@ -1386,4 +1434,11 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
                 str(document_id),
                 "error",
                 error or "Не все документы обработаны Честным Знаком",
+            )
+            await monitoring_emit(
+                "writeoff.error",
+                level="error",
+                source="worker",
+                document_id=str(document_id),
+                error=error or "Не все документы обработаны Честным Знаком",
             )

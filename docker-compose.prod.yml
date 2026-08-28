@@ -54,6 +54,10 @@ services:
       CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
       CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
       CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
+      MONITORING_ENABLED: ${MONITORING_ENABLED:-false}
+      MONITORING_URL: ${MONITORING_URL:-}
+      MONITORING_KEY: ${MONITORING_KEY:-}
+      MONITORING_PROJECT: ${MONITORING_PROJECT:-ms_scaner}
       CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:
       postgres:
@@ -80,6 +84,10 @@ services:
       CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
       CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
       CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
+      MONITORING_ENABLED: ${MONITORING_ENABLED:-false}
+      MONITORING_URL: ${MONITORING_URL:-}
+      MONITORING_KEY: ${MONITORING_KEY:-}
+      MONITORING_PROJECT: ${MONITORING_PROJECT:-ms_scaner}
     depends_on:
       postgres:
         condition: service_healthy
