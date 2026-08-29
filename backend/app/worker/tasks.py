@@ -971,7 +971,7 @@ async def _process_document_async(document_id: str, user_id: str):
     from app.services.chestnyznak import ChestnyZnakService
     from app.core.security import decrypt_token
     from app.core.config import settings
-    from sqlalchemy import select
+    from sqlalchemy import select, or_, and_
 
     async with AsyncSessionLocal() as db:
         # Получаем сам документ — нужен kind для разветвления
@@ -995,10 +995,22 @@ async def _process_document_async(document_id: str, user_id: str):
 
         # Сканы для отправки: valid + overflow.
         # overflow — сверхплановые, визуально помечены красным, но идут в МС.
+        # Плюс несопоставленные КОРОБА (is_box, unknown_product): у агрегата с AI 02
+        # (GTIN вложенных товаров) собственный GTIN не извлекается парсером УПД, и на
+        # импорте он остаётся unknown_product. Но его товар восстановим — при развороте
+        # через ЧЗ (ниже) s.gtin становится unit-GTIN пачки и резолвится в каталоге МС.
+        # Без этого исключения такие короба тихо выпадали из приёмки. Единичные КМ со
+        # статусом unknown_product НЕ рескьюим — их GTIN действительно неизвестен.
         result = await db.execute(
             select(Scan).where(
                 Scan.document_id == document_id,
-                Scan.status.in_([ScanStatus.valid, ScanStatus.overflow]),
+                or_(
+                    Scan.status.in_([ScanStatus.valid, ScanStatus.overflow]),
+                    and_(
+                        Scan.is_box.is_(True),
+                        Scan.status == ScanStatus.unknown_product,
+                    ),
+                ),
             )
         )
         valid_scans = result.scalars().all()

@@ -54,7 +54,7 @@ async def emit(
     url = settings.MONITORING_URL.rstrip("/") + "/ingest"
     try:
         async with httpx.AsyncClient(timeout=settings.MONITORING_TIMEOUT) as client:
-            await client.post(
+            resp = await client.post(
                 url,
                 json=payload,
                 headers={
@@ -62,6 +62,11 @@ async def emit(
                     "X-Api-Key": settings.MONITORING_KEY,
                 },
             )
+            # ERP может ответить 200, но отвергнуть событие (неверный ключ/проект,
+            # 5xx). Без проверки статуса такой сбой был бы невидим — «в мониторинг
+            # ничего не приходит» без единого warning. raise_for_status переводит
+            # 4xx/5xx в лог monitoring.emit_failed ниже (основной поток не тронут).
+            resp.raise_for_status()
     except Exception as exc:  # noqa: BLE001 — мониторинг не должен влиять на основной поток
         # ВНИМАНИЕ: у structlog `event` — зарезервированное имя (само сообщение),
         # передавать его kwargʼом нельзя (TypeError). Используем event_name.

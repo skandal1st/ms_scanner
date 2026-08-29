@@ -9,6 +9,7 @@
 отгрузки — поэтому отдельный роутер, без _ensure_supported_kind.
 """
 
+from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import UUID
 
@@ -18,6 +19,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token
 from app.db.models import (
@@ -27,8 +29,10 @@ from app.db.models import (
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
 from app.services.chestnyznak import (
+    ChestnyZnakService,
     normalize_gtin_key,
     parse_gs1_km_gtin_serial,
+    extract_gtin,
     is_sscc,
     CZ_PRODUCT_GROUP_CATALOG,
     CZ_PRODUCT_GROUP_CODES,
@@ -136,6 +140,61 @@ async def _maybe_ms_service(
     except Exception as exc:
         logger.warning("acceptance.ms_service_failed", error=str(exc))
         return None
+
+
+async def _maybe_cz_service(
+    current_user: User, db: AsyncSession
+) -> Optional[ChestnyZnakService]:
+    """Сервис ЧЗ для разворота коробов на импорте. None, если токен ЧЗ отсутствует
+    или просрочен — тогда короба остаются unknown_product и определятся при отправке
+    (воркер развернёт их сам). Разворот на импорте нужен лишь для корректного
+    предпросмотра товара в таблице приёмки."""
+    result = await db.execute(
+        select(Integration).where(Integration.user_id == current_user.id)
+    )
+    integ = result.scalar_one_or_none()
+    if not integ or not integ.cz_token:
+        return None
+    if (
+        integ.cz_token_expires_at is not None
+        and integ.cz_token_expires_at <= datetime.now(timezone.utc)
+    ):
+        return None
+    try:
+        token = decrypt_token(integ.cz_token)
+    except Exception as exc:
+        logger.warning("acceptance.cz_service_failed", error=str(exc))
+        return None
+    return ChestnyZnakService(
+        token=token,
+        mock=settings.CZ_MOCK_MODE,
+        product_groups=list(integ.cz_product_groups or []),
+    )
+
+
+async def _expand_box_via_cz(
+    code: str, cz: ChestnyZnakService
+) -> Optional[dict]:
+    """Развернуть агрегат (короб/блок) через ЧЗ: unit-GTIN вложенной пачки + листовые
+    КМ. None, если код не агрегат / не найден / ошибка (best-effort, не бросает).
+
+    GTIN агрегата (напр. под GS1 AI 02 — «GTIN вложенных товаров») ≠ unit-GTIN пачки,
+    поэтому товар резолвим по GTIN первого ребёнка, а не по коду короба."""
+    try:
+        info = await cz.get_code_info(code)
+    except Exception as exc:
+        logger.warning("acceptance.expand_box_failed", code=code[:32], error=str(exc))
+        return None
+    if not (info and info.is_aggregate and info.children):
+        return None
+    child_gtin = extract_gtin(info.children[0])
+    gk = normalize_gtin_key(child_gtin) if child_gtin else None
+    return {
+        "gtin": gk,
+        "children": list(info.children),
+        "qty": len(info.children),
+        "product_name": info.product_name,
+    }
 
 
 @router.get("/product-groups", response_model=List[ProductGroup])
@@ -289,10 +348,12 @@ async def _resolve_product(
         ).scalar_one_or_none()
         if map_row:
             # product_id стабилен при переименовании товара в МС, а сохранённое
-            # имя — снимок на момент привязки. Подтягиваем свежее имя по id и
-            # переписываем кэш (self-healing), чтобы не показывать старое название.
+            # имя — снимок на момент привязки. Обычно доверяем снимку: обновление
+            # имени по id — это отдельный запрос к МС на КАЖДЫЙ сопоставленный GTIN,
+            # что на импорте из десятков позиций упирается в rate limit (429) и
+            # тормозит приёмку. Ходим в МС только когда имени вовсе нет (self-heal).
             name = map_row.product_name
-            if ms is not None:
+            if ms is not None and not name:
                 try:
                     card = await ms.get_product_by_id(map_row.product_id)
                 except Exception as exc:
@@ -304,7 +365,7 @@ async def _resolve_product(
                     card = None
                 if card:
                     fresh = (card.get("name") or "").strip() or None
-                    if fresh and fresh != map_row.product_name:
+                    if fresh:
                         map_row.product_name = fresh
                         name = fresh
             return _done((map_row.product_id, name))
@@ -401,6 +462,9 @@ async def import_upd(
         doc.upd_meta = meta
 
     ms = await _maybe_ms_service(current_user, db)
+    # ЧЗ для разворота коробов (AI-02 и пр. агрегаты) на импорте — best-effort:
+    # без валидного токена короба останутся unknown_product и определятся при отправке.
+    cz = await _maybe_cz_service(current_user, db)
 
     # План привязанного поступления МС: gtin → (product_id, product_name) и
     # КодТов/артикул → (product_id, product_name). Позиции УПД сопоставляются с
@@ -557,42 +621,127 @@ async def import_upd(
                 )
                 created += 1
 
+            # Короба/агрегаты. Если группа не сопоставилась по GTIN/артикулу, но есть
+            # агрегатные упаковки — разворачиваем КАЖДУЮ через ЧЗ, берём unit-GTIN
+            # вложенной пачки и резолвим товар по нему. Так короб с GTIN под AI 02
+            # (собственный GTIN ≠ unit-GTIN) корректно сопоставляется уже на импорте,
+            # а не только при отправке. child_codes/box_quantity сохраняем — воркер не
+            # разворачивает повторно. Резолв индивидуален: короба одной блок-позиции
+            # могут относиться к разным товарам. box_rows группирует упаковки по товару
+            # для строк таблицы (ключ None — не развёрнутые, идут в «основную» строку).
+            box_rows: dict[Optional[str], dict] = {}
             for sscc in bucket["packages"]:
                 if sscc in existing_codes:
                     skipped += 1
                     continue
                 existing_codes.add(sscc)
+                b_gtin, b_pid, b_name, b_status = g, product_id, product_name, status
+                b_children: Optional[list] = None
+                b_qty: Optional[int] = None
+                if cz is not None and b_pid is None:
+                    exp = await _expand_box_via_cz(sscc, cz)
+                    if exp and exp.get("gtin"):
+                        u_pid, u_name = await _resolve_product(
+                            exp["gtin"], pos.article, current_user.id, ms, db,
+                            resolve_cache, plan_map, article_map,
+                        )
+                        if u_pid:
+                            b_gtin = exp["gtin"]
+                            b_pid = u_pid
+                            b_name = u_name or exp.get("product_name")
+                            b_status = ScanStatus.valid
+                            b_children = exp["children"]
+                            b_qty = exp["qty"]
                 db.add(
                     Scan(
                         document_id=document_id,
                         code=sscc,
-                        gtin=g,
-                        moysklad_product_id=product_id,
-                        product_name=product_name,
-                        status=status,
+                        gtin=b_gtin,
+                        moysklad_product_id=b_pid,
+                        product_name=b_name,
+                        status=b_status,
                         is_box=True,
+                        child_codes=b_children,
+                        box_quantity=b_qty,
                     )
                 )
                 created += 1
-
-            results.append(
-                ImportPositionResult(
-                    name=pos.name,
-                    gtin=g,
-                    article=pos.article,
-                    # Кол-во (КолТов) — на «основную» строку позиции (GTIN единиц);
-                    # для отделившихся блочных GTIN кол-во неоднозначно → не показываем.
-                    quantity=pos.quantity if g == pos.gtin else None,
-                    codes_count=len(bucket["codes"]),
-                    packages_count=len(bucket["packages"]),
-                    product_id=product_id,
-                    product_name=product_name,
-                    matched=matched,
-                    line_number=pos.line_number,
-                    price=pos.price,
-                    vat=pos.vat,
+                # Развёрнутый короб добавляет свой товар и единицы в план, чтобы
+                # update_document создал позицию поступления с ценой/НДС из УПД.
+                if b_pid and b_pid != product_id:
+                    e = plan_acc.setdefault(
+                        b_pid,
+                        {
+                            "gtin": b_gtin,
+                            "product_id": b_pid,
+                            "product_name": b_name,
+                            "expected_qty": 0,
+                        },
+                    )
+                    if pos.price is not None:
+                        e["price"] = pos.price
+                    if pos.vat is not None:
+                        e["vat"] = pos.vat
+                    if b_qty:
+                        e["expected_qty"] += int(b_qty)
+                # Ключ для строки таблицы: развёрнутый через ЧЗ товар (≠ товара группы)
+                # выносим отдельной строкой; иначе относим к «основной» строке (None).
+                key = b_pid if (b_pid and b_pid != product_id) else None
+                row = box_rows.setdefault(
+                    key,
+                    {
+                        "product_id": b_pid if key else product_id,
+                        "product_name": b_name if key else product_name,
+                        "gtin": b_gtin if key else g,
+                        "count": 0,
+                    },
                 )
-            )
+                row["count"] += 1
+
+            # «Основная» строка группы: листовые коды + не развёрнутые короба. Если
+            # листовых кодов нет и ВСЕ короба развернулись в товары — пустую строку не
+            # добавляем (иначе показала бы ложное «не сопоставлен»).
+            base_pkgs = box_rows.get(None, {}).get("count", 0)
+            has_expanded = any(k is not None for k in box_rows)
+            if len(bucket["codes"]) or base_pkgs or not has_expanded:
+                results.append(
+                    ImportPositionResult(
+                        name=pos.name,
+                        gtin=g,
+                        article=pos.article,
+                        # Кол-во (КолТов) — на «основную» строку позиции (GTIN единиц);
+                        # для отделившихся блочных GTIN кол-во неоднозначно → не показываем.
+                        quantity=pos.quantity if g == pos.gtin else None,
+                        codes_count=len(bucket["codes"]),
+                        packages_count=base_pkgs,
+                        product_id=product_id,
+                        product_name=product_name,
+                        matched=matched,
+                        line_number=pos.line_number,
+                        price=pos.price,
+                        vat=pos.vat,
+                    )
+                )
+            # Отдельные строки на каждый развёрнутый через ЧЗ товар.
+            for key, row in box_rows.items():
+                if key is None:
+                    continue
+                results.append(
+                    ImportPositionResult(
+                        name=pos.name,
+                        gtin=row["gtin"],
+                        article=pos.article,
+                        quantity=None,
+                        codes_count=0,
+                        packages_count=row["count"],
+                        product_id=row["product_id"],
+                        product_name=row["product_name"],
+                        matched=True,
+                        line_number=pos.line_number,
+                        price=pos.price,
+                        vat=pos.vat,
+                    )
+                )
 
     # Обновляем план документа позициями из УПД (товар + КолТов). Сохраняем
     # pack_gtins из прежнего плана (если поступление МС уже имело позиции), КолТов
@@ -669,6 +818,8 @@ async def import_marks(
         raise HTTPException(status_code=400, detail="Список марок пуст")
 
     ms = await _maybe_ms_service(current_user, db)
+    # ЧЗ для разворота коробов (AI-02 и пр. агрегаты) — best-effort, как в import_upd.
+    cz = await _maybe_cz_service(current_user, db)
 
     # План привязанного поступления МС: gtin/pack_gtin → товар, артикул/КодТов → товар.
     plan_map: dict[str, tuple[str, Optional[str]]] = {}
@@ -751,37 +902,90 @@ async def import_marks(
             )
             created += 1
 
+        # Короба/агрегаты: если группа не сопоставилась, разворачиваем каждую упаковку
+        # через ЧЗ и резолвим товар по unit-GTIN пачки (см. import_upd). План здесь не
+        # мутируем — товар проставляется прямо на скан, воркер допишет его в МС.
+        box_rows: dict[Optional[str], dict] = {}
         for sscc in bucket["packages"]:
             if sscc in existing_codes:
                 skipped += 1
                 continue
             existing_codes.add(sscc)
+            b_gtin, b_pid, b_name, b_status = g, product_id, product_name, status
+            b_children: Optional[list] = None
+            b_qty: Optional[int] = None
+            if cz is not None and b_pid is None:
+                exp = await _expand_box_via_cz(sscc, cz)
+                if exp and exp.get("gtin"):
+                    u_pid, u_name = await _resolve_product(
+                        exp["gtin"], None, current_user.id, ms, db,
+                        resolve_cache, plan_map, article_map,
+                    )
+                    if u_pid:
+                        b_gtin = exp["gtin"]
+                        b_pid = u_pid
+                        b_name = u_name or exp.get("product_name")
+                        b_status = ScanStatus.valid
+                        b_children = exp["children"]
+                        b_qty = exp["qty"]
             db.add(
                 Scan(
                     document_id=document_id,
                     code=sscc,
-                    gtin=g,
-                    moysklad_product_id=product_id,
-                    product_name=product_name,
-                    status=status,
+                    gtin=b_gtin,
+                    moysklad_product_id=b_pid,
+                    product_name=b_name,
+                    status=b_status,
                     is_box=True,
+                    child_codes=b_children,
+                    box_quantity=b_qty,
                 )
             )
             created += 1
-
-        results.append(
-            ImportPositionResult(
-                name=product_name or "Без товара",
-                gtin=g,
-                article=None,
-                quantity=None,
-                codes_count=len(bucket["codes"]),
-                packages_count=len(bucket["packages"]),
-                product_id=product_id,
-                product_name=product_name,
-                matched=matched,
+            key = b_pid if (b_pid and b_pid != product_id) else None
+            row = box_rows.setdefault(
+                key,
+                {
+                    "product_id": b_pid if key else product_id,
+                    "product_name": b_name if key else product_name,
+                    "gtin": b_gtin if key else g,
+                    "count": 0,
+                },
             )
-        )
+            row["count"] += 1
+
+        base_pkgs = box_rows.get(None, {}).get("count", 0)
+        has_expanded = any(k is not None for k in box_rows)
+        if len(bucket["codes"]) or base_pkgs or not has_expanded:
+            results.append(
+                ImportPositionResult(
+                    name=product_name or "Без товара",
+                    gtin=g,
+                    article=None,
+                    quantity=None,
+                    codes_count=len(bucket["codes"]),
+                    packages_count=base_pkgs,
+                    product_id=product_id,
+                    product_name=product_name,
+                    matched=matched,
+                )
+            )
+        for key, row in box_rows.items():
+            if key is None:
+                continue
+            results.append(
+                ImportPositionResult(
+                    name=row["product_name"] or "Без товара",
+                    gtin=row["gtin"],
+                    article=None,
+                    quantity=None,
+                    codes_count=0,
+                    packages_count=row["count"],
+                    product_id=row["product_id"],
+                    product_name=row["product_name"],
+                    matched=True,
+                )
+            )
 
     await db.commit()
     logger.info(

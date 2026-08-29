@@ -662,11 +662,17 @@ class MoySkladService:
         return out
 
     async def get_product_by_id(self, product_id: str) -> Optional[Dict[str, Any]]:
-        """Карточка товара по UUID — имя для ручной привязки КМ к позиции."""
+        """Карточка товара по UUID — имя для ручной привязки КМ к позиции.
+
+        Через _request_with_retry: при импорте УПД имя освежается для КАЖДОГО
+        сопоставленного GTIN (десятки последовательных запросов), поэтому без
+        ретрая МС отдаёт 429 (code 1049) и обновление имени тихо срывается.
+        """
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
+            resp = await self._request_with_retry(
+                client,
+                "GET",
                 f"{self.base_url}/entity/product/{product_id}",
-                headers=self.headers,
             )
             if resp.status_code == 404:
                 return None
