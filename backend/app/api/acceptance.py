@@ -268,6 +268,21 @@ async def create_acceptance_document(
     )
 
 
+def _ai02_gtin(code: str) -> Optional[str]:
+    """content-GTIN из агрегатного кода GS1 AI 02 (``02`` + 14-значный GTIN «вложенных
+    товаров»).
+
+    Такие групповые коротбочные коды приходят в УПД от некоторых поставщиков
+    (напр. Chabacco). Честный Знак через ``cises/info`` их НЕ разворачивает (отдаёт
+    «не найден»), но МойСклад принимает код как обычную марку и валидирует сам.
+    Извлекаем content-GTIN, иначе `parse_gs1_km_gtin_serial` наивно возьмёт первые
+    14 цифр вместе с префиксом ``02`` (мусорный GTIN), а короб останется без GTIN —
+    несопоставимым и непривязываемым вручную."""
+    if code.startswith("02") and len(code) >= 16 and code[2:16].isdigit():
+        return normalize_gtin_key(code[2:16])
+    return None
+
+
 def _code_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
     """GTIN, зашитый в сам код (``01``+GTIN). Фолбэк — GTIN позиции.
 
@@ -275,6 +290,9 @@ def _code_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
     в той же позиции. Поэтому товар резолвим по GTIN каждого кода, а не по одному
     GTIN на всю позицию. Для кодов без GTIN (SSCC ``00…``) — фолбэк на GTIN позиции.
     """
+    a2 = _ai02_gtin(code)
+    if a2:
+        return a2
     gtin, _ = parse_gs1_km_gtin_serial(code)
     if gtin:
         return normalize_gtin_key(gtin)
@@ -284,16 +302,20 @@ def _code_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
 def _package_gtin(code: str, fallback: Optional[str]) -> Optional[str]:
     """GTIN агрегатной упаковки. Фолбэк — GTIN позиции.
 
-    Блок (``НомУпак``) несёт свой ``01``+GTIN — выделяем его. Транспортная
-    упаковка (``ИдентТрансУпак``, SSCC с AI ``00``) GTIN НЕ несёт: её первые 14
-    цифр — это префикс компании + серийный номер короба, **одинаковый у разных
-    товаров** одной поставки. Извлекать из неё «GTIN» нельзя (иначе все позиции
-    схлопнутся в один фантомный GTIN) — относим короб к товару позиции (fallback).
+    Блок (``НомУпак``) несёт свой ``01``+GTIN — выделяем его. Групповой код с GS1
+    AI ``02`` (``02``+GTIN) несёт content-GTIN вложенных товаров — берём его. А
+    транспортная упаковка (``ИдентТрансУпак``, SSCC с AI ``00``) GTIN НЕ несёт: её
+    первые 14 цифр — это префикс компании + серийный номер короба, **одинаковый у
+    разных товаров** одной поставки. Извлекать из неё «GTIN» нельзя (иначе все
+    позиции схлопнутся в один фантомный GTIN) — относим короб к товару позиции.
     """
     if code.startswith("01"):
         gtin, _ = parse_gs1_km_gtin_serial(code)
         if gtin:
             return normalize_gtin_key(gtin)
+    a2 = _ai02_gtin(code)
+    if a2:
+        return a2
     return fallback
 
 

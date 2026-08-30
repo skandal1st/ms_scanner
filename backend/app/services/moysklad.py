@@ -292,10 +292,18 @@ class MoySkladService:
     def _tracking_code_entry(
         self, s: Dict[str, Any], ms_tracking_type: Optional[str]
     ) -> Dict[str, str]:
-        """trackingCode для МС: короб → transportpack (cis = SSCC как есть, МС резолвит
-        состав через ЧЗ), штучный КМ → trackingcode (нормализованный cis)."""
+        """trackingCode для МС: SSCC-короб → transportpack (МС резолвит состав через ЧЗ),
+        прочие агрегаты и штучный КМ → trackingcode.
+
+        Только SSCC (AI ``00`` + 18 цифр) — транспортная упаковка. Групповые коды с
+        GS1 AI ``02`` (``02``+GTIN, напр. коробки Chabacco) МС принимает как ОБЫЧНУЮ
+        марку (1 код = короб, «кол-во кодов может отличаться»), а не transportpack —
+        отправляем их СЫРЫМИ (нормализация ломает не-``01`` формат) как trackingcode."""
+        code = (s.get("code") or "").strip()
         if s.get("is_box"):
-            return {"cis": (s.get("code") or "").strip(), "type": "transportpack"}
+            if code.startswith("00") and len(code) == 20 and code.isdigit():
+                return {"cis": code, "type": "transportpack"}
+            return {"cis": code, "type": "trackingcode"}
         return {
             "cis": cis_string_for_moysklad_api(s["code"], ms_tracking_type),
             "type": "trackingcode",
