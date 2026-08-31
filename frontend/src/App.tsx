@@ -7,6 +7,7 @@ import { AcceptancePage } from './pages/Acceptance'
 import { WriteoffPage } from './pages/Writeoff'
 import { CzCheckPage } from './pages/CzCheck'
 import { SettingsPage } from './pages/Settings'
+import { HelpPage } from './pages/Help'
 import { LoginPage } from './pages/Login'
 import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
@@ -27,6 +28,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName }[] = [
   { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
   { to: '/check', label: 'Проверка', icon: 'check' },
   { to: '/settings', label: 'Настройки', icon: 'settings' },
+  { to: '/help', label: 'Помощь', icon: 'help' },
 ]
 
 function Layout({ children }: { children: React.ReactNode }) {
@@ -119,6 +121,16 @@ export default function App() {
               <RequireAuth>
                 <Layout>
                   <SettingsPage />
+                </Layout>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/help"
+            element={
+              <RequireAuth>
+                <Layout>
+                  <HelpPage />
                 </Layout>
               </RequireAuth>
             }

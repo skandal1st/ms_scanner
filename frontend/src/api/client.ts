@@ -437,3 +437,25 @@ export interface CzCheckItem {
 export interface CzCheckResult {
   items: CzCheckItem[]
 }
+
+// ---------- Техподдержка (тикеты в AXIMA ERP) ----------
+
+export interface SupportCategory {
+  value: string
+  label: string
+}
+
+export interface SupportTicketResult {
+  ok: boolean
+  ref: string | null
+}
+
+export const supportApi = {
+  categories: () => api.get<SupportCategory[]>('/support/categories'),
+  createTicket: (body: {
+    subject: string
+    message: string
+    category: string
+    page?: string
+  }) => api.post<SupportTicketResult>('/support/ticket', body),
+}

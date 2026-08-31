@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     MONITORING_PROJECT: str = "ms_scaner"
     MONITORING_TIMEOUT: float = 2.0
 
+    # Техподдержка: создание тикета в AXIMA ERP по кнопке «Написать в поддержку».
+    # В отличие от мониторинга (fire-and-forget) — синхронный вызов с ответом: тикет
+    # либо создан (возвращаем номер), либо пользователь видит явную ошибку.
+    # SUPPORT_ERP_URL — внешний endpoint AXIMA: POST /api/v1/it/tickets/external.
+    # Аутентификация — X-Project/X-Api-Key (тот же механизм ключей проекта, что и мониторинг).
+    SUPPORT_ERP_ENABLED: bool = False
+    SUPPORT_ERP_URL: str = ""         # напр. https://erp.example/api/v1/it/tickets/external
+    SUPPORT_ERP_KEY: str = ""         # X-Api-Key проекта в AXIMA (обычно = MONITORING_KEY)
+    SUPPORT_TIMEOUT: float = 10.0
+    # Резервный e-mail поддержки — показывается пользователю в UI как запасной канал.
+    SUPPORT_EMAIL: str = "support@aximatech.ru"
+
     # CORS
     CORS_ORIGINS: str = "http://localhost:3000"
 

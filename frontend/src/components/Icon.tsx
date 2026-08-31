@@ -22,6 +22,8 @@ type IconName =
   | 'trash'
   | 'box'
   | 'warning'
+  | 'help'
+  | 'support'
 
 const PATHS: Record<IconName, JSX.Element> = {
   // Отгрузка — коробка со стрелкой вверх/наружу
@@ -111,6 +113,20 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M12 4 2.5 20h19L12 4Z" />
       <path d="M12 10v4M12 17.5h.01" />
+    </>
+  ),
+  // Помощь — круг со знаком вопроса
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9a2.5 2.5 0 0 1 4.5 1.5c0 1.5-2 2-2 3.5M12 17.5h.01" />
+    </>
+  ),
+  // Поддержка — конверт/сообщение
+  support: (
+    <>
+      <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8l-4 3V6a1 1 0 0 1 1-1Z" />
+      <path d="M8 10h8M8 13h5" />
     </>
   ),
 }
