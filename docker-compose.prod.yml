@@ -58,6 +58,10 @@ services:
       MONITORING_URL: ${MONITORING_URL:-}
       MONITORING_KEY: ${MONITORING_KEY:-}
       MONITORING_PROJECT: ${MONITORING_PROJECT:-ms_scaner}
+      SUPPORT_ERP_ENABLED: ${SUPPORT_ERP_ENABLED:-false}
+      SUPPORT_ERP_URL: ${SUPPORT_ERP_URL:-}
+      SUPPORT_ERP_KEY: ${SUPPORT_ERP_KEY:-}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-support@aximatech.ru}
       CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:
       postgres:
