@@ -5,7 +5,7 @@ import { SupportModal } from '../components/SupportModal'
 /**
  * Страница «Помощь» — краткая инструкция по работе с сервисом (требование п.4в
  * регламента модерации МойСклад) + кнопка «Написать в техподдержку» (тикет в AXIMA ERP).
- * Полная версия инструкции — frontend/public/instruction.md, отдаётся по /instruction.md
+ * Полная версия инструкции — frontend/public/instruction.html, отдаётся по /instruction.html
  * (эту ссылку указываем в карточке решения МойСклад).
  */
 export function HelpPage() {
@@ -17,7 +17,7 @@ export function HelpPage() {
         <h1 className="acc-header__title">Помощь и инструкция</h1>
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <a
-            href="/instruction.md"
+            href="/instruction.html"
             target="_blank"
             rel="noopener noreferrer"
             className="button"
@@ -57,7 +57,7 @@ export function HelpPage() {
             Выберите <b>режим сканера</b> (Настройки → Сканер): USB (клавиатура) или
             COM-порт. Для COM-порта настройте сканер на <b>9600, 8-N-1, суффикс CR/LF</b>{' '}
             с передачей GS-разделителя — подробности в{' '}
-            <a href="/instruction.md" target="_blank" rel="noopener noreferrer">
+            <a href="/instruction.html" target="_blank" rel="noopener noreferrer">
               полной инструкции
             </a>{' '}
             (§2.4).

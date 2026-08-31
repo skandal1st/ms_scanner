@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Инструкция по работе с сервисом «Скандата»</title>
+<style>
+  :root {
+    --navy: #1b2547;
+    --navy-2: #232f57;
+    --blue: #2f6bff;
+    --blue-dark: #2050d6;
+    --ink: #1d2433;
+    --muted: #5b6478;
+    --line: #e4e8f0;
+    --bg: #f5f7fb;
+    --card: #ffffff;
+    --ok-bg: #eaf7ee; --ok-bd: #b7e0c4; --ok-fg: #1f7a3d;
+    --warn-bg: #fff6e6; --warn-bd: #ffdfa1; --warn-fg: #8a5a00;
+    --note-bg: #eef3ff; --note-bd: #c7d7ff; --note-fg: #274690;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.top {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%);
+    color: #fff;
+    padding: 34px 24px 30px;
+  }
+  .top__inner { max-width: 900px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 22px; letter-spacing: -0.02em; }
+  .brand__mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 9px;
+    background: var(--blue); color: #fff; font-size: 18px;
+  }
+  header.top h1 { margin: 18px 0 6px; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
+  header.top p { margin: 0; color: #b9c3de; font-size: 14.5px; max-width: 680px; }
+
+  main { max-width: 900px; margin: 0 auto; padding: 28px 24px 60px; }
+
+  .toc {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 20px; margin: 0 0 28px;
+  }
+  .toc h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
+  .toc li { margin: 3px 0; break-inside: avoid; }
+  .toc a { color: var(--blue-dark); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+
+  section.card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 22px 26px; margin: 0 0 18px;
+  }
+  h2.sec { margin: 4px 0 14px; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--navy); }
+  h2.sec .num {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 28px; height: 28px; padding: 0 8px; margin-right: 10px;
+    border-radius: 8px; background: var(--note-bg); color: var(--note-fg);
+    font-size: 14px; font-weight: 700; vertical-align: 2px;
+  }
+  h3.sub { margin: 20px 0 8px; font-size: 15.5px; font-weight: 700; color: var(--ink); }
+  p { margin: 0 0 12px; }
+  ol, ul { margin: 0 0 12px; padding-left: 22px; }
+  li { margin: 5px 0; }
+  ul.tight li, ol.tight li { margin: 3px 0; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.86em; background: #eef1f7; border: 1px solid #e0e5ef;
+    padding: 1px 5px; border-radius: 5px; color: #33405c;
+  }
+  strong { font-weight: 700; }
+  .lead { font-size: 15.5px; color: #38414f; }
+
+  table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border: 1px solid var(--line); vertical-align: top; }
+  thead th { background: #f0f3fa; color: var(--navy); font-weight: 700; }
+  tbody tr:nth-child(even) td { background: #fafbfe; }
+
+  .callout {
+    border: 1px solid; border-radius: 10px; padding: 12px 16px; margin: 14px 0;
+    font-size: 14px;
+  }
+  .callout .callout__label { font-weight: 700; margin-right: 4px; }
+  .callout.note { background: var(--note-bg); border-color: var(--note-bd); color: var(--note-fg); }
+  .callout.warn { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); }
+
+  .faq q { display: block; font-weight: 700; color: var(--navy); margin: 14px 0 2px; quotes: none; }
+  .faq q::before, .faq q::after { content: ""; }
+
+  footer {
+    max-width: 900px; margin: 0 auto; padding: 0 24px 50px;
+    color: var(--muted); font-size: 13px;
+  }
+  .backtop { display: inline-block; margin-top: 6px; color: var(--blue-dark); text-decoration: none; font-size: 12.5px; }
+  a { color: var(--blue-dark); }
+
+  @media (max-width: 640px) {
+    .toc ol { columns: 1; }
+    header.top h1 { font-size: 22px; }
+    section.card { padding: 18px 18px; }
+  }
+  @media print {
+    body { background: #fff; }
+    header.top { background: #fff; color: #000; border-bottom: 2px solid var(--navy); }
+    header.top p { color: #444; }
+    .toc, section.card { border-color: #ccc; }
+    .backtop { display: none; }
+  }
+</style>
+</head>
+<body>
+<header class="top" id="top">
+  <div class="top__inner">
+    <div class="brand"><span class="brand__mark">S</span> skandata</div>
+    <h1>Инструкция по работе с сервисом «Скандата»</h1>
+    <p>Приёмка, отгрузка, списание и проверка маркированных товаров в одном окне.
+       Коды маркировки проверяются и проводятся в «Честном Знаке», документы и позиции —
+       в «МойСклад».</p>
+  </div>
+</header>
+
+<main>
+  <p class="lead">Инструкция предназначена для кладовщика и администратора. Все действия
+     выполняются в браузере — установка программ не требуется (кроме плагина КриптоПро
+     для входа в «Честный Знак», см. ниже).</p>
+
+  <nav class="toc" aria-label="Содержание">
+    <h2>Содержание</h2>
+    <ol>
+      <li><a href="#launch">Запуск</a></li>
+      <li><a href="#setup">Настройка</a></li>
+      <li><a href="#acceptance">Приёмка товаров</a></li>
+      <li><a href="#shipment">Отгрузка товаров</a></li>
+      <li><a href="#writeoff">Списание (вывод из оборота)</a></li>
+      <li><a href="#check">Проверка марок</a></li>
+      <li><a href="#support">Техническая поддержка</a></li>
+      <li><a href="#faq">Частые вопросы</a></li>
+    </ol>
+  </nav>
+
+  <section class="card" id="launch">
+    <h2 class="sec"><span class="num">1</span>Запуск</h2>
+    <p>Сервис можно открыть двумя способами:</p>
+    <ol>
+      <li><strong>Из каталога решений МойСклад</strong> (основной способ). Установите
+        решение «Скандата» на свой аккаунт. Внутри МойСклада появится вкладка приложения —
+        на ней краткое приветствие, настройки и кнопки <strong>«Начать приёмку»</strong> /
+        <strong>«Начать отгрузку»</strong>. По кнопке рабочий экран открывается в
+        <strong>новой вкладке</strong> браузера (так USB-сканеру не мешает потеря фокуса
+        внутри окна МойСклада).</li>
+      <li><strong>Напрямую</strong> по адресу <code>https://skandata.ru/</code> — вход через МойСклад.</li>
+    </ol>
+    <div class="callout note"><span class="callout__label">Заметка.</span>
+      После первого запуска из каталога подключение к МойСкладу уже активно —
+      вводить токены вручную не нужно.</div>
+  </section>
+
+  <section class="card" id="setup">
+    <h2 class="sec"><span class="num">2</span>Настройка (раздел «Настройки»)</h2>
+    <p>Перед первой работой откройте <strong>Настройки</strong> и выполните подключения.</p>
+
+    <h3 class="sub">2.1 МойСклад</h3>
+    <p>При запуске из каталога решений подключение устанавливается автоматически.
+       Статус подключения и название аккаунта показаны в разделе. Кнопка
+       <strong>«Отвязать МойСклад»</strong> отключает интеграцию (данные документов
+       при этом сохраняются).</p>
+
+    <h3 class="sub">2.2 Честный Знак</h3>
+    <p>Вход выполняется по <strong>усиленной квалифицированной электронной подписи (УКЭП)</strong>
+       через плагин <strong>КриптоПро ЭЦП Browser plug-in</strong>:</p>
+    <ol>
+      <li>Установите плагин КриптоПро (если ещё не установлен) и подключите носитель с подписью.</li>
+      <li>Нажмите <strong>«Войти в Честный Знак»</strong> — сервис запросит подпись,
+        приватный ключ остаётся в вашем браузере и никуда не передаётся.</li>
+      <li>После входа отображается срок действия токена и субъект сертификата.</li>
+    </ol>
+    <p>ИНН участника оборота определяется из сертификата автоматически; при необходимости
+       его можно указать вручную (нужен для документов списания).</p>
+
+    <h3 class="sub">2.3 Товарные группы</h3>
+    <p>Отметьте товарные группы, с которыми работаете (табак, обувь, вода и т. д.).
+       От этого зависит корректная проверка кодов в «Честном Знаке».</p>
+
+    <h3 class="sub">2.4 Сканер</h3>
+    <p>В разделе <strong>Настройки → Сканер</strong> выберите способ ввода кодов:</p>
+    <ul>
+      <li><strong>USB-сканер (клавиатура)</strong> — режим по умолчанию. Сканер работает
+        как клавиатура: просто отсканируйте код в поле ввода, установка ничего не требует.
+        Подходит большинству USB-сканеров «из коробки».</li>
+      <li><strong>COM-порт (Web Serial API)</strong> — если сканер подключён как виртуальный
+        COM-порт (USB-CDC / RS-232). Работает <strong>только в браузерах Chrome или Edge по HTTPS</strong>.
+        Нажмите <strong>«Подключить COM-порт»</strong> и выберите порт сканера в диалоге браузера —
+        порт запоминается, при следующих запусках подключение автоматическое.</li>
+    </ul>
+
+    <h3 class="sub">Настройки сканера для режима COM-порт</h3>
+    <p>Переключите сканер в режим <strong>Virtual COM Port (USB-CDC)</strong> и задайте
+       параметры порта (обычно настраивается сервисными штрих-кодами из инструкции
+       к вашей модели сканера):</p>
+    <table>
+      <thead><tr><th>Параметр</th><th>Значение</th></tr></thead>
+      <tbody>
+        <tr><td>Скорость (baud rate)</td><td><strong>9600</strong></td></tr>
+        <tr><td>Биты данных (data bits)</td><td><strong>8</strong></td></tr>
+        <tr><td>Чётность (parity)</td><td><strong>нет (none)</strong></td></tr>
+        <tr><td>Стоп-биты (stop bits)</td><td><strong>1</strong></td></tr>
+        <tr><td>Управление потоком (flow control)</td><td><strong>нет (none)</strong></td></tr>
+        <tr><td>Окончание строки (суффикс)</td><td><strong>CR, LF или CR+LF</strong> (перевод строки после каждого кода)</td></tr>
+        <tr><td>Разделитель групп GS1 (FNC1 / GS)</td><td><strong>включён</strong>: символ <code>GS</code> (0x1D) или подменный <code>0xF8</code> — сервис распознаёт оба (0xF8 — типовая настройка «под 1С»)</td></tr>
+      </tbody>
+    </table>
+    <p>Коротко: <strong>9600, 8-N-1, без управления потоком, суффикс CR/LF, передача
+       GS-разделителя включена.</strong> Разделитель групп обязателен — без него коды
+       GS1 DataMatrix (с несколькими полями, напр. GTIN + серийный номер + срок годности)
+       склеятся и не пройдут проверку.</p>
+    <div class="callout warn"><span class="callout__label">Внимание.</span>
+      Если после подключения появляется «COM-порт занят другой программой» — закройте
+      другие вкладки/окна приложения и программы, использующие сканер (например, «1С»
+      или тест-утилиту производителя), и подключитесь заново. Порт может держать только
+      одна программа.</div>
+  </section>
+
+  <section class="card" id="acceptance">
+    <h2 class="sec"><span class="num">3</span>Приёмка товаров (раздел «Приёмка»)</h2>
+    <p>Приёмка выполняется на основании <strong>УПД</strong> (универсального передаточного документа).</p>
+    <ol>
+      <li>Выберите <strong>товарную группу</strong> и <strong>поступление</strong> из МойСклада (поиск по названию).</li>
+      <li>Нажмите <strong>«Загрузить УПД»</strong> и выберите XML-файл УПД (формат ФНС 5.03).
+        Сервис распознает позиции и коды маркировки, в том числе <strong>короба и блоки</strong>
+        (агрегаты автоматически разворачиваются на штучные коды).</li>
+      <li>Товары сопоставляются с позициями поступления по GTIN. Если какой-то товар
+        не определился — сопоставьте его вручную в <strong>панели подбора</strong>
+        (поиск по каталогу МойСклада).</li>
+      <li>Нажмите <strong>«Отправить приёмку в МС»</strong>. Коды маркировки запишутся
+        в позиции выбранного поступления. Дождитесь статуса <strong>«Принято»</strong>.</li>
+    </ol>
+    <div class="callout note"><span class="callout__label">Заметка.</span>
+      Если поступление не выбрано, приёмка работает в режиме <strong>только проверки</strong> —
+      коды проверяются, но в МойСклад не записываются.</div>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+
+  <section class="card" id="shipment">
+    <h2 class="sec"><span class="num">4</span>Отгрузка товаров (раздел «Отгрузка»)</h2>
+    <ol>
+      <li>Выберите <strong>отгрузку</strong> из МойСклада. Если у документа есть план,
+        он отобразится таблицей прогресса по товарам.</li>
+      <li><strong>Сканируйте</strong> коды маркировки USB-сканером (работает как клавиатура)
+        или вводите вручную. Каждый код сразу отправляется на проверку; результат
+        подсвечивается цветом, звучит сигнал.
+        <ul class="tight">
+          <li><strong>Короба (SSCC)</strong> можно раскрыть на штучные коды или отгрузить целиком.</li>
+          <li><strong>Немаркированный товар</strong> добавляется сканированием обычного штрихкода (EAN).</li>
+          <li>Коды сверх плана отмечаются отдельно и не мешают отправке.</li>
+        </ul>
+      </li>
+      <li>Нажмите <strong>«Отгрузить»</strong>. Коды запишутся в позиции отгрузки в МойСкладе.
+        Итог можно выгрузить в <strong>XLSX</strong>.</li>
+    </ol>
+    <p>Подсказки при отгрузке: если владелец кода в «Честном Знаке» не совпадает с вашим
+       ИНН — код помечается «Чужой владелец» (предупреждение, отгрузку не блокирует).</p>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+
+  <section class="card" id="writeoff">
+    <h2 class="sec"><span class="num">5</span>Списание — вывод из оборота (раздел «Списание»)</h2>
+    <p>Списание выводит коды маркировки <strong>из оборота</strong> через «Честный Знак».
+       МойСклад в этом потоке не участвует.</p>
+    <ol>
+      <li>Соберите коды (сканированием или списком) и выберите <strong>причину</strong>
+        вывода из оборота (порча, собственные нужды, демонстрационные образцы и др.).</li>
+      <li>При необходимости укажите <strong>основание</strong> (номер и дату первичного документа).</li>
+      <li>Нажмите отправку и <strong>подпишите</strong> документ электронной подписью.
+        Приватный ключ остаётся в браузере.</li>
+      <li>Дождитесь статуса <strong>«Списано»</strong>. При ошибке сервис покажет причину.</li>
+    </ol>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+
+  <section class="card" id="check">
+    <h2 class="sec"><span class="num">6</span>Проверка марок (раздел «Проверка»)</h2>
+    <p>Отсканируйте код или вставьте список кодов (по одному в строке), чтобы узнать
+       <strong>статус, владельца, производителя и товар</strong> без изменения каких-либо
+       документов. Результат проверки можно выгрузить в <strong>CSV</strong>.</p>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+
+  <section class="card" id="support">
+    <h2 class="sec"><span class="num">7</span>Техническая поддержка</h2>
+    <p>Если что-то не работает или непонятно:</p>
+    <ol>
+      <li>Откройте раздел <strong>«Помощь»</strong>.</li>
+      <li>Нажмите <strong>«Написать в техподдержку»</strong>.</li>
+      <li>Выберите раздел, укажите тему и опишите проблему (по возможности — номер
+        документа и шаг, на котором возникла ошибка).</li>
+      <li>Отправьте обращение. Оно поступит напрямую в нашу поддержку; ответ придёт
+        на электронную почту, привязанную к вашей учётной записи.</li>
+    </ol>
+    <p>Запасной канал связи — электронная почта поддержки, указанная в форме обращения.</p>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+
+  <section class="card faq" id="faq">
+    <h2 class="sec"><span class="num">8</span>Частые вопросы</h2>
+    <q>Сканер не срабатывает.</q>
+    <p>Убедитесь, что рабочий экран открыт в отдельной вкладке (а не внутри окна МойСклада)
+       и что курсор находится в области сканирования. Для режима COM-порт проверьте параметры
+       сканера (см. §2.4) и что порт не занят другой программой.</p>
+    <q>«Войдите в Честный Знак».</q>
+    <p>Токен «Честного Знака» истёк — повторно войдите в разделе «Настройки»
+       (для входа нужна свежая электронная подпись).</p>
+    <q>Товар не определился по коду.</q>
+    <p>Сопоставьте GTIN с товаром вручную в панели подбора — сопоставление запоминается
+       для последующих документов.</p>
+    <q>Коды не записались в МойСклад.</q>
+    <p>Проверьте, что выбран документ МойСклада и что у решения есть необходимые права
+       (переустановите решение из каталога, если недавно обновлялись права доступа).
+       При повторении — напишите в техподдержку.</p>
+    <a class="backtop" href="#top">↑ К содержанию</a>
+  </section>
+</main>
+
+<footer>
+  Сервис «Скандата» — приёмка и отгрузка маркированных товаров. Интеграции: МойСклад, Честный Знак.
+</footer>
+</body>
+</html>
