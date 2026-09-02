@@ -6,123 +6,281 @@
 <title>Инструкция по работе с сервисом «Скандата»</title>
 <style>
   :root {
-    --navy: #1b2547;
-    --navy-2: #232f57;
-    --blue: #2f6bff;
-    --blue-dark: #2050d6;
-    --ink: #1d2433;
-    --muted: #5b6478;
-    --line: #e4e8f0;
-    --bg: #f5f7fb;
+    --brand: #004efe;
+    --brand-dark: #0038cf;
+    --brand-weak: #e8eeff;
+    --brand-ring: rgba(0, 78, 254, 0.18);
+
+    --ink: #202932;
+    --chrome: #1a222c;
+    --chrome-2: #232f3d;
+
+    --text: #202932;
+    --muted: #5b6576;
+    --subtle: #8a93a2;
+
+    --line: #e5e9f1;
+    --line-soft: #eef1f7;
+    --bg: #f4f6fb;
     --card: #ffffff;
-    --ok-bg: #eaf7ee; --ok-bd: #b7e0c4; --ok-fg: #1f7a3d;
+    --surface-2: #f6f8fc;
+
+    --ok-bg: #eaf7ee; --ok-bd: #b7e0c4; --ok-fg: #1c7a3c;
     --warn-bg: #fff6e6; --warn-bd: #ffdfa1; --warn-fg: #8a5a00;
-    --note-bg: #eef3ff; --note-bd: #c7d7ff; --note-fg: #274690;
+    --note-bg: #eef3ff; --note-bd: #cadaff; --note-fg: #1f47b8;
+
+    --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06);
+    --shadow-card: 0 1px 3px rgba(16, 24, 40, 0.05), 0 10px 30px rgba(16, 24, 40, 0.05);
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    color: var(--ink);
+    color: var(--text);
     background: var(--bg);
     line-height: 1.65;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
+
+  /* ---------- Header ---------- */
   header.top {
-    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%);
+    position: relative;
+    overflow: hidden;
+    background:
+      radial-gradient(130% 150% at 88% -20%, #26333f 0%, rgba(38, 51, 63, 0) 55%),
+      linear-gradient(160deg, var(--chrome-2) 0%, var(--chrome) 70%);
     color: #fff;
-    padding: 34px 24px 30px;
+    padding: 44px 24px 46px;
+    border-bottom: 3px solid var(--brand);
   }
-  .top__inner { max-width: 900px; margin: 0 auto; }
-  .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 22px; letter-spacing: -0.02em; }
-  .brand__mark {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 34px; height: 34px; border-radius: 9px;
-    background: var(--blue); color: #fff; font-size: 18px;
+  .top__inner {
+    position: relative;
+    z-index: 1;
+    max-width: 940px;
+    margin: 0 auto;
+    animation: rise 0.6s var(--ease) both;
   }
-  header.top h1 { margin: 18px 0 6px; font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
-  header.top p { margin: 0; color: #b9c3de; font-size: 14.5px; max-width: 680px; }
+  .glyph-watermark {
+    position: absolute;
+    top: -46px; right: -46px;
+    width: 320px; height: 320px;
+    filter: brightness(0) invert(1);
+    opacity: 0.05;
+    z-index: 0;
+    pointer-events: none;
+    user-select: none;
+  }
+  .brand { display: flex; align-items: center; }
+  .brand-logo { height: 30px; width: auto; display: block; }
+  .brand-logo--dark { display: none; }
+  header.top h1 {
+    margin: 22px 0 8px;
+    font-size: 29px; font-weight: 700; line-height: 1.15;
+    letter-spacing: -0.025em;
+    max-width: 720px;
+  }
+  header.top .sub {
+    margin: 0;
+    color: #b7c1d6;
+    font-size: 15px;
+    max-width: 660px;
+  }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
 
-  main { max-width: 900px; margin: 0 auto; padding: 28px 24px 60px; }
+  main { max-width: 940px; margin: 0 auto; padding: 30px 24px 24px; }
 
+  .lead {
+    font-size: 16px; color: #3a4351;
+    max-width: 740px;
+    margin: 0 0 30px;
+  }
+
+  /* ---------- Table of contents ---------- */
   .toc {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 16px 20px; margin: 0 0 28px;
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 16px;
+    box-shadow: var(--shadow-card);
+    padding: 20px 22px 22px;
+    margin: 0 0 34px;
   }
-  .toc h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
-  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; }
-  .toc li { margin: 3px 0; break-inside: avoid; }
-  .toc a { color: var(--blue-dark); text-decoration: none; }
-  .toc a:hover { text-decoration: underline; }
-
-  section.card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-    padding: 22px 26px; margin: 0 0 18px;
+  .toc h2 {
+    margin: 0 0 14px;
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--subtle); font-weight: 700;
   }
-  h2.sec { margin: 4px 0 14px; font-size: 20px; font-weight: 700; letter-spacing: -0.01em; color: var(--navy); }
-  h2.sec .num {
+  .toc ol {
+    counter-reset: toc;
+    list-style: none;
+    margin: 0; padding: 0;
+    columns: 2; column-gap: 26px;
+  }
+  .toc li { counter-increment: toc; break-inside: avoid; margin: 0; }
+  .toc a {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 10px; border-radius: 10px;
+    color: var(--text); text-decoration: none; font-weight: 500;
+    transition: background 0.16s var(--ease), color 0.16s var(--ease);
+  }
+  .toc a::before {
+    content: counter(toc);
+    flex: 0 0 auto;
     display: inline-flex; align-items: center; justify-content: center;
-    min-width: 28px; height: 28px; padding: 0 8px; margin-right: 10px;
-    border-radius: 8px; background: var(--note-bg); color: var(--note-fg);
-    font-size: 14px; font-weight: 700; vertical-align: 2px;
+    width: 26px; height: 26px; border-radius: 8px;
+    background: var(--brand-weak); color: var(--brand);
+    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: background 0.16s var(--ease), color 0.16s var(--ease);
   }
-  h3.sub { margin: 20px 0 8px; font-size: 15.5px; font-weight: 700; color: var(--ink); }
+  .toc a:hover { background: var(--brand-weak); color: var(--brand-dark); }
+  .toc a:hover::before { background: var(--brand); color: #fff; }
+
+  /* ---------- Sections ---------- */
+  section.card {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--line-soft);
+    border-radius: 16px;
+    box-shadow: var(--shadow-card);
+    padding: 26px 30px;
+    margin: 0 0 20px;
+    scroll-margin-top: 20px;
+  }
+  h2.sec {
+    display: flex; align-items: center; gap: 12px;
+    margin: 2px 0 16px;
+    font-size: 21px; font-weight: 700; letter-spacing: -0.015em;
+    color: var(--ink);
+  }
+  h2.sec .num {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; border-radius: 10px;
+    background: var(--brand); color: #fff;
+    font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+    box-shadow: var(--shadow-1);
+  }
+  h3.sub {
+    margin: 22px 0 8px;
+    font-size: 15.5px; font-weight: 700; color: var(--ink);
+  }
+  h3.sub:first-of-type { margin-top: 10px; }
   p { margin: 0 0 12px; }
   ol, ul { margin: 0 0 12px; padding-left: 22px; }
-  li { margin: 5px 0; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--subtle); }
+  ol > li::marker { color: var(--brand); font-weight: 700; }
   ul.tight li, ol.tight li { margin: 3px 0; }
   code {
     font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 0.86em; background: #eef1f7; border: 1px solid #e0e5ef;
-    padding: 1px 5px; border-radius: 5px; color: #33405c;
+    font-size: 0.85em; background: #eef1f7; border: 1px solid #e0e5ef;
+    padding: 1px 6px; border-radius: 6px; color: #33405c;
   }
   strong { font-weight: 700; }
-  .lead { font-size: 15.5px; color: #38414f; }
 
-  table { border-collapse: collapse; width: 100%; margin: 6px 0 14px; font-size: 14px; }
-  th, td { text-align: left; padding: 9px 12px; border: 1px solid var(--line); vertical-align: top; }
-  thead th { background: #f0f3fa; color: var(--navy); font-weight: 700; }
+  /* ---------- Table ---------- */
+  table {
+    border-collapse: collapse; width: 100%;
+    margin: 8px 0 16px; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden;
+  }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    background: var(--surface-2); color: var(--ink); font-weight: 700;
+    font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.03em;
+  }
+  tbody tr:last-child td { border-bottom: none; }
   tbody tr:nth-child(even) td { background: #fafbfe; }
 
+  /* ---------- Callouts ---------- */
   .callout {
-    border: 1px solid; border-radius: 10px; padding: 12px 16px; margin: 14px 0;
-    font-size: 14px;
+    display: flex; gap: 11px; align-items: flex-start;
+    border: 1px solid; border-radius: 12px; padding: 13px 16px; margin: 16px 0;
+    font-size: 14.5px;
+  }
+  .callout::before {
+    content: ""; flex: 0 0 auto;
+    width: 8px; height: 8px; margin-top: 8px; border-radius: 50%;
+    background: currentColor; opacity: 0.7;
   }
   .callout .callout__label { font-weight: 700; margin-right: 4px; }
   .callout.note { background: var(--note-bg); border-color: var(--note-bd); color: var(--note-fg); }
   .callout.warn { background: var(--warn-bg); border-color: var(--warn-bd); color: var(--warn-fg); }
 
-  .faq q { display: block; font-weight: 700; color: var(--navy); margin: 14px 0 2px; quotes: none; }
-  .faq q::before, .faq q::after { content: ""; }
+  /* ---------- FAQ ---------- */
+  .faq q {
+    display: block; font-weight: 700; color: var(--ink);
+    margin: 18px 0 4px; quotes: none;
+    padding-left: 18px; position: relative;
+  }
+  .faq q:first-of-type { margin-top: 4px; }
+  .faq q::before {
+    content: ""; position: absolute; left: 0; top: 0.72em;
+    width: 7px; height: 7px; border-radius: 2px;
+    background: var(--brand);
+  }
+  .faq q::after { content: ""; }
+
+  /* ---------- Back to top / footer ---------- */
+  .backtop {
+    display: inline-flex; align-items: center; gap: 5px;
+    margin-top: 10px;
+    color: var(--brand-dark); text-decoration: none;
+    font-size: 13px; font-weight: 600;
+  }
+  .backtop:hover { color: var(--brand); }
+  a { color: var(--brand-dark); }
 
   footer {
-    max-width: 900px; margin: 0 auto; padding: 0 24px 50px;
+    max-width: 940px; margin: 0 auto;
+    padding: 26px 24px 56px;
     color: var(--muted); font-size: 13px;
+    display: flex; align-items: center; gap: 14px;
+    border-top: 1px solid var(--line-soft);
+    margin-top: 20px;
   }
-  .backtop { display: inline-block; margin-top: 6px; color: var(--blue-dark); text-decoration: none; font-size: 12.5px; }
-  a { color: var(--blue-dark); }
+  footer img { height: 22px; width: auto; opacity: 0.9; }
 
   @media (max-width: 640px) {
+    header.top { padding: 34px 20px 36px; }
+    header.top h1 { font-size: 24px; }
     .toc ol { columns: 1; }
-    header.top h1 { font-size: 22px; }
-    section.card { padding: 18px 18px; }
+    section.card { padding: 20px 20px; }
+    main { padding: 24px 18px 20px; }
+    footer { flex-direction: column; align-items: flex-start; gap: 10px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .top__inner { animation: none; }
   }
   @media print {
     body { background: #fff; }
-    header.top { background: #fff; color: #000; border-bottom: 2px solid var(--navy); }
-    header.top p { color: #444; }
-    .toc, section.card { border-color: #ccc; }
+    header.top { background: #fff; color: #000; border-bottom: 2px solid var(--ink); padding: 20px 0; }
+    header.top .sub { color: #444; }
+    .glyph-watermark { display: none; }
+    .brand-logo--light { display: none; }
+    .brand-logo--dark { display: block; }
+    .toc, section.card { box-shadow: none; border-color: #ccc; }
     .backtop { display: none; }
   }
 </style>
 </head>
 <body>
 <header class="top" id="top">
+  <img class="glyph-watermark" src="/favicon.svg" alt="" aria-hidden="true">
   <div class="top__inner">
-    <div class="brand"><span class="brand__mark">S</span> skandata</div>
+    <div class="brand">
+      <img class="brand-logo brand-logo--light" src="/logo-light.svg" alt="Скандата">
+      <img class="brand-logo brand-logo--dark" src="/logo.svg" alt="Скандата">
+    </div>
     <h1>Инструкция по работе с сервисом «Скандата»</h1>
-    <p>Приёмка, отгрузка, списание и проверка маркированных товаров в одном окне.
+    <p class="sub">Приёмка, отгрузка, списание и проверка маркированных товаров в одном окне.
        Коды маркировки проверяются и проводятся в «Честном Знаке», документы и позиции —
        в «МойСклад».</p>
   </div>
@@ -159,9 +317,9 @@
         внутри окна МойСклада).</li>
       <li><strong>Напрямую</strong> по адресу <code>https://skandata.ru/</code> — вход через МойСклад.</li>
     </ol>
-    <div class="callout note"><span class="callout__label">Заметка.</span>
+    <div class="callout note"><div><span class="callout__label">Заметка.</span>
       После первого запуска из каталога подключение к МойСкладу уже активно —
-      вводить токены вручную не нужно.</div>
+      вводить токены вручную не нужно.</div></div>
   </section>
 
   <section class="card" id="setup">
@@ -222,11 +380,11 @@
        GS-разделителя включена.</strong> Разделитель групп обязателен — без него коды
        GS1 DataMatrix (с несколькими полями, напр. GTIN + серийный номер + срок годности)
        склеятся и не пройдут проверку.</p>
-    <div class="callout warn"><span class="callout__label">Внимание.</span>
+    <div class="callout warn"><div><span class="callout__label">Внимание.</span>
       Если после подключения появляется «COM-порт занят другой программой» — закройте
       другие вкладки/окна приложения и программы, использующие сканер (например, «1С»
       или тест-утилиту производителя), и подключитесь заново. Порт может держать только
-      одна программа.</div>
+      одна программа.</div></div>
   </section>
 
   <section class="card" id="acceptance">
@@ -243,9 +401,9 @@
       <li>Нажмите <strong>«Отправить приёмку в МС»</strong>. Коды маркировки запишутся
         в позиции выбранного поступления. Дождитесь статуса <strong>«Принято»</strong>.</li>
     </ol>
-    <div class="callout note"><span class="callout__label">Заметка.</span>
+    <div class="callout note"><div><span class="callout__label">Заметка.</span>
       Если поступление не выбрано, приёмка работает в режиме <strong>только проверки</strong> —
-      коды проверяются, но в МойСклад не записываются.</div>
+      коды проверяются, но в МойСклад не записываются.</div></div>
     <a class="backtop" href="#top">↑ К содержанию</a>
   </section>
 
@@ -330,7 +488,8 @@
 </main>
 
 <footer>
-  Сервис «Скандата» — приёмка и отгрузка маркированных товаров. Интеграции: МойСклад, Честный Знак.
+  <img src="/favicon.svg" alt="Скандата">
+  <span>Сервис «Скандата» — приёмка и отгрузка маркированных товаров. Интеграции: МойСклад, Честный Знак.</span>
 </footer>
 </body>
 </html>
