@@ -1094,6 +1094,35 @@ async def _process_document_async(document_id: str, user_id: str):
                         )
                 await db.flush()
 
+            # Развернуть удалось не все агрегаты (ЧЗ 404 по всем товарным группам —
+            # напр. группа товара не включена в настройках, либо код не зарегистрирован
+            # как агрегат). Слать сырой код короба в МС нельзя: в поступление уйдёт код
+            # упаковки вместо марок пачек. Для supply прерываем с понятной ошибкой,
+            # не помечая документ accepted (см. guard на отсутствие токена выше).
+            unexpanded = [s for s in boxes_to_expand if not s.child_codes]
+            if kind == "supply" and unexpanded:
+                doc.error_message = (
+                    f"Не удалось развернуть {len(unexpanded)} коробов в марки маркировки: "
+                    "Честный Знак не нашёл эти коды ни в одной из включённых товарных групп. "
+                    "Проверьте, что нужная товарная группа включена в Настройках, и повторите приёмку."
+                )
+                logger.warning(
+                    "process_document.boxes_unexpanded",
+                    document_id=document_id,
+                    unexpanded=len(unexpanded),
+                    boxes=len(boxes_to_expand),
+                )
+                await db.commit()
+                await monitoring_emit(
+                    "process_document.boxes_unexpanded",
+                    level="warning",
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    document_id=document_id,
+                    kind=kind,
+                    unexpanded=len(unexpanded),
+                )
+                return
+
         # Интеграции
         int_result = await db.execute(
             select(Integration).where(Integration.user_id == user_id)
