@@ -359,12 +359,13 @@ async def _resolve_product(
         if gk and gk in plan_map:
             return _done(plan_map[gk])
 
-        # 1. Запомненное ручное соответствие.
+        # 1. Запомненная связка (ручная привязка ИЛИ авто-резолв прошлых приёмок/отгрузок).
+        #    Ключ нормализуем (GTIN-14), т.к. в базу знаний пишем нормализованный.
         map_row = (
             await db.execute(
                 select(GtinProductMap).where(
                     GtinProductMap.user_id == user_id,
-                    GtinProductMap.gtin == gtin,
+                    GtinProductMap.gtin == (gk or gtin),
                 )
             )
         ).scalar_one_or_none()
@@ -392,17 +393,22 @@ async def _resolve_product(
                         name = fresh
             return _done((map_row.product_id, name))
 
-        # 2. Поиск в каталоге МС по штрихкоду.
+        # 2. Поиск в каталоге МС по штрихкоду. Успешный резолв запоминаем в базе
+        #    знаний GTIN→товар — следующие приёмки/отгрузки этого GTIN резолвятся
+        #    локально, без похода в каталог МС.
         if ms is not None:
             try:
                 product = await ms.find_product_by_gtin(gtin)
             except Exception as exc:
                 logger.warning("acceptance.find_product_failed", gtin=gtin, error=str(exc))
                 product = None
-            if product:
-                return _done(
-                    (product.get("id"), (product.get("name") or "").strip() or None)
-                )
+            if product and product.get("id"):
+                pid = product.get("id")
+                pname = (product.get("name") or "").strip() or None
+                from app.services.gtin_product_store import remember_gtin_product
+
+                await remember_gtin_product(db, user_id, gtin, pid, pname)
+                return _done((pid, pname))
 
     # 3. По КодТов/артикулу против позиций привязанного поступления МС. Для коробных
     #    позиций (только SSCC, без штучных КМ) это единственный путь к товару.

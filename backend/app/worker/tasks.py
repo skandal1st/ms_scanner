@@ -85,11 +85,28 @@ def _run(coro):
 
 
 async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
-    """Подтянуть товар из МойСклад по GTIN: имя и UUID (если ещё не заполнены)."""
+    """Подтянуть товар по GTIN: сперва локальная база знаний, при промахе — МС.
+
+    Порядок: своя БД (GtinProductMap) → МойСклад. Каждый успешный резолв из МС
+    записываем в базу знаний, чтобы следующие сканы этого GTIN резолвились локально
+    (быстро) и имя оставалось доступным как фолбэк, даже если позже МС не ответит.
+    """
     from sqlalchemy import select
     from app.db.models import Integration
     from app.services.moysklad import MoySkladService
+    from app.services.gtin_product_store import get_gtin_product, remember_gtin_product
     from app.core.security import decrypt_token
+
+    # 1. Локальная база знаний GTIN→товар — без похода в МС.
+    remembered = await get_gtin_product(db, user_id, scan.gtin)
+    if remembered:
+        pid, pname = remembered
+        if pid and not scan.moysklad_product_id:
+            scan.moysklad_product_id = pid
+        if pname and not scan.product_name:
+            scan.product_name = pname
+        if scan.moysklad_product_id:
+            return  # товар определён — в МС не идём
 
     int_result = await db.execute(select(Integration).where(Integration.user_id == user_id))
     integration = int_result.scalar_one_or_none()
@@ -112,6 +129,11 @@ async def _enrich_scan_product_name_from_ms(db, user_id, scan) -> None:
         scan.product_name = product["name"]
     if product.get("id") and not scan.moysklad_product_id:
         scan.moysklad_product_id = product["id"]
+    # 2. Сверили GTIN с товаром МС — пополняем базу знаний.
+    if product.get("id"):
+        await remember_gtin_product(
+            db, user_id, scan.gtin, product["id"], product.get("name")
+        )
 
 
 async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> None:
