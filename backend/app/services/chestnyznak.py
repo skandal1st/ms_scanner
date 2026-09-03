@@ -1077,6 +1077,27 @@ class ChestnyZnakService:
                 )
                 del remaining[req]
 
+        # cises/info видит только коды, которыми участник ВЛАДЕЕТ/оперирует — для входящих
+        # марок (отгрузка) он отвечает 404, хотя код в обороте. Авторитетная проверка
+        # годности — cises/check: он подтверждает валидность любого кода в обороте.
+        # Прогоняем через него всё, что cises/info не нашёл, и валидные помечаем годными.
+        if remaining:
+            check_valid, check_infra = await self._cises_check_valid(
+                list(remaining.values())
+            )
+            if check_infra:
+                had_infra_failure = True
+            for key in list(remaining.keys()):
+                orig = remaining[key]
+                if orig in check_valid:
+                    results[orig] = CisCheck(
+                        code=orig,
+                        found=True,
+                        gtin=normalize_gtin_key(extract_gtin(orig)),
+                        status="INTRODUCED",
+                    )
+                    del remaining[key]
+
         for orig in remaining.values():
             # Ответ по группам, где код мог быть, не получен → uncertain (повторить),
             # а не «точно не найдена».
@@ -1097,6 +1118,83 @@ class ChestnyZnakService:
             uncertain=sum(1 for r in results.values() if r.uncertain),
         )
         return [results[c] for c in order]
+
+    async def _cises_check_valid(
+        self, codes: list[str]
+    ) -> tuple[set[str], bool]:
+        """Проверить годность кодов через True API cises/check (перебор товарных групп).
+
+        Возвращает ``(множество ГОДНЫХ исходных кодов, был_ли_инфраструктурный_сбой)``.
+
+        В отличие от cises/info, cises/check подтверждает валидность кода в обороте даже
+        если участник им не владеет (нужно для отгрузки входящих марок). Код шлём как
+        отсканирован (с криптохвостом), убирая лишь скобки логистических AI — иначе ЧЗ
+        отвечает ``result:false``. Ответ: ``{"result":true}`` — все присланные годны;
+        ``{"result":false,"codes":[…]}`` — перечислены НЕгодные (для этой группы), их
+        пробуем в следующей группе.
+        """
+        if not codes or self.mock or not self.token:
+            return set(), False
+
+        from app.services.cz_logger import log_cz_request
+
+        check_url = f"{self.base_url}/api/v3/true-api/cises/check"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        key_to_orig = {strip_ai_brackets(c): c for c in codes}
+        remaining = list(key_to_orig.keys())
+        valid_origs: set[str] = set()
+        had_infra_failure = False
+
+        for pg in self.product_groups:
+            if not remaining:
+                break
+            start = time.time()
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.post(
+                        check_url,
+                        params={"pg": pg},
+                        headers=headers,
+                        json={"codes": remaining},
+                    )
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = None
+                    await log_cz_request(
+                        method="POST",
+                        url=f"{check_url}?pg={pg}",
+                        request_body={"count": len(remaining)},
+                        response_status=resp.status_code,
+                        response_body=body if isinstance(body, dict) else None,
+                        duration_ms=int((time.time() - start) * 1000),
+                    )
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                logger.warning("cz.cises_check.http_error", pg=pg, error=str(exc))
+                had_infra_failure = True
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                had_infra_failure = True
+                continue
+            if resp.status_code != 200 or not isinstance(body, dict):
+                continue
+            if body.get("result") is True:
+                for k in remaining:
+                    valid_origs.add(key_to_orig[k])
+                remaining = []
+                break
+            if isinstance(body.get("codes"), list):
+                invalid = set(body["codes"])
+                for k in remaining:
+                    if k not in invalid:
+                        valid_origs.add(key_to_orig[k])
+                remaining = [k for k in remaining if k in invalid]
+            # result:false без списка codes — не можем судить, пробуем следующую группу
+        return valid_origs, had_infra_failure
 
     @staticmethod
     def build_writeoff_document(
