@@ -116,9 +116,9 @@ def main():
     print(f"ЧЗ: {len(cz_keys)} | 1С: {len(c1_keys)} | совпало: {len(matched)} | "
           f"только ЧЗ: {len(only_cz)} | только 1С: {len(only_1c)}", flush=True)
 
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Сводка"
+    # write_only — потоковая запись, держит сотни тысяч строк без раздувания памяти.
+    wb = Workbook(write_only=True)
+    ws = wb.create_sheet("Сводка")
     ws.append(["Показатель", "Значение"])
     ws.append(["Числится в ЧЗ (уникальных КИ)", len(cz_keys)])
     ws.append(["В выгрузке 1С (уникальных КИ)", len(c1_keys)])
@@ -147,6 +147,15 @@ def main():
     out = os.path.splitext(cz_path)[0] + "_reconcile.xlsx"
     wb.save(out)
     print(f"Отчёт сохранён: {out}", flush=True)
+    # Дубли расхождений в CSV — удобнее для огромных списков (Excel-лист лимитирован ~1M строк).
+    for name, keys, getter in (
+        ("only_cz", only_cz, lambda k: [cz[k].get("cis"), cz[k].get("gtin"), cz[k].get("status"), cz[k].get("product_group"), cz[k].get("product_name")]),
+        ("only_1c", only_1c, lambda k: [c1[k]]),
+    ):
+        p = os.path.splitext(cz_path)[0] + f"_{name}.csv"
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            csv.writer(f).writerows(getter(k) for k in keys)
+        print(f"  {name}: {p} ({len(keys)} строк)", flush=True)
 
 
 if __name__ == "__main__":
