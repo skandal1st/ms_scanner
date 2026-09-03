@@ -61,7 +61,10 @@ class Settings(BaseSettings):
     CZ_CHALLENGE_TTL_SECONDS: int = 60
     # Товарные группы (pg) для True API cises/info — перебор при детекте агрегата (блока).
     # pg обязателен и зависит от группы товара; перебираем до первого ответа 200.
-    CZ_PRODUCT_GROUPS: str = "otp,tobacco,ncp"
+    # Дефолт для клиента с пустым Integration.cz_product_groups. Ориентир — кальянные
+    # магазины (кальянный табак = otp, безникотиновые смеси = ncp). tobacco (сигареты) и
+    # antiseptic в дефолт не входят — клиент включает их сам в Настройках при надобности.
+    CZ_PRODUCT_GROUPS: str = "otp,ncp"
 
     @computed_field
     @property
