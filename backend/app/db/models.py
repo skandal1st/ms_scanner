@@ -200,6 +200,26 @@ class GtinProductMap(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class GtinCzGroup(Base):
+    """Кэш «GTIN → товарная группа ЧЗ (pg)» — засевается из trackingType карточки МС.
+
+    Товарная группа — стабильное свойство самого GTIN (одинаково для всех клиентов),
+    поэтому таблица ГЛОБАЛЬНАЯ (без user_id). Нужна, чтобы пакетная проверка марок
+    (verify_document_task → check_codes) сразу знала правильную pg и не зависела от
+    того, включил ли клиент нужную группу галочкой в настройках: раньше при отсутствии
+    группы в списке ВСЕ коды получали «КМ/КИ не найден». Резолв: своя БД → МС
+    (find_product_by_gtin.trackingType) → запись сюда. Только оптимизация/подсказка —
+    при промахе перебор настроенных групп клиента всё равно проходит.
+    """
+    __tablename__ = "gtin_cz_group"
+
+    gtin = Column(String(14), primary_key=True)
+    product_group = Column(String(32), nullable=False)
+    # Источник значения: ms (из trackingType карточки), cz (подтверждён ответом ЧЗ).
+    source = Column(String(16), nullable=False, default="ms")
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class CzLog(Base):
     """Все запросы в Честный Знак — критично для отладки."""
     __tablename__ = "cz_logs"

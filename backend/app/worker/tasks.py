@@ -609,10 +609,33 @@ async def _verify_document_async(document_id: str, user_id: str):
             scans = res.scalars().all()
             scan_ids = [str(s.id) for s in scans]
             codes = [s.code for s in scans]
+            scan_gtins = [s.gtin for s in scans if s.gtin]
             cz_token = await _get_cz_token(db, user_id)
             cz_groups = await _get_cz_product_groups(db, user_id)
 
-        logger.info("verify_document.start", document_id=document_id, count=len(scan_ids))
+            # Товарные группы по GTIN (своя БД → МС → запись в БД): добавляем в перебор
+            # ЧЗ первыми, чтобы товар из «невключённой» галочкой группы не давал
+            # «КМ/КИ не найден» на всех сканах. Промах резолва — обычный перебор.
+            try:
+                from app.services.gtin_cz_group import resolve_pgs_for_gtins
+
+                ms_pgs = await resolve_pgs_for_gtins(db, user_id, scan_gtins)
+            except Exception as exc:
+                logger.warning(
+                    "verify_document.pg_resolve_failed",
+                    document_id=document_id,
+                    error=str(exc),
+                )
+                ms_pgs = set()
+            if ms_pgs:
+                cz_groups = list(ms_pgs) + [g for g in (cz_groups or []) if g not in ms_pgs]
+
+        logger.info(
+            "verify_document.start",
+            document_id=document_id,
+            count=len(scan_ids),
+            ms_pgs=sorted(ms_pgs) if ms_pgs else [],
+        )
 
         # #2 Батч-проверка статуса в ЧЗ: один запрос на товарную группу на всю пачку
         # (check_codes). В mock/без токена — прежний per-scan путь (precheck=None).

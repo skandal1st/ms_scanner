@@ -47,6 +47,42 @@ def normalize_product_groups(groups: Optional[list[str]]) -> list[str]:
     return [g["code"] for g in CZ_PRODUCT_GROUP_CATALOG if g["code"] in incoming]
 
 
+# Карта trackingType карточки товара МойСклад → товарная группа (pg) True API ЧЗ.
+# Нужна, чтобы по GTIN (через find_product_by_gtin) определить правильную pg и
+# подставить её первой в перебор при проверке марок — вместо слепого перебора
+# только включённых у клиента групп (из-за чего товар из «невключённой» группы
+# давал «КМ/КИ не найден» на всех сканах). Это ПОДСКАЗКА: неизвестный/неполный
+# маппинг не ломает проверку — просто нет ускорения, идёт обычный перебор.
+# Литералы trackingType — из справочника МС remap 1.2 (заказ КМ / карточка товара).
+MS_TRACKING_TYPE_TO_CZ_PG: dict[str, str] = {
+    "MILK": "milk",
+    "WATER": "water",
+    "BEER_ALCOHOL": "beer",
+    "SOFT_DRINKS": "softdrinks",
+    "TOBACCO": "tobacco",
+    "OTP": "otp",
+    "NCP": "ncp",
+    "SHOES": "shoes",
+    "LP_CLOTHES": "lp",
+    "LP_LINENS": "lp",
+    "PERFUMERY": "perfumery",
+    "TIRES": "tires",
+    "ELECTRONICS": "photo",
+    "SANITIZER": "antiseptic",
+    "FOOD_SUPPLEMENT": "bio",
+    "BIOLOGICALLY_ACTIVE_FOOD_SUPPLEMENTS": "bio",
+    "DIETARY_SUPPLEMENTS": "bio",
+}
+
+
+def cz_pg_from_ms_tracking_type(tracking_type: Optional[str]) -> Optional[str]:
+    """Товарная группа ЧЗ (pg) по trackingType карточки МС. None — тип не смаппился."""
+    tt = (tracking_type or "").strip().upper()
+    if not tt or tt == "NOT_TRACKED":
+        return None
+    return MS_TRACKING_TYPE_TO_CZ_PG.get(tt)
+
+
 # Причины списания (вывод из оборота ЧЗ): код для UI/БД → {action True API, человекочитаемая метка}.
 # Причины без прямого кода в True API кодируются как OWN_USE, метка дублируется в
 # primary_document_custom_name (решение пользователя). См. справочник «Причины выбытия».
@@ -412,10 +448,17 @@ class ChestnyZnakService:
         )
 
     def _ordered_groups(self, cached_pg: Optional[str]) -> list[str]:
-        """Порядок перебора групп: закэшированная для GTIN — первой (если клиент её маркирует)."""
+        """Порядок перебора групп: закэшированная для GTIN — первой.
+
+        Закэшированная группа (в т.ч. засеянная из trackingType МС, см. gtin_cz_group)
+        ставится первой, даже если клиент не включил её галочкой — иначе товар из
+        «невключённой» группы не нашёлся бы вовсе. Кэш глобальный и достоверный
+        (свойство GTIN), так что добавить одну группу в перебор безопасно.
+        """
         groups = list(self.product_groups)
-        if cached_pg and cached_pg in groups:
-            groups.remove(cached_pg)
+        if cached_pg:
+            if cached_pg in groups:
+                groups.remove(cached_pg)
             groups.insert(0, cached_pg)
         return groups
 
