@@ -85,11 +85,14 @@ def load_1c_codes(path: str, col: str | None) -> list[str]:
     return [str(r.get(use) or "").strip() for r in rows if str(r.get(use) or "").strip()]
 
 
-def load_cz_snapshot(path: str) -> dict[str, dict]:
-    """Каноничный CIS → строка снимка ЧЗ."""
+def load_cz_snapshot(path: str, pkg_filter: set[str] | None) -> dict[str, dict]:
+    """Каноничный CIS → строка снимка ЧЗ. pkg_filter — оставить только эти package_type
+    (напр. {"UNIT"}); None — все уровни (штучные + агрегаты блок/короб/паллета)."""
     out: dict[str, dict] = {}
     with open(path, "r", encoding="utf-8", newline="") as f:
         for r in csv.DictReader(f):
+            if pkg_filter and (r.get("package_type") or "").strip().upper() not in pkg_filter:
+                continue
             key = canonical(r.get("cis") or "")
             if key:
                 out[key] = r
@@ -103,7 +106,14 @@ def main():
     if not cz_path or not c1_path:
         raise SystemExit("Задайте INV_CZ (снимок ЧЗ) и INV_1C (выгрузка 1С)")
 
-    cz = load_cz_snapshot(cz_path)
+    # По умолчанию сверяем штучные (UNIT) — 1С обычно ведёт поштучный учёт КМ, а агрегаты
+    # (блок/короб/паллета) в 1С не числятся. INV_CZ_PKG=ALL — включить все уровни;
+    # INV_CZ_PKG=UNIT,LEVEL1 — свой список.
+    pkg_env = (os.environ.get("INV_CZ_PKG") or "UNIT").strip().upper()
+    pkg_filter = None if pkg_env == "ALL" else {p.strip() for p in pkg_env.split(",") if p.strip()}
+    print(f"Фильтр упаковки ЧЗ: {'все уровни' if pkg_filter is None else sorted(pkg_filter)}", flush=True)
+
+    cz = load_cz_snapshot(cz_path, pkg_filter)
     c1_raw = load_1c_codes(c1_path, col)
     c1 = {canonical(x): x for x in c1_raw if canonical(x)}
 

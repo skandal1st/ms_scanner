@@ -167,11 +167,21 @@ class CzDispenser:
         if not result_id:
             raise CzDispenserError(f"export {pg_string}: нет готового результата (resultId)")
 
-        async with httpx.AsyncClient(timeout=120) as c:
-            rf = await c.get(f"{self.base}/results/{result_id}/file", headers=self.headers)
-        if rf.status_code != 200 or rf.content[:2] != b"PK":
-            raise CzDispenserError(f"export {pg_string}: скачивание не ZIP (HTTP {rf.status_code})")
-        return _parse_filtered_cis_zip(rf.content, pg_string)
+        # Файл может кратко отдавать 403 сразу после SUCCESS (финализация на стороне ЧЗ) —
+        # несколько ретраев с паузой.
+        rf = None
+        for attempt in range(6):
+            async with httpx.AsyncClient(timeout=180) as c:
+                rf = await c.get(f"{self.base}/results/{result_id}/file", headers=self.headers)
+            if rf.status_code == 200 and rf.content[:2] == b"PK":
+                return _parse_filtered_cis_zip(rf.content, pg_string)
+            logger.warning(
+                "dispenser.download_retry", pg=pg_string, attempt=attempt, status=rf.status_code
+            )
+            await asyncio.sleep(15)
+        raise CzDispenserError(
+            f"export {pg_string}: скачивание не ZIP (HTTP {rf.status_code if rf else '?'})"
+        )
 
 
 def _parse_filtered_cis_zip(zip_bytes: bytes, pg_string: str) -> list[OwnerCis]:
