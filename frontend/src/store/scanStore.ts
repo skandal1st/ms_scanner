@@ -256,7 +256,13 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       planRefs.some((r) => scanMatchesPlanRow(s, r.key, r.pid))
     const offGroups = new Map<string, OffPlanRow>()
     for (const s of scans) {
-      if (!['valid', 'overflow', 'pending', 'scanned'].includes(s.status)) continue
+      // ВАЖНО: статус `scanned` (принят локально, ещё НЕ проверен в ЧЗ) сюда не берём.
+      // Марка может принадлежать плану через товар МС, но связь GTIN→товар проставляется
+      // только на «Проверить марки» (бэк резолвит moysklad_product_id по реальному GTIN);
+      // до этого GTIN марки часто не совпадает ни с plan.gtin (внутренний код МС), ни с
+      // pack_gtins. Клеймить непроверенную марку «отсканирована ошибочно» — вводит в
+      // заблуждение. Классифицируем как «не в плане» только уже проверенные коды.
+      if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
       if (inPlan(s)) continue
       const k = groupKey(s)
       let g = offGroups.get(k)
