@@ -73,6 +73,8 @@ class SabyClient:
     async def call(self, method: str, params: dict, sid: str) -> Any:
         """Вызов метода сервиса с сессией. Бросает SabyAuthError при истёкшей сессии (401)."""
         body = {"jsonrpc": "2.0", "method": method, "params": params, "protocol": 2, "id": 0}
+        # Диагностика: точное тело запроса (уточняем структуру параметров на реальных данных).
+        logger.info("saby.request", method=method, params=params)
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(
                 SERVICE_URL,
@@ -84,13 +86,17 @@ class SabyClient:
         try:
             data = r.json()
         except Exception:
+            logger.warning("saby.non_json", method=method, status=r.status_code, body=r.text[:500])
             raise SabyError(f"{method}: не JSON (HTTP {r.status_code}) {r.text[:200]}")
         if isinstance(data, dict) and data.get("error"):
             err = data["error"] or {}
+            # Полная ошибка (с details/data) — в лог и в текст исключения для уточнения.
+            logger.warning("saby.error", method=method, error=err)
             # 401-подобная ошибка внутри тела — тоже переавторизация
             if str(err.get("code")) in ("401", "-32001") or "session" in str(err.get("message", "")).lower():
                 raise SabyAuthError(str(err.get("message") or err))
-            raise SabyError(f"{method}: {err.get('message') or err}")
+            detail = err.get("details") or err.get("message") or str(err)
+            raise SabyError(f"{method}: {err.get('message') or ''} {('· ' + str(detail)) if detail else ''}".strip())
         return data.get("result") if isinstance(data, dict) else data
 
     async def list_documents(
