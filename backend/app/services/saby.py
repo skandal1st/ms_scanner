@@ -74,8 +74,9 @@ class SabyClient:
 
     async def call(self, method: str, params: dict, sid: str) -> Any:
         """Вызов метода сервиса с сессией. Бросает SabyAuthError при истёкшей сессии (401)."""
-        # БЕЗ поля "protocol": с ним Saby ищет метод «…/2» и отвечает -32601 «не найден».
-        body = {"jsonrpc": "2.0", "method": method, "params": params, "id": 0}
+        # БЕЗ поля "jsonrpc": оно задаёт версию метода (jsonrpc "2.0" → «метод/2», которого
+        # у СписокДокументов нет → -32601). Без него Saby берёт актуальную версию метода.
+        body = {"method": method, "params": params, "id": 0}
         # Диагностика: точное тело запроса (уточняем структуру параметров на реальных данных).
         logger.info("saby.request", method=method, params=params)
         async with httpx.AsyncClient(timeout=60) as c:
