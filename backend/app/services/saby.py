@@ -17,6 +17,7 @@ import httpx
 from app.core.logging import logger
 
 AUTH_URL = "https://online.sbis.ru/auth/service/"
+OAUTH_URL = "https://online.sbis.ru/oauth/service/"
 SERVICE_URL = "https://online.sbis.ru/service/?srv=1"
 
 # Типы документов ЭДО (параметр «Тип» внутри объекта «Фильтр» у СБИС.СписокДокументов).
@@ -40,13 +41,32 @@ class SabyAuthError(SabyError):
 
 
 class SabyClient:
-    def __init__(self, login: str, password: str, account: Optional[str] = None):
+    def __init__(
+        self,
+        login: Optional[str] = None,
+        password: Optional[str] = None,
+        account: Optional[str] = None,
+        *,
+        app_client_id: Optional[str] = None,
+        app_secret: Optional[str] = None,
+        secret_key: Optional[str] = None,
+    ):
         self.login = login
         self.password = password
         self.account = account
+        self.app_client_id = app_client_id
+        self.app_secret = app_secret
+        self.secret_key = secret_key
 
-    async def authenticate(self) -> str:
-        """СБИС.Аутентифицировать → sid. Бросает SabyAuthError при неверных кредах."""
+    async def authenticate(self) -> tuple[str, str]:
+        """Авторизация. Возвращает (имя_заголовка, токен): сервисная (X-SBISAccessToken)
+        если заданы ключи приложения, иначе логин/пароль (X-SBISSessionID)."""
+        if self.app_client_id:
+            return ("X-SBISAccessToken", await self._auth_service())
+        return ("X-SBISSessionID", await self._auth_login())
+
+    async def _auth_login(self) -> str:
+        """СБИС.Аутентифицировать → sid."""
         param: dict[str, Any] = {"Логин": self.login, "Пароль": self.password}
         if self.account:
             param["НомерАккаунта"] = self.account
@@ -72,8 +92,37 @@ class SabyClient:
         logger.info("saby.auth.ok", login=self.login)
         return sid
 
-    async def call(self, method: str, params: dict, sid: str) -> Any:
-        """Вызов метода сервиса с сессией. Бросает SabyAuthError при истёкшей сессии (401)."""
+    async def _auth_service(self) -> str:
+        """Сервисная авторизация: POST /oauth/service/ → access_token."""
+        body: dict[str, Any] = {"app_client_id": self.app_client_id}
+        if self.app_secret:
+            body["app_secret"] = self.app_secret
+        if self.secret_key:
+            body["secret_key"] = self.secret_key
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(OAUTH_URL, json=body, headers=_AUTH_HEADERS)
+        try:
+            data = r.json()
+        except Exception:
+            raise SabyAuthError(f"Saby сервисная авторизация: не JSON (HTTP {r.status_code}) {r.text[:200]}")
+        if isinstance(data, dict) and data.get("error"):
+            err = data["error"]
+            msg = (err or {}).get("message") if isinstance(err, dict) else err
+            det = (err or {}).get("details") if isinstance(err, dict) else None
+            logger.warning("saby.oauth.error", error=err)
+            raise SabyAuthError(f"Saby сервисная авторизация: {msg or ''} {('· ' + str(det)) if det else ''}".strip())
+        token = None
+        if isinstance(data, dict):
+            token = data.get("token") or data.get("access_token")
+        elif isinstance(data, str):
+            token = data
+        if not token:
+            raise SabyAuthError(f"Saby сервисная авторизация: пустой токен (ответ: {str(data)[:200]})")
+        logger.info("saby.oauth.ok", app_client_id=self.app_client_id)
+        return token
+
+    async def call(self, method: str, params: dict, auth: tuple[str, str]) -> Any:
+        """Вызов метода сервиса. auth = (имя_заголовка, токен). SabyAuthError на 401."""
         # БЕЗ поля "jsonrpc": оно задаёт версию метода (jsonrpc "2.0" → «метод/2», которого
         # у СписокДокументов нет → -32601). Без него Saby берёт актуальную версию метода.
         body = {"method": method, "params": params, "id": 0}
@@ -83,7 +132,7 @@ class SabyClient:
             r = await c.post(
                 SERVICE_URL,
                 json=body,
-                headers={**_SERVICE_HEADERS, "X-SBISSessionID": sid},
+                headers={**_SERVICE_HEADERS, auth[0]: auth[1]},
             )
         if r.status_code == 401:
             raise SabyAuthError("Сессия Saby истекла")
@@ -105,7 +154,7 @@ class SabyClient:
 
     async def list_documents(
         self,
-        sid: str,
+        auth: tuple[str, str],
         *,
         doc_type: str = DOC_TYPE_OUTGOING,
         direction: Optional[str] = None,
@@ -128,7 +177,7 @@ class SabyClient:
             "Фильтр": flt,
             "Навигация": {"Страница": str(page), "РазмерСтраницы": page_size},
         }
-        result = await self.call("СБИС.СписокДокументов", params, sid)
+        result = await self.call("СБИС.СписокДокументов", params, auth)
         # Формат ответа уточняем на реальных данных — логируем компактно.
         sample = None
         docs = _extract_doc_list(result)

@@ -17,6 +17,10 @@ function isUnsigned(r: EdoDocRow): boolean {
 
 export function MarkControlPage() {
   const [status, setStatus] = useState<SabyStatus | null>(null)
+  const [authMode, setAuthMode] = useState<'service' | 'login'>('service')
+  const [appClientId, setAppClientId] = useState('')
+  const [appSecret, setAppSecret] = useState('')
+  const [secretKey, setSecretKey] = useState('')
   const [login, setLogin] = useState('')
   const [password, setPassword] = useState('')
   const [account, setAccount] = useState('')
@@ -40,9 +44,19 @@ export function MarkControlPage() {
     setConnecting(true)
     setErr(null)
     try {
-      const r = await markControlApi.sabyConnect(login.trim(), password, account.trim() || undefined)
+      const payload =
+        authMode === 'service'
+          ? {
+              app_client_id: appClientId.trim(),
+              app_secret: appSecret.trim() || undefined,
+              secret_key: secretKey.trim() || undefined,
+            }
+          : { login: login.trim(), password, account: account.trim() || undefined }
+      const r = await markControlApi.sabyConnect(payload)
       setStatus(r.data)
       setPassword('')
+      setAppSecret('')
+      setSecretKey('')
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось подключить Saby')
     } finally {
@@ -86,28 +100,64 @@ export function MarkControlPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <span style={badgeOk}>● Подключено</span>
             <span style={{ color: '#444' }}>
-              Логин: <b>{status.login}</b>
-              {status.account ? ` · Аккаунт: ${status.account}` : ''}
+              {status.mode === 'service' ? (
+                <>Сервисная авторизация · ID подключения: <b>{status.app_client_id}</b></>
+              ) : (
+                <>Логин: <b>{status.login}</b>{status.account ? ` · Аккаунт: ${status.account}` : ''}</>
+              )}
             </span>
             <button style={btnGhost} onClick={() => setStatus({ connected: false })}>
               Изменить доступ
             </button>
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
-            <Field label="Логин Saby">
-              <input style={inp} value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" />
-            </Field>
-            <Field label="Пароль">
-              <input style={inp} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
-            </Field>
-            <Field label="Номер аккаунта (опц.)">
-              <input style={inp} value={account} onChange={(e) => setAccount(e.target.value)} />
-            </Field>
-            <button style={btn} disabled={connecting || !login || !password} onClick={connect}>
-              {connecting ? 'Проверка…' : 'Подключить'}
-            </button>
-          </div>
+          <>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <button
+                style={authMode === 'service' ? tabActive : tab}
+                onClick={() => setAuthMode('service')}
+              >
+                Сервисная (ключи приложения)
+              </button>
+              <button
+                style={authMode === 'login' ? tabActive : tab}
+                onClick={() => setAuthMode('login')}
+              >
+                Логин / пароль
+              </button>
+            </div>
+            {authMode === 'service' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                <Field label="ID подключения (app_client_id)">
+                  <input style={inp} value={appClientId} onChange={(e) => setAppClientId(e.target.value)} />
+                </Field>
+                <Field label="Защитный ключ">
+                  <input style={inp} type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} />
+                </Field>
+                <Field label="Секретный ключ (если есть)">
+                  <input style={inp} type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} />
+                </Field>
+                <button style={btn} disabled={connecting || !appClientId} onClick={connect}>
+                  {connecting ? 'Проверка…' : 'Подключить'}
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: 8, alignItems: 'end' }}>
+                <Field label="Логин Saby">
+                  <input style={inp} value={login} onChange={(e) => setLogin(e.target.value)} autoComplete="username" />
+                </Field>
+                <Field label="Пароль">
+                  <input style={inp} type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                </Field>
+                <Field label="Номер аккаунта (опц.)">
+                  <input style={inp} value={account} onChange={(e) => setAccount(e.target.value)} />
+                </Field>
+                <button style={btn} disabled={connecting || !login || !password} onClick={connect}>
+                  {connecting ? 'Проверка…' : 'Подключить'}
+                </button>
+              </div>
+            )}
+          </>
         )}
       </section>
 
@@ -198,6 +248,8 @@ const inp: React.CSSProperties = { padding: '8px 10px', border: '1px solid #ccc'
 const btn: React.CSSProperties = { padding: '9px 16px', background: '#1e63d6', color: '#fff', border: 0, borderRadius: 6, cursor: 'pointer', fontSize: 14 }
 const btnGhost: React.CSSProperties = { padding: '7px 12px', background: 'transparent', color: '#1e63d6', border: '1px solid #1e63d6', borderRadius: 6, cursor: 'pointer', fontSize: 13 }
 const badgeOk: React.CSSProperties = { color: '#2e7d32', fontWeight: 600 }
+const tab: React.CSSProperties = { padding: '7px 12px', background: '#f2f4f7', color: '#444', border: '1px solid #dde1e6', borderRadius: 6, cursor: 'pointer', fontSize: 13 }
+const tabActive: React.CSSProperties = { ...tab, background: '#1e63d6', color: '#fff', borderColor: '#1e63d6' }
 const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 13 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '8px 10px', borderBottom: '2px solid #eee', color: '#666', fontWeight: 600, whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 10px', borderBottom: '1px solid #f0f0f0' }

@@ -96,8 +96,19 @@ export interface Document {
 // ── Контроль марок (ЭДО Saby) ────────────────────────────────────────────────
 export interface SabyStatus {
   connected: boolean
+  mode?: 'service' | 'login' | null
   login?: string | null
   account?: string | null
+  app_client_id?: string | null
+}
+
+export interface SabyConnectPayload {
+  app_client_id?: string
+  app_secret?: string
+  secret_key?: string
+  login?: string
+  password?: string
+  account?: string
 }
 
 export interface EdoDocRow {
@@ -121,8 +132,8 @@ export interface EdoDocumentsResult {
 
 export const markControlApi = {
   sabyStatus: () => api.get<SabyStatus>('/mark-control/saby/status'),
-  sabyConnect: (login: string, password: string, account?: string) =>
-    api.post<SabyStatus>('/mark-control/saby/connect', { login, password, account }),
+  sabyConnect: (payload: SabyConnectPayload) =>
+    api.post<SabyStatus>('/mark-control/saby/connect', payload),
   sabyDocuments: (params: {
     direction?: string
     doc_type?: string

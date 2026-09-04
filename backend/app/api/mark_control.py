@@ -2,9 +2,11 @@
 исходящих УПД со статусами (для отлова марок, зависших на продавце: отгрузили, но
 покупатель не подписал УПД → право в ЧЗ не перешло).
 
-Сессия Saby (sid) кэшируется в Redis (saby_sid:<user_id>), TTL 20 мин; на истёкшей —
-переавторизация по сохранённым (Fernet) кредам.
+Два способа авторизации Saby (по клиенту): сервисная (ключи приложения → X-SBISAccessToken,
+рекомендованный) и логин/пароль (X-SBISSessionID). Токен кэшируется в Redis
+(saby_auth:<user_id>), TTL 20 мин; на истёкшем — переавторизация.
 """
+import json
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -29,19 +31,26 @@ from app.services.saby import (
 
 router = APIRouter(prefix="/mark-control", tags=["mark-control"])
 
-_SID_TTL = 1200
+_AUTH_TTL = 1200
 
 
 class SabyConnectRequest(BaseModel):
-    login: str
-    password: str
+    # Сервисная авторизация (приоритет): id подключения + ключи приложения.
+    app_client_id: Optional[str] = None
+    app_secret: Optional[str] = None
+    secret_key: Optional[str] = None
+    # Либо логин/пароль.
+    login: Optional[str] = None
+    password: Optional[str] = None
     account: Optional[str] = None
 
 
 class SabyStatusResponse(BaseModel):
     connected: bool
+    mode: Optional[str] = None          # "service" | "login"
     login: Optional[str] = None
     account: Optional[str] = None
+    app_client_id: Optional[str] = None
 
 
 class DocRow(BaseModel):
@@ -69,7 +78,6 @@ class DocumentsRequest(BaseModel):
 
 class DocumentsResponse(BaseModel):
     documents: list[DocRow]
-    # Незавершённые исходящие (покупатель не подписал/отклонил) — кандидаты в «зависшие».
     unsigned_count: int
 
 
@@ -80,34 +88,42 @@ async def _get_integration(db: AsyncSession, user_id) -> Optional[Integration]:
 
 
 def _client_from_integration(integ: Integration) -> SabyClient:
-    if not integ or not integ.saby_login or not integ.saby_password:
-        raise HTTPException(status_code=403, detail="ЭДО Saby не подключён. Укажите доступ в разделе «Контроль марок».")
-    try:
-        pwd = decrypt_token(integ.saby_password)
-    except Exception:
-        raise HTTPException(status_code=502, detail="Пароль Saby повреждён — подключите заново.")
-    return SabyClient(login=integ.saby_login, password=pwd, account=integ.saby_account)
+    """SabyClient из сохранённых кред: сервисная (приоритет) или логин/пароль."""
+    if integ and integ.saby_app_client_id:
+        return SabyClient(
+            app_client_id=integ.saby_app_client_id,
+            app_secret=decrypt_token(integ.saby_app_secret) if integ.saby_app_secret else None,
+            secret_key=decrypt_token(integ.saby_secret_key) if integ.saby_secret_key else None,
+        )
+    if integ and integ.saby_login and integ.saby_password:
+        try:
+            pwd = decrypt_token(integ.saby_password)
+        except Exception:
+            raise HTTPException(status_code=502, detail="Пароль Saby повреждён — подключите заново.")
+        return SabyClient(login=integ.saby_login, password=pwd, account=integ.saby_account)
+    raise HTTPException(status_code=403, detail="ЭДО Saby не подключён. Укажите доступ в разделе «Контроль марок».")
 
 
-async def _get_sid(user_id, client: SabyClient) -> str:
-    """Сессия Saby из Redis или свежая авторизация (с кэшированием)."""
+async def _get_auth(user_id, client: SabyClient) -> tuple[str, str]:
+    """(имя_заголовка, токен) из Redis-кэша или свежая авторизация."""
     r = aioredis.from_url(settings.REDIS_URL)
-    key = f"saby_sid:{user_id}"
+    key = f"saby_auth:{user_id}"
     try:
         cached = await r.get(key)
         if cached:
-            return cached.decode() if isinstance(cached, (bytes, bytearray)) else str(cached)
-        sid = await client.authenticate()
-        await r.set(key, sid, ex=_SID_TTL)
-        return sid
+            d = json.loads(cached.decode() if isinstance(cached, (bytes, bytearray)) else cached)
+            return (d["name"], d["token"])
+        name, token = await client.authenticate()
+        await r.set(key, json.dumps({"name": name, "token": token}), ex=_AUTH_TTL)
+        return (name, token)
     finally:
         await r.aclose()
 
 
-async def _invalidate_sid(user_id) -> None:
+async def _invalidate_auth(user_id) -> None:
     r = aioredis.from_url(settings.REDIS_URL)
     try:
-        await r.delete(f"saby_sid:{user_id}")
+        await r.delete(f"saby_auth:{user_id}")
     finally:
         await r.aclose()
 
@@ -118,11 +134,20 @@ async def saby_connect(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Сохранить доступ к Saby и проверить авторизацию (одна проба сразу)."""
-    login = (body.login or "").strip()
-    if not login or not body.password:
-        raise HTTPException(status_code=400, detail="Укажите логин и пароль Saby")
-    client = SabyClient(login=login, password=body.password, account=(body.account or "").strip() or None)
+    """Сохранить доступ к Saby (сервисный или логин/пароль) и проверить авторизацию."""
+    use_service = bool((body.app_client_id or "").strip())
+    if use_service:
+        client = SabyClient(
+            app_client_id=body.app_client_id.strip(),
+            app_secret=(body.app_secret or "").strip() or None,
+            secret_key=(body.secret_key or "").strip() or None,
+        )
+    else:
+        login = (body.login or "").strip()
+        if not login or not body.password:
+            raise HTTPException(status_code=400, detail="Укажите либо ключи сервисной авторизации, либо логин и пароль Saby")
+        client = SabyClient(login=login, password=body.password, account=(body.account or "").strip() or None)
+
     try:
         await client.authenticate()
     except SabyAuthError as exc:
@@ -134,13 +159,18 @@ async def saby_connect(
     if not integ:
         integ = Integration(user_id=current_user.id)
         db.add(integ)
-    integ.saby_login = login
-    integ.saby_password = encrypt_token(body.password)
-    integ.saby_account = (body.account or "").strip() or None
+    if use_service:
+        integ.saby_app_client_id = body.app_client_id.strip()
+        integ.saby_app_secret = encrypt_token(body.app_secret) if (body.app_secret or "").strip() else None
+        integ.saby_secret_key = encrypt_token(body.secret_key) if (body.secret_key or "").strip() else None
+    else:
+        integ.saby_login = (body.login or "").strip()
+        integ.saby_password = encrypt_token(body.password)
+        integ.saby_account = (body.account or "").strip() or None
     await db.commit()
-    await _invalidate_sid(current_user.id)
-    logger.info("saby.connected", user_id=str(current_user.id), login=login)
-    return SabyStatusResponse(connected=True, login=login, account=integ.saby_account)
+    await _invalidate_auth(current_user.id)
+    logger.info("saby.connected", user_id=str(current_user.id), mode="service" if use_service else "login")
+    return await saby_status(current_user, db)
 
 
 @router.get("/saby/status", response_model=SabyStatusResponse)
@@ -149,9 +179,11 @@ async def saby_status(
     db: AsyncSession = Depends(get_db),
 ):
     integ = await _get_integration(db, current_user.id)
-    if not integ or not integ.saby_login or not integ.saby_password:
-        return SabyStatusResponse(connected=False)
-    return SabyStatusResponse(connected=True, login=integ.saby_login, account=integ.saby_account)
+    if integ and integ.saby_app_client_id:
+        return SabyStatusResponse(connected=True, mode="service", app_client_id=integ.saby_app_client_id)
+    if integ and integ.saby_login and integ.saby_password:
+        return SabyStatusResponse(connected=True, mode="login", login=integ.saby_login, account=integ.saby_account)
+    return SabyStatusResponse(connected=False)
 
 
 @router.post("/saby/documents", response_model=DocumentsResponse)
@@ -160,12 +192,8 @@ async def saby_documents(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Список документов Saby выбранного направления/типа за период.
-
-    Для контроля «зависших» марок берём Направление=Исходящий: незавершённые
-    (НеполнаяОбработка=Да либо статус «ожидает/отклонён») — кандидаты, где право в ЧЗ
-    не перешло. Разбор полей best-effort; сырой ответ логируется (saby.list_documents.raw).
-    """
+    """Список документов Saby выбранного направления/типа за период (best-effort разбор;
+    сырой ответ логируется saby.list_documents.raw)."""
     integ = await _get_integration(db, current_user.id)
     client = _client_from_integration(integ)
 
@@ -175,34 +203,24 @@ async def saby_documents(
         DOC_TYPE_INCOMING if body.direction == "Входящий" else DOC_TYPE_OUTGOING
     )
 
-    async def _fetch() -> list:
-        sid = await _get_sid(current_user.id, client)
-        try:
-            return await client.list_documents(
-                sid,
-                direction=body.direction,
-                doc_type=doc_type,
-                date_from=body.date_from,
-                date_to=body.date_to,
-                page=body.page,
-                page_size=body.page_size,
-            )
-        except SabyAuthError:
-            # сессия истекла → сбросить кэш и переавторизоваться разово
-            await _invalidate_sid(current_user.id)
-            sid = await _get_sid(current_user.id, client)
-            return await client.list_documents(
-                sid,
-                direction=body.direction,
-                doc_type=doc_type,
-                date_from=body.date_from,
-                date_to=body.date_to,
-                page=body.page,
-                page_size=body.page_size,
-            )
+    async def _once() -> list:
+        auth = await _get_auth(current_user.id, client)
+        return await client.list_documents(
+            auth,
+            doc_type=doc_type,
+            direction=body.direction,
+            date_from=body.date_from,
+            date_to=body.date_to,
+            page=body.page,
+            page_size=body.page_size,
+        )
 
     try:
-        result = await _fetch()
+        try:
+            result = await _once()
+        except SabyAuthError:
+            await _invalidate_auth(current_user.id)  # токен истёк → переавторизация разово
+            result = await _once()
     except SabyAuthError as exc:
         raise HTTPException(status_code=401, detail=f"Saby: {exc}")
     except SabyError as exc:

@@ -89,6 +89,11 @@ class Integration(Base):
     saby_login = Column(String(255), nullable=True)
     saby_password = Column(Text, nullable=True)          # encrypted
     saby_account = Column(String(64), nullable=True)     # НомерАккаунта (опц.)
+    # Сервисная авторизация приложения (oauth/service → X-SBISAccessToken) — рекомендованный
+    # способ для фоновой интеграции. app_client_id = «id подключения», ключи — Fernet.
+    saby_app_client_id = Column(String(128), nullable=True)
+    saby_app_secret = Column(Text, nullable=True)        # encrypted («защитный ключ»)
+    saby_secret_key = Column(Text, nullable=True)        # encrypted (если требуется)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")
