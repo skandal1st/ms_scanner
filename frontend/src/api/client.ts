@@ -121,7 +121,9 @@ export interface EdoDocRow {
   counterparty_inn?: string | null
   state_code?: number | null
   state_name?: string | null
+  state_desc?: string | null
   incomplete?: boolean | null
+  unsigned?: boolean | null
   note?: string | null
 }
 

@@ -63,7 +63,9 @@ class DocRow(BaseModel):
     counterparty_inn: Optional[str] = None
     state_code: Optional[int] = None
     state_name: Optional[str] = None
+    state_desc: Optional[str] = None
     incomplete: Optional[bool] = None
+    unsigned: Optional[bool] = None
     note: Optional[str] = None
 
 
@@ -197,22 +199,13 @@ async def saby_documents(
     integ = await _get_integration(db, current_user.id)
     client = _client_from_integration(integ)
 
-    from app.services.saby import DOC_TYPE_INCOMING, DOC_TYPE_OUTGOING
-
-    doc_type = body.doc_type or (
-        DOC_TYPE_INCOMING if body.direction == "Входящий" else DOC_TYPE_OUTGOING
-    )
-
     async def _once() -> list:
         auth = await _get_auth(current_user.id, client)
         return await client.list_documents(
             auth,
-            doc_type=doc_type,
             direction=body.direction,
             date_from=body.date_from,
             date_to=body.date_to,
-            page=body.page,
-            page_size=body.page_size,
         )
 
     try:
@@ -226,6 +219,20 @@ async def saby_documents(
     except SabyError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 
-    rows = [DocRow(**parse_document(d)) for d in _extract_doc_list(result) if isinstance(d, dict)]
-    unsigned = sum(1 for r in rows if r.incomplete or (r.state_code == 23))
+    # СписокИзменений отдаёт документ несколькими строками (по событиям) — дедуп по id.
+    seen: set[str] = set()
+    rows: list[DocRow] = []
+    for d in _extract_doc_list(result):
+        if not isinstance(d, dict):
+            continue
+        parsed = parse_document(d)
+        key = parsed.get("id") or f"{parsed.get('number')}|{parsed.get('date')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        # Только реализации (исходящие УПД) — прочие регламенты отсеиваем.
+        if body.direction == "Исходящий" and (parsed.get("type") or "") and "реализац" not in str(parsed["type"]).lower():
+            continue
+        rows.append(DocRow(**parsed))
+    unsigned = sum(1 for r in rows if r.unsigned)
     return DocumentsResponse(documents=rows, unsigned_count=unsigned)

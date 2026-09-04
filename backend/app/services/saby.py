@@ -121,11 +121,15 @@ class SabyClient:
         logger.info("saby.oauth.ok", app_client_id=self.app_client_id)
         return token
 
-    async def call(self, method: str, params: dict, auth: tuple[str, str]) -> Any:
-        """Вызов метода сервиса. auth = (имя_заголовка, токен). SabyAuthError на 401."""
-        # БЕЗ поля "jsonrpc": оно задаёт версию метода (jsonrpc "2.0" → «метод/2», которого
-        # у СписокДокументов нет → -32601). Без него Saby берёт актуальную версию метода.
+    async def call(self, method: str, params: dict, auth: tuple[str, str], protocol: Optional[int] = None) -> Any:
+        """Вызов метода сервиса. auth = (имя_заголовка, токен). SabyAuthError на 401.
+
+        protocol — версия метода (СБИС.СписокИзменений требует 3). БЕЗ поля "jsonrpc":
+        оно тоже задаёт версию (jsonrpc "2.0" → «метод/2»). Для СписокИзменений нужен protocol=3.
+        """
         body = {"method": method, "params": params, "id": 0}
+        if protocol is not None:
+            body["protocol"] = protocol
         # Диагностика: точное тело запроса (уточняем структуру параметров на реальных данных).
         logger.info("saby.request", method=method, params=params)
         async with httpx.AsyncClient(timeout=60) as c:
@@ -156,34 +160,27 @@ class SabyClient:
         self,
         auth: tuple[str, str],
         *,
-        doc_type: str = DOC_TYPE_OUTGOING,
-        direction: Optional[str] = None,
+        direction: str = "Исходящий",
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
-        page: int = 0,
-        page_size: int = 100,
+        **_ignore: Any,
     ) -> Any:
-        """СБИС.СписокДокументов. `Тип` обязателен; фильтры (направление/даты) — в объекте
-        `Фильтр`; `Навигация.Страница` — строка. Даты ДД.ММ.ГГГГ. Возвращает сырой result."""
-        # Тип — ВНУТРИ Фильтра (по рабочему примеру Saby), вместе с Направлением и датами.
-        flt: dict[str, Any] = {"Тип": doc_type}
-        if direction:
-            flt["Направление"] = direction
+        """Список документов через **СБИС.СписокИзменений** (эмпирически: у приложения
+        доступен именно он, а СписокДокументов «недоступен»).
+
+        ВАЖНО: `protocol=3` обязателен; объект `Навигация` слать НЕЛЬЗЯ — с ним метод
+        резолвится в несуществующую версию «/2» (-32601). Метод возвращает документы,
+        по которым были события ДО; фильтр `ТипРеестра=Документы` + `Направление` + даты.
+        Один документ может прийти несколькими строками (по событиям) — дедуп по
+        Идентификатору делает вызывающий. Возвращает сырой result (ключ `Документ`)."""
+        flt: dict[str, Any] = {"Направление": direction, "ТипРеестра": "Документы"}
         if date_from:
             flt["ДатаС"] = date_from
         if date_to:
             flt["ДатаПо"] = date_to
-        params: dict[str, Any] = {
-            "Фильтр": flt,
-            "Навигация": {"Страница": str(page), "РазмерСтраницы": page_size},
-        }
-        result = await self.call("СБИС.СписокДокументов", params, auth)
-        # Формат ответа уточняем на реальных данных — логируем компактно.
-        sample = None
+        result = await self.call("СБИС.СписокИзменений", {"Фильтр": flt}, auth, protocol=3)
         docs = _extract_doc_list(result)
-        if docs:
-            sample = {k: docs[0].get(k) for k in list(docs[0].keys())[:12]} if isinstance(docs[0], dict) else str(docs[0])[:200]
-        logger.info("saby.list_documents.raw", direction=direction, count=len(docs), sample=sample)
+        logger.info("saby.list_documents.raw", direction=direction, count=len(docs))
         return result
 
 
@@ -200,36 +197,49 @@ def _extract_doc_list(result: Any) -> list:
 
 
 def parse_document(d: dict) -> dict:
-    """Best-effort разбор объекта документа Saby в плоскую строку для UI.
+    """Разбор документа из СБИС.СписокИзменений в плоскую строку для UI.
 
-    Имена полей уточняются на реальных данных; берём наиболее вероятные варианты.
+    Тип документа — в `Регламент.Название` («Реализация»); статус ЭДО — в объекте
+    `Состояние{Код,Название,Описание,НеполнаяОбработка}`. «Не принят покупателем»
+    (марки зависли) = ждём действия покупателя: Описание/Название содержит «ожида»
+    (напр. код 4 «Доставлен / Ожидается утверждение», код 23 «Ожидает подписания»)
+    либо НеполнаяОбработка=Да; терминальные (аннулирован/отозван/завершён) — не зависшие.
     """
-    def g(*keys):
-        for k in keys:
-            if isinstance(d, dict) and d.get(k) not in (None, ""):
-                return d.get(k)
-        return None
-
     state = d.get("Состояние") if isinstance(d.get("Состояние"), dict) else {}
-    contractor = d.get("Контрагент") or d.get("Получатель") or {}
+    reglam = d.get("Регламент") if isinstance(d.get("Регламент"), dict) else {}
+    contractor = d.get("Контрагент") or {}
     if not isinstance(contractor, dict):
         contractor = {}
-    # ИНН контрагента может лежать в разных местах
-    inn = (
-        contractor.get("СвЮЛ", {}).get("ИНН") if isinstance(contractor.get("СвЮЛ"), dict) else None
-    ) or contractor.get("ИНН") or g("ИННКонтрагента")
+    ur = contractor.get("СвЮЛ") if isinstance(contractor.get("СвЮЛ"), dict) else {}
+    inn = ur.get("ИНН") or contractor.get("ИНН")
+    name = ur.get("Название") or contractor.get("Название") or contractor.get("Наименование")
 
-    incomplete = state.get("НеполнаяОбработка")
+    code = state.get("Код")
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        code = None
+    state_name = state.get("Название") or ""
+    state_desc = state.get("Описание") or ""
+    incomplete = str(state.get("НеполнаяОбработка") or "").lower() == "да"
+
+    haystack = f"{state_name} {state_desc}".lower()
+    terminal = any(w in haystack for w in ("аннулир", "отозв", "удал"))
+    awaiting = ("ожида" in haystack) or ("не подписан" in haystack)
+    unsigned = (not terminal) and (awaiting or incomplete)
+
     return {
-        "id": g("Идентификатор", "@Документ", "Ид", "id"),
-        "number": g("Номер", "НомерДок", "number"),
-        "date": g("Дата", "ДатаДок", "date"),
-        "type": g("Тип", "ТипДокумента"),
-        "direction": g("Направление"),
-        "counterparty_name": contractor.get("Название") or contractor.get("Наименование") or g("НазваниеКонтрагента"),
+        "id": d.get("Идентификатор"),
+        "number": d.get("Номер"),
+        "date": d.get("Дата"),
+        "type": reglam.get("Название") or d.get("Название"),
+        "direction": d.get("Направление"),
+        "counterparty_name": name,
         "counterparty_inn": inn,
-        "state_code": state.get("Код"),
-        "state_name": state.get("Название"),
-        "incomplete": True if str(incomplete).lower() in ("да", "true", "1") else (False if incomplete is not None else None),
-        "note": g("Примечание", "Комментарий"),
+        "state_code": code,
+        "state_name": state_name or None,
+        "state_desc": state_desc or None,
+        "incomplete": incomplete,
+        "unsigned": unsigned,
+        "note": d.get("Примечание") or None,
     }

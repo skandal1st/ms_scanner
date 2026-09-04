@@ -12,7 +12,7 @@ function fmt(d: Date): string {
 }
 
 function isUnsigned(r: EdoDocRow): boolean {
-  return Boolean(r.incomplete) || r.state_code === 23
+  return Boolean(r.unsigned)
 }
 
 export function MarkControlPage() {
@@ -214,7 +214,10 @@ export function MarkControlPage() {
                         <td style={td}>{d.date || '—'}</td>
                         <td style={td}>{d.counterparty_name || '—'}</td>
                         <td style={td}>{d.counterparty_inn || '—'}</td>
-                        <td style={td}>{d.state_name || (d.state_code != null ? `код ${d.state_code}` : '—')}</td>
+                        <td style={td}>
+                          {d.state_name || (d.state_code != null ? `код ${d.state_code}` : '—')}
+                          {d.state_desc ? <div style={{ color: '#888', fontSize: 12 }}>{d.state_desc}</div> : null}
+                        </td>
                         <td style={{ ...td, fontWeight: 600, color: uns ? '#c0392b' : '#2e7d32' }}>
                           {uns ? 'Не принят' : 'Принят'}
                         </td>
