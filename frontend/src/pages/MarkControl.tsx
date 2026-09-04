@@ -32,9 +32,10 @@ export function MarkControlPage() {
   const [dateFrom, setDateFrom] = useState(fmt(monthAgo))
   const [dateTo, setDateTo] = useState(fmt(today))
   const [loading, setLoading] = useState(false)
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [docs, setDocs] = useState<EdoDocRow[]>([])
   const [unsigned, setUnsigned] = useState(0)
-  const [onlyUnsigned, setOnlyUnsigned] = useState(true)
+  const [onlyUnsigned, setOnlyUnsigned] = useState(false)
 
   useEffect(() => {
     markControlApi.sabyStatus().then((r) => setStatus(r.data)).catch(() => setStatus({ connected: false }))
@@ -76,6 +77,7 @@ export function MarkControlPage() {
       })
       setDocs(r.data.documents)
       setUnsigned(r.data.unsigned_count)
+      setHasLoaded(true)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось получить документы Saby')
     } finally {
@@ -181,16 +183,29 @@ export function MarkControlPage() {
             </label>
           </div>
 
-          {docs.length > 0 && (
+          <div style={{ marginBottom: 6, color: '#8a8f98', fontSize: 12 }}>
+            Показываются последние изменения по документам (до ~25). Полный охват периода —
+            на следующем шаге.
+          </div>
+          {hasLoaded && (
             <div style={{ marginBottom: 10, color: '#444' }}>
-              Всего: <b>{docs.length}</b> · Не принято покупателем:{' '}
+              Загружено реализаций: <b>{docs.length}</b> · Не принято покупателем:{' '}
               <b style={{ color: unsigned ? '#c0392b' : '#2e7d32' }}>{unsigned}</b>
+              {onlyUnsigned && unsigned === 0 && docs.length > 0
+                ? ' — все загруженные документы приняты/завершены'
+                : ''}
             </div>
           )}
 
           {shown.length === 0 ? (
             <div style={{ color: '#888', padding: '16px 0' }}>
-              {loading ? '' : 'Нет данных — задайте период и нажмите «Показать».'}
+              {loading
+                ? 'Загрузка…'
+                : !hasLoaded
+                ? 'Задайте период и нажмите «Показать».'
+                : docs.length === 0
+                ? 'За период документов не найдено.'
+                : 'Нет не принятых покупателем — снимите галку, чтобы увидеть все.'}
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
