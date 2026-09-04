@@ -6,6 +6,7 @@ import { ShipmentPage } from './pages/Shipment'
 import { AcceptancePage } from './pages/Acceptance'
 import { WriteoffPage } from './pages/Writeoff'
 import { CzCheckPage } from './pages/CzCheck'
+import { MarkControlPage } from './pages/MarkControl'
 import { SettingsPage } from './pages/Settings'
 import { HelpPage } from './pages/Help'
 import { LoginPage } from './pages/Login'
@@ -27,6 +28,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName }[] = [
   { to: '/acceptance', label: 'Приёмка', icon: 'acceptance' },
   { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
   { to: '/check', label: 'Проверка', icon: 'check' },
+  { to: '/mark-control', label: 'Контроль марок', icon: 'check' },
   { to: '/settings', label: 'Настройки', icon: 'settings' },
   { to: '/help', label: 'Помощь', icon: 'help' },
 ]
@@ -111,6 +113,16 @@ export default function App() {
               <RequireAuth>
                 <Layout>
                   <CzCheckPage />
+                </Layout>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/mark-control"
+            element={
+              <RequireAuth>
+                <Layout>
+                  <MarkControlPage />
                 </Layout>
               </RequireAuth>
             }

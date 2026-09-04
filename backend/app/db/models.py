@@ -84,6 +84,11 @@ class Integration(Base):
     # перебирать в True API (cises/info и т.п.). Пустой список → fallback на глобальный
     # settings.CZ_PRODUCT_GROUPS. Сужение перебора = меньше запросов в ЧЗ = быстрее скан.
     cz_product_groups = Column(JSONB, nullable=False, default=list, server_default="[]")
+    # ЭДО Saby (СБИС) для раздела «Контроль марок»: логин/аккаунт + пароль (Fernet).
+    # Сессия (sid) не хранится в БД — кэшируется в Redis (saby_sid:<user_id>).
+    saby_login = Column(String(255), nullable=True)
+    saby_password = Column(Text, nullable=True)          # encrypted
+    saby_account = Column(String(64), nullable=True)     # НомерАккаунта (опц.)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")

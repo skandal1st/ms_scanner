@@ -93,6 +93,46 @@ export interface Document {
   created_at: string
 }
 
+// ── Контроль марок (ЭДО Saby) ────────────────────────────────────────────────
+export interface SabyStatus {
+  connected: boolean
+  login?: string | null
+  account?: string | null
+}
+
+export interface EdoDocRow {
+  id?: string | null
+  number?: string | null
+  date?: string | null
+  type?: string | null
+  direction?: string | null
+  counterparty_name?: string | null
+  counterparty_inn?: string | null
+  state_code?: number | null
+  state_name?: string | null
+  incomplete?: boolean | null
+  note?: string | null
+}
+
+export interface EdoDocumentsResult {
+  documents: EdoDocRow[]
+  unsigned_count: number
+}
+
+export const markControlApi = {
+  sabyStatus: () => api.get<SabyStatus>('/mark-control/saby/status'),
+  sabyConnect: (login: string, password: string, account?: string) =>
+    api.post<SabyStatus>('/mark-control/saby/connect', { login, password, account }),
+  sabyDocuments: (params: {
+    direction?: string
+    doc_type?: string
+    date_from?: string
+    date_to?: string
+    page?: number
+    page_size?: number
+  }) => api.post<EdoDocumentsResult>('/mark-control/saby/documents', params),
+}
+
 export const documentsApi = {
   listMs: (kind: DocumentKind, search?: string) =>
     api.get<MsDocument[]>(`/documents/moysklad/${kind}`, {
