@@ -19,14 +19,16 @@ from app.core.logging import logger
 AUTH_URL = "https://online.sbis.ru/auth/service/"
 SERVICE_URL = "https://online.sbis.ru/service/?srv=1"
 
-# Типы документов ЭДО (параметр «Тип», обязательный для СБИС.СписокДокументов).
-# Исходящая реализация/УПД — «ДокОтгрИсх», входящая — «ДокОтгрВх».
-DOC_TYPE_OUTGOING = "ДокОтгрИсх"
-DOC_TYPE_INCOMING = "ДокОтгрВх"
+# Типы документов ЭДО (параметр «Тип» внутри объекта «Фильтр» у СБИС.СписокДокументов).
+# Исходящая реализация/УПД — «Реализация», входящее поступление — «Поступление».
+DOC_TYPE_OUTGOING = "Реализация"
+DOC_TYPE_INCOMING = "Поступление"
 
 # ВАЖНО: без charset=utf-8 Saby читает тело как windows-1251 и падает на кириллице
-# (метод «СБИС.…» + параметры) — ошибка -32700. См. подсказку в самом ответе Saby.
-_JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
+# (ошибка -32700). Авторизация — application/json, вызовы сервиса — application/json-rpc
+# (иначе «внутренняя ошибка сервера»).
+_AUTH_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
+_SERVICE_HEADERS = {"Content-Type": "application/json-rpc; charset=utf-8"}
 
 
 class SabyError(Exception):
@@ -56,7 +58,7 @@ class SabyClient:
             "id": 0,
         }
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(AUTH_URL, json=body, headers=_JSON_HEADERS)
+            r = await c.post(AUTH_URL, json=body, headers=_AUTH_HEADERS)
         try:
             data = r.json()
         except Exception:
@@ -79,7 +81,7 @@ class SabyClient:
             r = await c.post(
                 SERVICE_URL,
                 json=body,
-                headers={**_JSON_HEADERS, "X-SBISSessionID": sid},
+                headers={**_SERVICE_HEADERS, "X-SBISSessionID": sid},
             )
         if r.status_code == 401:
             raise SabyAuthError("Сессия Saby истекла")
@@ -112,7 +114,8 @@ class SabyClient:
     ) -> Any:
         """СБИС.СписокДокументов. `Тип` обязателен; фильтры (направление/даты) — в объекте
         `Фильтр`; `Навигация.Страница` — строка. Даты ДД.ММ.ГГГГ. Возвращает сырой result."""
-        flt: dict[str, Any] = {}
+        # Тип — ВНУТРИ Фильтра (по рабочему примеру Saby), вместе с Направлением и датами.
+        flt: dict[str, Any] = {"Тип": doc_type}
         if direction:
             flt["Направление"] = direction
         if date_from:
@@ -120,11 +123,9 @@ class SabyClient:
         if date_to:
             flt["ДатаПо"] = date_to
         params: dict[str, Any] = {
-            "Тип": doc_type,
+            "Фильтр": flt,
             "Навигация": {"Страница": str(page), "РазмерСтраницы": page_size},
         }
-        if flt:
-            params["Фильтр"] = flt
         result = await self.call("СБИС.СписокДокументов", params, sid)
         # Формат ответа уточняем на реальных данных — логируем компактно.
         sample = None
