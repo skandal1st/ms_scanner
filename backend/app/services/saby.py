@@ -19,6 +19,10 @@ from app.core.logging import logger
 AUTH_URL = "https://online.sbis.ru/auth/service/"
 SERVICE_URL = "https://online.sbis.ru/service/"
 
+# ВАЖНО: без charset=utf-8 Saby читает тело как windows-1251 и падает на кириллице
+# (метод «СБИС.…» + параметры) — ошибка -32700. См. подсказку в самом ответе Saby.
+_JSON_HEADERS = {"Content-Type": "application/json; charset=utf-8"}
+
 
 class SabyError(Exception):
     pass
@@ -47,7 +51,7 @@ class SabyClient:
             "id": 0,
         }
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(AUTH_URL, json=body, headers={"Content-Type": "application/json"})
+            r = await c.post(AUTH_URL, json=body, headers=_JSON_HEADERS)
         try:
             data = r.json()
         except Exception:
@@ -68,7 +72,7 @@ class SabyClient:
             r = await c.post(
                 SERVICE_URL,
                 json=body,
-                headers={"Content-Type": "application/json", "X-SBISSessionID": sid},
+                headers={**_JSON_HEADERS, "X-SBISSessionID": sid},
             )
         if r.status_code == 401:
             raise SabyAuthError("Сессия Saby истекла")
