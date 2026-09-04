@@ -169,13 +169,19 @@ async def saby_documents(
     integ = await _get_integration(db, current_user.id)
     client = _client_from_integration(integ)
 
+    from app.services.saby import DOC_TYPE_INCOMING, DOC_TYPE_OUTGOING
+
+    doc_type = body.doc_type or (
+        DOC_TYPE_INCOMING if body.direction == "Входящий" else DOC_TYPE_OUTGOING
+    )
+
     async def _fetch() -> list:
         sid = await _get_sid(current_user.id, client)
         try:
             return await client.list_documents(
                 sid,
                 direction=body.direction,
-                doc_type=body.doc_type,
+                doc_type=doc_type,
                 date_from=body.date_from,
                 date_to=body.date_to,
                 page=body.page,
@@ -188,7 +194,7 @@ async def saby_documents(
             return await client.list_documents(
                 sid,
                 direction=body.direction,
-                doc_type=body.doc_type,
+                doc_type=doc_type,
                 date_from=body.date_from,
                 date_to=body.date_to,
                 page=body.page,

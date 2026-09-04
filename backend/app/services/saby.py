@@ -17,7 +17,12 @@ import httpx
 from app.core.logging import logger
 
 AUTH_URL = "https://online.sbis.ru/auth/service/"
-SERVICE_URL = "https://online.sbis.ru/service/"
+SERVICE_URL = "https://online.sbis.ru/service/?srv=1"
+
+# Типы документов ЭДО (параметр «Тип», обязательный для СБИС.СписокДокументов).
+# Исходящая реализация/УПД — «ДокОтгрИсх», входящая — «ДокОтгрВх».
+DOC_TYPE_OUTGOING = "ДокОтгрИсх"
+DOC_TYPE_INCOMING = "ДокОтгрВх"
 
 # ВАЖНО: без charset=utf-8 Saby читает тело как windows-1251 и падает на кириллице
 # (метод «СБИС.…» + параметры) — ошибка -32700. См. подсказку в самом ответе Saby.
@@ -92,24 +97,28 @@ class SabyClient:
         self,
         sid: str,
         *,
-        direction: str = "Исходящий",
-        doc_type: Optional[str] = None,
+        doc_type: str = DOC_TYPE_OUTGOING,
+        direction: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         page: int = 0,
         page_size: int = 100,
     ) -> Any:
-        """СБИС.СписокДокументов. Даты в формате ДД.ММ.ГГГГ. Возвращает сырой result."""
-        params: dict[str, Any] = {
-            "Направление": direction,
-            "Навигация": {"Страница": page, "РазмерСтраницы": page_size},
-        }
-        if doc_type:
-            params["Тип"] = doc_type
+        """СБИС.СписокДокументов. `Тип` обязателен; фильтры (направление/даты) — в объекте
+        `Фильтр`; `Навигация.Страница` — строка. Даты ДД.ММ.ГГГГ. Возвращает сырой result."""
+        flt: dict[str, Any] = {}
+        if direction:
+            flt["Направление"] = direction
         if date_from:
-            params["ДатаС"] = date_from
+            flt["ДатаС"] = date_from
         if date_to:
-            params["ДатаПо"] = date_to
+            flt["ДатаПо"] = date_to
+        params: dict[str, Any] = {
+            "Тип": doc_type,
+            "Навигация": {"Страница": str(page), "РазмерСтраницы": page_size},
+        }
+        if flt:
+            params["Фильтр"] = flt
         result = await self.call("СБИС.СписокДокументов", params, sid)
         # Формат ответа уточняем на реальных данных — логируем компактно.
         sample = None
