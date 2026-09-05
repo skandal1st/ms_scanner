@@ -39,6 +39,9 @@ async def _get_integration(db: AsyncSession, user_id) -> Optional[Integration]:
 class StoresResponse(BaseModel):
     stores: list[dict]
     selected: list[str]
+    # У приложения может не быть права на список складов (/entity/store 403). Тогда выбор
+    # «наших складов» недоступен, а остаток МС берётся по ВСЕМ складам (report/stock/all 200).
+    available: bool = True
 
 
 class StoresSaveRequest(BaseModel):
@@ -58,12 +61,11 @@ async def get_stores(
         ms = MoySkladService(decrypt_token(integ.moysklad_token))
         stores = await ms.get_stores()
     except httpx.HTTPStatusError as exc:
-        logger.warning("inventory.stores_failed", status=exc.response.status_code)
+        # 403 на списке складов — не ошибка: выбор складов недоступен, сверка идёт по всем.
         if exc.response.status_code == 403:
-            raise HTTPException(
-                status_code=403,
-                detail="У приложения нет права на склады МойСклад — обновите дескриптор решения.",
-            )
+            logger.info("inventory.stores_forbidden", user_id=str(current_user.id))
+            return StoresResponse(stores=[], selected=list(integ.inventory_store_ids or []), available=False)
+        logger.warning("inventory.stores_failed", status=exc.response.status_code)
         raise HTTPException(status_code=502, detail="Не удалось получить склады МойСклад.")
     except Exception as exc:
         logger.warning("inventory.stores_failed", error=str(exc))

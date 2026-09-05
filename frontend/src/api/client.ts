@@ -250,11 +250,16 @@ export interface ReconcileResult {
 
 export type ReconcileDiff = 'all' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
 
+export interface StoresResponse {
+  stores: InventoryStore[]
+  selected: string[]
+  available: boolean
+}
+
 export const inventoryApi = {
-  stores: () =>
-    api.get<{ stores: InventoryStore[]; selected: string[] }>('/inventory/stores'),
+  stores: () => api.get<StoresResponse>('/inventory/stores'),
   saveStores: (store_ids: string[]) =>
-    api.post<{ stores: InventoryStore[]; selected: string[] }>('/inventory/stores', { store_ids }),
+    api.post<StoresResponse>('/inventory/stores', { store_ids }),
   czRefresh: () => api.post<{ status: string }>('/inventory/cz-stock/refresh'),
   czStatus: () => api.get<SnapshotStatus>('/inventory/cz-stock/status'),
   msRefresh: () => api.post<{ status: string }>('/inventory/ms-stock/refresh'),

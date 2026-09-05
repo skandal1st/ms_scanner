@@ -20,6 +20,7 @@ const DIFF_TABS: { value: ReconcileDiff; label: string }[] = [
 
 export function InventoryPage() {
   const [stores, setStores] = useState<InventoryStore[]>([])
+  const [storesAvailable, setStoresAvailable] = useState(true)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [storesDirty, setStoresDirty] = useState(false)
   const [savingStores, setSavingStores] = useState(false)
@@ -38,6 +39,7 @@ export function InventoryPage() {
     try {
       const r = await inventoryApi.stores()
       setStores(r.data.stores)
+      setStoresAvailable(r.data.available)
       setSelected(new Set(r.data.selected))
       setStoresDirty(false)
     } catch (e: any) {
@@ -233,14 +235,22 @@ export function InventoryPage() {
       <details className="mc-tools" style={{ marginTop: 16 }}>
         <summary>
           <Icon name="chevron" size={16} className="mc-tools__chev" />
-          Наши склады ({selected.size ? `${selected.size} выбрано` : 'все склады'})
+          Наши склады ({!storesAvailable ? 'все склады' : selected.size ? `${selected.size} выбрано` : 'все склады'})
         </summary>
         <div className="mc-tools__body">
           <div className="mc-tool">
+            {!storesAvailable ? (
+              <div className="alert alert--warn">
+                Выбор складов недоступен — у приложения нет права на список складов МойСклад.
+                Остаток МС берётся по всем складам. Чтобы включить выбор по юрлицу, нужно добавить
+                право на склады в дескриптор решения и переустановить его.
+              </div>
+            ) : (
             <p className="mc-tool__desc">
               Остаток МС берётся по выбранным складам (периметр вашего юрлица). Ничего не выбрано —
               учитываются все склады. После изменения обновите остаток МС.
             </p>
+            )}
             <div className="flex-row" style={{ flexWrap: 'wrap', gap: 10 }}>
               {stores.map((s) => (
                 <label key={s.id} className="flex-row gap-8" style={{ alignItems: 'center', minWidth: 200 }}>
@@ -248,7 +258,7 @@ export function InventoryPage() {
                   <span>{s.name}</span>
                 </label>
               ))}
-              {stores.length === 0 && <span className="text-muted">Склады не загружены.</span>}
+              {storesAvailable && stores.length === 0 && <span className="text-muted">Склады не загружены.</span>}
             </div>
             {storesDirty && (
               <div className="mc-form" style={{ marginTop: 12 }}>
