@@ -39,6 +39,7 @@ async def main():
                 "user_id": user_id,
                 "cis_canonical": key,
                 "gtin": normalize_gtin_key(r.get("gtin")) if r.get("gtin") else None,
+                "product_name": (r.get("productName") or r.get("product_name") or "")[:500] or None,
                 "status": (r.get("status") or "")[:32] or None,
                 "package_type": (r.get("package_type") or "")[:16] or None,
                 "product_group": (r.get("product_group") or "")[:32] or None,

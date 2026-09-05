@@ -228,6 +228,7 @@ export interface ReconcileRow {
   qty_cz: number
   qty_ms: number
   diff: number
+  not_in_ms?: boolean
 }
 
 export interface ReconcileBrand {

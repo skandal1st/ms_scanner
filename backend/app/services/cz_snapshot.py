@@ -82,6 +82,7 @@ async def refresh_snapshot(db, integ: Integration) -> dict:
                 "user_id": integ.user_id,
                 "cis_canonical": key,
                 "gtin": normalize_gtin_key(it.gtin) if it.gtin else None,
+                "product_name": (it.product_name or "")[:500] or None,
                 "status": (it.status or "")[:32] or None,
                 "package_type": (it.package_type or "")[:16] or None,
                 "product_group": (it.product_group or pg)[:32],

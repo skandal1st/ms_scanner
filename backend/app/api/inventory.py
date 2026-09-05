@@ -165,13 +165,14 @@ async def ms_stock_status(
 # FULL OUTER JOIN снимка МС по GTIN.
 _RECONCILE_SQL = text("""
 WITH cz AS (
-    SELECT gtin_key AS gtin, count(*) AS qty_cz
+    SELECT gtin_key AS gtin, count(*) AS qty_cz, max(pname) AS product_name
     FROM (
         SELECT CASE
                  WHEN gtin IS NOT NULL AND gtin <> '' THEN gtin
                  WHEN cis_canonical LIKE '01%' AND length(cis_canonical) >= 16
                    THEN substring(cis_canonical FROM 3 FOR 14)
-                 ELSE NULL END AS gtin_key
+                 ELSE NULL END AS gtin_key,
+               product_name AS pname
         FROM cz_owner_marks
         WHERE user_id = CAST(:uid AS uuid) AND (package_type IS NULL OR package_type = 'UNIT')
     ) x
@@ -182,10 +183,12 @@ ms AS (
     SELECT gtin, qty AS qty_ms, product_name, folder_id, folder_name
     FROM ms_stock_snapshot WHERE user_id = CAST(:uid AS uuid)
 )
-SELECT coalesce(cz.gtin, ms.gtin) AS gtin,
-       coalesce(cz.qty_cz, 0)     AS qty_cz,
-       coalesce(ms.qty_ms, 0)     AS qty_ms,
-       ms.product_name, ms.folder_id, ms.folder_name
+SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
+       coalesce(cz.qty_cz, 0)                  AS qty_cz,
+       coalesce(ms.qty_ms, 0)                  AS qty_ms,
+       coalesce(ms.product_name, cz.product_name) AS product_name,
+       ms.folder_id, ms.folder_name,
+       (ms.gtin IS NULL)                       AS not_in_ms
 FROM cz FULL OUTER JOIN ms ON cz.gtin = ms.gtin
 """)
 
@@ -206,14 +209,16 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
     for r in res:
         qty_cz = int(r.qty_cz or 0)
         qty_ms = int(r.qty_ms or 0)
+        not_in_ms = bool(r.not_in_ms)
         all_rows.append({
             "gtin": r.gtin,
             "product_name": r.product_name,
             "folder_id": r.folder_id,
-            "folder_name": r.folder_name or "Без группы",
+            "folder_name": r.folder_name or ("Нет в МС" if not_in_ms else "Без группы"),
             "qty_cz": qty_cz,
             "qty_ms": qty_ms,
             "diff": qty_cz - qty_ms,
+            "not_in_ms": not_in_ms,
         })
 
     # Бренды (для фильтра) — из полного набора, до среза.

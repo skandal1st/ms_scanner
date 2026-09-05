@@ -304,6 +304,7 @@ class CzOwnerMark(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     cis_canonical = Column(String(60), nullable=False, index=True)
     gtin = Column(String(14), nullable=True)
+    product_name = Column(String(500), nullable=True)   # наименование из ЧЗ (dispenser productName)
     status = Column(String(32), nullable=True)
     package_type = Column(String(16), nullable=True)
     product_group = Column(String(32), nullable=True)
