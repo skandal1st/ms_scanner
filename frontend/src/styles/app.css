@@ -562,3 +562,62 @@ html, body, #root { height: 100%; }
 .mb-12 { margin-bottom: 12px; }
 .text-muted { color: var(--ms-text-muted); }
 .tabular { font-variant-numeric: tabular-nums; }
+
+/* ---------- Контроль марок (/mark-control) ---------- */
+.mc { max-width: 1120px; margin: 0 auto; padding: 22px 24px 64px; }
+
+/* Шапка страницы: заголовок + назначение + основные действия */
+.mc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.mc-head__title { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; color: var(--ms-text); }
+.mc-head__sub { margin: 4px 0 0; font-size: 13px; color: var(--ms-text-muted); max-width: 64ch; }
+.mc-head__actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* Строка состояния интеграции (Saby + снимок ЧЗ) */
+.mc-meta { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--ms-text-muted); }
+.mc-meta__item { display: inline-flex; align-items: center; gap: 6px; }
+.mc-meta__sep { width: 1px; align-self: stretch; background: var(--ms-border-light); }
+
+/* Карточка-отчёт */
+.mc-report { margin-top: 18px; background: var(--ms-bg); border: 1px solid var(--ms-border-light); border-radius: var(--r-lg); box-shadow: var(--shadow-1); overflow: hidden; }
+.mc-report__bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; flex-wrap: wrap; }
+.mc-report__title { margin: 0; font-size: 16px; font-weight: 600; color: var(--ms-text); }
+
+/* Сводная строка-показатели (не карточки — компактная лента) */
+.mc-stats { display: flex; align-items: stretch; gap: 0; padding: 4px 20px 18px; flex-wrap: wrap; }
+.mc-stat { padding-right: 28px; margin-right: 28px; border-right: 1px solid var(--ms-border-light); }
+.mc-stat:last-child { border-right: 0; margin-right: 0; padding-right: 0; }
+.mc-stat__num { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--ms-text); font-variant-numeric: tabular-nums; }
+.mc-stat__num--alert { color: var(--st-err-fg); }
+.mc-stat__label { margin-top: 3px; font-size: 12px; color: var(--ms-text-muted); }
+
+/* Сегментированный переключатель вида */
+.seg { display: inline-flex; background: var(--surface-2); border: 1px solid var(--ms-border-light); border-radius: var(--r-md); padding: 2px; gap: 2px; }
+.seg__btn { border: 0; background: transparent; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--ms-text-muted); cursor: pointer; transition: background-color .12s ease, color .12s ease; }
+.seg__btn:hover { color: var(--ms-text); }
+.seg__btn.is-active { background: var(--ms-bg); color: var(--ms-text); font-weight: 600; box-shadow: var(--shadow-1); }
+
+/* Табличная обёртка отчёта */
+.mc-table-wrap { border-top: 1px solid var(--ms-border-light); overflow-x: auto; }
+.mc-table-wrap .ui-table { border: 0; }
+.mc-num { text-align: right; font-variant-numeric: tabular-nums; }
+.mc-num--alert { text-align: right; font-variant-numeric: tabular-nums; color: var(--st-err-fg); font-weight: 600; }
+.mc-inn { font-family: var(--ms-font-mono); font-size: 12px; color: var(--ms-text-muted); white-space: nowrap; }
+.mc-state { color: var(--ms-text-muted); }
+
+/* Пустое состояние отчёта */
+.mc-empty { padding: 40px 20px; text-align: center; color: var(--ms-text-subtle); font-size: 14px; }
+
+/* Раскрываемый блок настройки/синхронизации */
+.mc-tools { margin-top: 24px; background: var(--ms-bg); border: 1px solid var(--ms-border-light); border-radius: var(--r-lg); box-shadow: var(--shadow-1); overflow: hidden; }
+.mc-tools > summary { display: flex; align-items: center; gap: 8px; padding: 14px 20px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ms-text); list-style: none; }
+.mc-tools > summary::-webkit-details-marker { display: none; }
+.mc-tools > summary .mc-tools__chev { transition: transform .15s ease; color: var(--ms-text-subtle); }
+.mc-tools[open] > summary .mc-tools__chev { transform: rotate(90deg); }
+.mc-tools[open] > summary { border-bottom: 1px solid var(--ms-border-light); }
+.mc-tools__body { padding: 20px; display: flex; flex-direction: column; gap: 26px; }
+.mc-tool + .mc-tool { padding-top: 22px; border-top: 1px solid var(--ms-border-light); }
+.mc-tool__title { margin: 0 0 4px; font-size: 14px; font-weight: 600; color: var(--ms-text); }
+.mc-tool__desc { margin: 0 0 12px; font-size: 12px; color: var(--ms-text-subtle); max-width: 70ch; }
+.mc-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.mc-form__field { display: flex; flex-direction: column; min-width: 150px; }
+.mc-run-result { margin-top: 12px; font-size: 13px; color: var(--ms-text-muted); }
