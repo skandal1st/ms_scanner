@@ -155,6 +155,8 @@ export const markControlApi = {
     api.get<{ running: boolean; size: number; at: string | null; result: any }>(
       '/mark-control/cz/snapshot/status',
     ),
+  edoStuckXlsx: () =>
+    api.get('/mark-control/edo/stuck.xlsx', { responseType: 'blob' }),
 }
 
 export interface EdoStuckCounterparty {

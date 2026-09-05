@@ -178,8 +178,25 @@ export function MarkControlPage() {
     return () => clearInterval(t)
   }, [snapRunning])
 
+  const exportXlsx = async () => {
+    try {
+      const r = await markControlApi.edoStuckXlsx()
+      const url = URL.createObjectURL(r.data as Blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `Не принятые УПД ${fmt(new Date())}.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось выгрузить XLSX')
+    }
+  }
+
   const shown = onlyUnsigned ? docs.filter(isUnsigned) : docs
   const connected = Boolean(status?.connected)
+  const hasStuck = Boolean(stuck?.has_snapshot && (stuck?.documents.length ?? 0) > 0)
 
   return (
     <div className="mc">
@@ -193,6 +210,12 @@ export function MarkControlPage() {
         </div>
         {connected && (
           <div className="mc-head__actions">
+            {hasStuck && (
+              <button className="button" onClick={exportXlsx}>
+                <Icon name="upload" size={15} />
+                Экспорт XLSX
+              </button>
+            )}
             <button className="button" onClick={loadStuck} disabled={stuckLoading}>
               <Icon name="refresh" size={15} />
               {stuckLoading ? 'Сверка…' : 'Пересверить'}

@@ -370,30 +370,23 @@ async def cz_snapshot_status(
     }
 
 
-@router.get("/edo/stuck")
-async def edo_stuck(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Не принятые УПД: марки отгружены по УПД, но всё ещё числятся за нами в ЧЗ
-    (право не перешло → контрагент не принял). Сверка edo_marks ∩ cz_owner_marks.
+async def _compute_stuck(db: AsyncSession, user_id) -> dict:
+    """Отчёт «не принятые УПД» (по контрагентам + по документам). Единый источник для
+    JSON-эндпоинта и XLSX-экспорта.
 
-    stuck — сколько марок документа ещё за нами; total — всего марок в УПД."""
+    «Не принято» = документ НЕ завершён успешно и НЕ отменён/черновик (исключаем коды
+    7/19/22/20/0). stuck — сколько марок УПД ещё числится за нами в ЧЗ."""
     from sqlalchemy import func, text
 
-    # Есть ли вообще снимок ЧЗ.
     snap = (
         await db.execute(
-            select(func.count()).select_from(CzOwnerMark).where(CzOwnerMark.user_id == current_user.id)
+            select(func.count()).select_from(CzOwnerMark).where(CzOwnerMark.user_id == user_id)
         )
     ).scalar_one()
     if not snap:
-        return {"has_snapshot": False, "snapshot_size": 0, "documents": []}
+        return {"has_snapshot": False, "snapshot_size": 0, "counterparties": [], "documents": [],
+                "stuck_docs": 0, "stuck_marks": 0, "snapshot_at": None}
 
-    # «Не принято» = документ НЕ завершён успешно и НЕ отменён/черновик:
-    #   исключаем 7 (Выполнено успешно), 19 (Отозван мной), 22 (Аннулирован),
-    #   20 (Удалён контрагентом), 0 (Черновик/редактируется).
-    # Дополнительно на каждый УПД: stuck = сколько его марок ещё числится за нами (ЧЗ).
     q = text("""
         SELECT d.number, d.doc_date, d.counterparty_inn, d.counterparty_name,
                d.state_name, d.codes_total AS total,
@@ -408,7 +401,7 @@ async def edo_stuck(
                  d.state_name, d.codes_total
         ORDER BY d.doc_date DESC
     """)
-    res = await db.execute(q, {"uid": str(current_user.id)})
+    res = await db.execute(q, {"uid": str(user_id)})
     docs = [
         {
             "number": r.number,
@@ -422,32 +415,24 @@ async def edo_stuck(
         for r in res
     ]
 
-    # Сводка по контрагентам: не принятых УПД + марок (всего в них) + ещё за нами (ЧЗ).
     by_cp: dict[str, dict] = {}
     for d in docs:
         key = d["counterparty_inn"] or (d["counterparty_name"] or "—")
         c = by_cp.get(key)
         if not c:
-            c = {
-                "counterparty_inn": d["counterparty_inn"],
-                "counterparty_name": d["counterparty_name"],
-                "not_accepted_upd": 0,
-                "marks_total": 0,
-                "stuck_marks": 0,
-            }
+            c = {"counterparty_inn": d["counterparty_inn"], "counterparty_name": d["counterparty_name"],
+                 "not_accepted_upd": 0, "marks_total": 0, "stuck_marks": 0}
             by_cp[key] = c
         c["not_accepted_upd"] += 1
         c["marks_total"] += d["total"]
         c["stuck_marks"] += d["stuck"]
         if not c["counterparty_name"] and d["counterparty_name"]:
             c["counterparty_name"] = d["counterparty_name"]
-    counterparties = sorted(
-        by_cp.values(), key=lambda x: (-x["not_accepted_upd"], -x["stuck_marks"])
-    )
+    counterparties = sorted(by_cp.values(), key=lambda x: (-x["not_accepted_upd"], -x["stuck_marks"]))
 
     snap_at = (
         await db.execute(
-            select(func.max(CzOwnerMark.snapshot_at)).where(CzOwnerMark.user_id == current_user.id)
+            select(func.max(CzOwnerMark.snapshot_at)).where(CzOwnerMark.user_id == user_id)
         )
     ).scalar_one_or_none()
 
@@ -460,3 +445,64 @@ async def edo_stuck(
         "stuck_docs": len(docs),
         "stuck_marks": sum(d["stuck"] for d in docs),
     }
+
+
+@router.get("/edo/stuck")
+async def edo_stuck(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Не принятые УПД: сводка по контрагентам + по документам."""
+    return await _compute_stuck(db, current_user.id)
+
+
+@router.get("/edo/stuck.xlsx")
+async def edo_stuck_xlsx(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Выгрузка отчёта «Не принятые УПД» в XLSX: лист по контрагентам + лист по документам."""
+    import io
+    from datetime import datetime
+    from urllib.parse import quote
+    from fastapi.responses import Response
+    from openpyxl import Workbook
+
+    data = await _compute_stuck(db, current_user.id)
+    wb = Workbook()
+
+    ws1 = wb.active
+    ws1.title = "По контрагентам"
+    ws1.append(["Контрагент", "ИНН", "Не принято УПД", "Марок всего", "Марок за нами"])
+    for c in data.get("counterparties", []):
+        ws1.append([c["counterparty_name"] or "—", c["counterparty_inn"] or "",
+                    c["not_accepted_upd"], c["marks_total"], c["stuck_marks"]])
+    ws1.column_dimensions["A"].width = 46
+    ws1.column_dimensions["B"].width = 16
+    for col in ("C", "D", "E"):
+        ws1.column_dimensions[col].width = 15
+    ws1.freeze_panes = "A2"
+
+    ws2 = wb.create_sheet("По документам")
+    ws2.append(["УПД №", "Дата", "Покупатель", "ИНН", "Статус ЭДО", "Марок за нами", "Марок всего"])
+    for d in data.get("documents", []):
+        ws2.append([d["number"] or "—", d["doc_date"] or "", d["counterparty_name"] or "—",
+                    d["counterparty_inn"] or "", d["state_name"] or "", d["stuck"], d["total"]])
+    ws2.column_dimensions["A"].width = 14
+    ws2.column_dimensions["B"].width = 12
+    ws2.column_dimensions["C"].width = 40
+    ws2.column_dimensions["D"].width = 16
+    ws2.column_dimensions["E"].width = 26
+    ws2.column_dimensions["F"].width = 14
+    ws2.column_dimensions["G"].width = 12
+    ws2.freeze_panes = "A2"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    fname = f"Не принятые УПД {datetime.now().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=stuck.xlsx; filename*=UTF-8''{quote(fname)}"},
+    )
+

@@ -28,4 +28,14 @@ celery_app.conf.beat_schedule = {
         "task": "cleanup_stale_processing",
         "schedule": crontab(minute=0),  # раз в час, в начале часа
     },
+    # Инкрементальный добор ЭДО (лента Saby по курсору) для всех подключённых клиентов.
+    "edo-auto-sync": {
+        "task": "edo_auto_sync_all",
+        "schedule": crontab(minute="*/30"),  # каждые 30 минут
+    },
+    # Ежедневное обновление снимка остатка ЧЗ (для актуальной сверки «не принятых»).
+    "cz-snapshot-daily": {
+        "task": "cz_snapshot_refresh_all",
+        "schedule": crontab(hour=3, minute=30),  # раз в сутки, ночью (UTC)
+    },
 }

@@ -1615,3 +1615,54 @@ async def _cz_snapshot_refresh_async(user_id: str):
             await r.delete(lock_key); await r.aclose()
         except Exception:
             pass
+
+
+@celery_app.task(name="edo_auto_sync_all")
+def edo_auto_sync_all_task():
+    """Beat: инкрементальный добор ЭДО для всех клиентов с подключённым Saby (по курсору)."""
+    _run(_edo_auto_sync_all_async())
+
+
+async def _edo_auto_sync_all_async():
+    from sqlalchemy import select, or_
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Integration
+
+    async with AsyncSessionLocal() as db:
+        q = await db.execute(
+            select(Integration.user_id).where(
+                or_(
+                    Integration.saby_app_client_id.isnot(None),
+                    Integration.saby_login.isnot(None),
+                )
+            )
+        )
+        user_ids = [str(u) for (u,) in q.all()]
+    from datetime import datetime, timedelta, timezone
+    # Дефолтная нижняя граница на случай пустого курсора — последние 40 дней.
+    since = (datetime.now(timezone.utc) - timedelta(days=40)).strftime("%d.%m.%Y 00.00.00")
+    for uid in user_ids:
+        # use_cursor=True → продолжаем с сохранённого курсора (инкремент); дата — фолбэк.
+        edo_sync_task.delay(uid, since, None, True)
+    logger.info("edo_auto_sync_all.dispatched", users=len(user_ids))
+
+
+@celery_app.task(name="cz_snapshot_refresh_all")
+def cz_snapshot_refresh_all_task():
+    """Beat: ежедневное обновление снимка остатка ЧЗ для всех клиентов с токеном ЧЗ."""
+    _run(_cz_snapshot_refresh_all_async())
+
+
+async def _cz_snapshot_refresh_all_async():
+    from sqlalchemy import select
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Integration
+
+    async with AsyncSessionLocal() as db:
+        q = await db.execute(
+            select(Integration.user_id).where(Integration.cz_token.isnot(None))
+        )
+        user_ids = [str(u) for (u,) in q.all()]
+    for uid in user_ids:
+        cz_snapshot_refresh_task.delay(uid)
+    logger.info("cz_snapshot_refresh_all.dispatched", users=len(user_ids))
