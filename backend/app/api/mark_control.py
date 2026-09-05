@@ -322,6 +322,54 @@ async def edo_documents_db(
     ]
 
 
+@router.post("/cz/snapshot/refresh")
+async def cz_snapshot_refresh(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Запустить обновление снимка остатка ЧЗ (dispenser → cz_owner_marks)."""
+    integ = await _get_integration(db, current_user.id)
+    if not integ or not integ.cz_token:
+        raise HTTPException(status_code=403, detail="Не подключён Честный Знак (нужен вход по УКЭП).")
+    from app.worker.tasks import cz_snapshot_refresh_task
+
+    cz_snapshot_refresh_task.delay(str(current_user.id))
+    return {"status": "started"}
+
+
+@router.get("/cz/snapshot/status")
+async def cz_snapshot_status(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Состояние снимка ЧЗ: идёт ли обновление, размер, дата, результат последнего."""
+    from sqlalchemy import func
+
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        running = await r.get(f"cz_snapshot:lock:{current_user.id}")
+        res = await r.get(f"cz_snapshot:result:{current_user.id}")
+    finally:
+        await r.aclose()
+    result = json.loads(res.decode() if isinstance(res, (bytes, bytearray)) else res) if res else None
+    size = (
+        await db.execute(
+            select(func.count()).select_from(CzOwnerMark).where(CzOwnerMark.user_id == current_user.id)
+        )
+    ).scalar_one()
+    at = (
+        await db.execute(
+            select(func.max(CzOwnerMark.snapshot_at)).where(CzOwnerMark.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
+    return {
+        "running": bool(running),
+        "size": int(size),
+        "at": at.isoformat() if at else None,
+        "result": result,
+    }
+
+
 @router.get("/edo/stuck")
 async def edo_stuck(
     current_user: User = Depends(get_current_user),
@@ -369,9 +417,39 @@ async def edo_stuck(
         }
         for r in res
     ]
+
+    # Сводка по контрагентам: сколько не принятых УПД и зависших марок у каждого.
+    by_cp: dict[str, dict] = {}
+    for d in docs:
+        key = d["counterparty_inn"] or (d["counterparty_name"] or "—")
+        c = by_cp.get(key)
+        if not c:
+            c = {
+                "counterparty_inn": d["counterparty_inn"],
+                "counterparty_name": d["counterparty_name"],
+                "not_accepted_upd": 0,
+                "stuck_marks": 0,
+            }
+            by_cp[key] = c
+        c["not_accepted_upd"] += 1
+        c["stuck_marks"] += d["stuck"]
+        if not c["counterparty_name"] and d["counterparty_name"]:
+            c["counterparty_name"] = d["counterparty_name"]
+    counterparties = sorted(
+        by_cp.values(), key=lambda x: (-x["not_accepted_upd"], -x["stuck_marks"])
+    )
+
+    snap_at = (
+        await db.execute(
+            select(func.max(CzOwnerMark.snapshot_at)).where(CzOwnerMark.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
+
     return {
         "has_snapshot": True,
         "snapshot_size": int(snap),
+        "snapshot_at": snap_at.isoformat() if snap_at else None,
+        "counterparties": counterparties,
         "documents": docs,
         "stuck_docs": len(docs),
         "stuck_marks": sum(d["stuck"] for d in docs),

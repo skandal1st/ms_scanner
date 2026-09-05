@@ -96,6 +96,30 @@ export function MarkControlPage() {
 
   const [stuck, setStuck] = useState<EdoStuckResult | null>(null)
   const [stuckLoading, setStuckLoading] = useState(false)
+  const [stuckView, setStuckView] = useState<'counterparties' | 'documents'>('counterparties')
+  const [snapRunning, setSnapRunning] = useState(false)
+  const [snapInfo, setSnapInfo] = useState<{ size: number; at: string | null } | null>(null)
+
+  const loadSnapStatus = async () => {
+    try {
+      const r = await markControlApi.czSnapshotStatus()
+      setSnapRunning(r.data.running)
+      setSnapInfo({ size: r.data.size, at: r.data.at })
+      return r.data.running
+    } catch {
+      return false
+    }
+  }
+
+  const refreshSnapshot = async () => {
+    setErr(null)
+    try {
+      await markControlApi.czSnapshotRefresh()
+      setSnapRunning(true)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось запустить обновление остатка ЧЗ')
+    }
+  }
 
   const loadDbDocs = async () => {
     try {
@@ -146,8 +170,22 @@ export function MarkControlPage() {
     if (status?.connected) {
       loadDbDocs()
       loadStuck()
+      loadSnapStatus()
     }
   }, [status?.connected])
+
+  // Опрос обновления снимка ЧЗ
+  useEffect(() => {
+    if (!snapRunning) return
+    const t = setInterval(async () => {
+      const running = await loadSnapStatus()
+      if (!running) {
+        clearInterval(t)
+        loadStuck()
+      }
+    }, 5000)
+    return () => clearInterval(t)
+  }, [snapRunning])
 
   const shown = onlyUnsigned ? docs.filter(isUnsigned) : docs
 
@@ -164,13 +202,23 @@ export function MarkControlPage() {
         <section style={{ ...card, borderColor: '#f0c0c0', background: '#fffafa' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <h2 style={{ ...h2, marginBottom: 0 }}>⚠️ Не принятые УПД (марки зависли на нас)</h2>
-            <button style={btnGhost} onClick={loadStuck} disabled={stuckLoading}>
-              {stuckLoading ? 'Сверка…' : 'Обновить'}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={btnGhost} onClick={loadStuck} disabled={stuckLoading}>
+                {stuckLoading ? 'Сверка…' : 'Пересверить'}
+              </button>
+              <button style={btnGhost} onClick={refreshSnapshot} disabled={snapRunning}>
+                {snapRunning ? 'Обновление ЧЗ…' : 'Обновить остаток ЧЗ'}
+              </button>
+            </div>
           </div>
           <div style={{ color: '#8a8f98', fontSize: 13, margin: '8px 0 12px' }}>
             Марки отгружены по УПД, но всё ещё числятся за нами в ЧЗ → контрагент не принял
             документ (право не перешло).
+            {snapInfo && (
+              <> Остаток ЧЗ: <b>{snapInfo.size.toLocaleString('ru')}</b> марок
+              {snapInfo.at ? `, от ${new Date(snapInfo.at).toLocaleString('ru')}` : ''}.</>
+            )}
+            {snapRunning && ' Идёт обновление остатка ЧЗ (несколько минут)…'}
           </div>
           {!stuck ? (
             <div style={{ color: '#888' }}>{stuckLoading ? 'Сверка…' : ''}</div>
@@ -186,38 +234,72 @@ export function MarkControlPage() {
           ) : (
             <>
               <div style={{ marginBottom: 10, color: '#444' }}>
-                Не принятых УПД: <b style={{ color: '#c0392b' }}>{stuck.stuck_docs}</b> ·
-                зависло марок: <b style={{ color: '#c0392b' }}>{stuck.stuck_marks?.toLocaleString('ru')}</b> ·
-                снимок ЧЗ: {stuck.snapshot_size.toLocaleString('ru')}
+                Контрагентов с непринятыми: <b style={{ color: '#c0392b' }}>{stuck.counterparties?.length ?? 0}</b> ·
+                не принятых УПД: <b style={{ color: '#c0392b' }}>{stuck.stuck_docs}</b> ·
+                зависло марок: <b style={{ color: '#c0392b' }}>{stuck.stuck_marks?.toLocaleString('ru')}</b>
               </div>
-              <div style={{ overflowX: 'auto' }}>
-                <table style={table}>
-                  <thead>
-                    <tr>
-                      <th style={th}>УПД №</th>
-                      <th style={th}>Дата</th>
-                      <th style={th}>Покупатель</th>
-                      <th style={th}>ИНН</th>
-                      <th style={th}>Статус ЭДО</th>
-                      <th style={th}>Зависло / всего</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stuck.documents.map((d, i) => (
-                      <tr key={(d.number || '') + i} style={{ background: '#fff5f5' }}>
-                        <td style={td}>{d.number || '—'}</td>
-                        <td style={td}>{d.doc_date || '—'}</td>
-                        <td style={td}>{d.counterparty_name || '—'}</td>
-                        <td style={td}>{d.counterparty_inn || '—'}</td>
-                        <td style={td}>{d.state_name || '—'}</td>
-                        <td style={{ ...td, fontWeight: 600, color: '#c0392b' }}>
-                          {d.stuck} / {d.total}
-                        </td>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button style={stuckView === 'counterparties' ? tabActive : tab} onClick={() => setStuckView('counterparties')}>
+                  По контрагентам
+                </button>
+                <button style={stuckView === 'documents' ? tabActive : tab} onClick={() => setStuckView('documents')}>
+                  По документам
+                </button>
+              </div>
+
+              {stuckView === 'counterparties' ? (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={table}>
+                    <thead>
+                      <tr>
+                        <th style={th}>Контрагент</th>
+                        <th style={th}>ИНН</th>
+                        <th style={th}>Не принято УПД</th>
+                        <th style={th}>Зависло марок</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {(stuck.counterparties ?? []).map((c, i) => (
+                        <tr key={(c.counterparty_inn || '') + i}>
+                          <td style={{ ...td, fontWeight: 500 }}>{c.counterparty_name || '—'}</td>
+                          <td style={td}>{c.counterparty_inn || '—'}</td>
+                          <td style={{ ...td, fontWeight: 700, color: '#c0392b' }}>{c.not_accepted_upd}</td>
+                          <td style={{ ...td, color: '#c0392b' }}>{c.stuck_marks.toLocaleString('ru')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={table}>
+                    <thead>
+                      <tr>
+                        <th style={th}>УПД №</th>
+                        <th style={th}>Дата</th>
+                        <th style={th}>Покупатель</th>
+                        <th style={th}>ИНН</th>
+                        <th style={th}>Статус ЭДО</th>
+                        <th style={th}>Зависло / всего</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stuck.documents.map((d, i) => (
+                        <tr key={(d.number || '') + i} style={{ background: '#fff5f5' }}>
+                          <td style={td}>{d.number || '—'}</td>
+                          <td style={td}>{d.doc_date || '—'}</td>
+                          <td style={td}>{d.counterparty_name || '—'}</td>
+                          <td style={td}>{d.counterparty_inn || '—'}</td>
+                          <td style={td}>{d.state_name || '—'}</td>
+                          <td style={{ ...td, fontWeight: 600, color: '#c0392b' }}>
+                            {d.stuck} / {d.total}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </>
           )}
         </section>

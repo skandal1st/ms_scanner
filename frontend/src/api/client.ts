@@ -150,6 +150,18 @@ export const markControlApi = {
     api.get<{ running: boolean; result: EdoSyncResult | null }>('/mark-control/edo/sync/status'),
   edoDocumentsDb: () => api.get<EdoDbDoc[]>('/mark-control/edo/documents-db'),
   edoStuck: () => api.get<EdoStuckResult>('/mark-control/edo/stuck'),
+  czSnapshotRefresh: () => api.post<{ status: string }>('/mark-control/cz/snapshot/refresh'),
+  czSnapshotStatus: () =>
+    api.get<{ running: boolean; size: number; at: string | null; result: any }>(
+      '/mark-control/cz/snapshot/status',
+    ),
+}
+
+export interface EdoStuckCounterparty {
+  counterparty_inn?: string | null
+  counterparty_name?: string | null
+  not_accepted_upd: number
+  stuck_marks: number
 }
 
 export interface EdoStuckDoc {
@@ -165,6 +177,8 @@ export interface EdoStuckDoc {
 export interface EdoStuckResult {
   has_snapshot: boolean
   snapshot_size: number
+  snapshot_at?: string | null
+  counterparties?: EdoStuckCounterparty[]
   documents: EdoStuckDoc[]
   stuck_docs?: number
   stuck_marks?: number

@@ -1573,3 +1573,45 @@ async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: boo
             await r.delete(lock_key); await r.aclose()
         except Exception:
             pass
+
+
+@celery_app.task(name="cz_snapshot_refresh")
+def cz_snapshot_refresh_task(user_id: str):
+    """Обновить снимок остатка ЧЗ (cz_owner_marks) через выгрузку dispenser."""
+    _run(_cz_snapshot_refresh_async(user_id))
+
+
+async def _cz_snapshot_refresh_async(user_id: str):
+    import json as _json
+    import redis.asyncio as aioredis
+    from app.core.config import settings
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Integration
+    from app.services.cz_snapshot import refresh_snapshot
+    from sqlalchemy import select
+
+    lock_key = f"cz_snapshot:lock:{user_id}"
+    r = aioredis.from_url(settings.REDIS_URL)
+    if not await r.set(lock_key, "1", nx=True, ex=3600):
+        await r.aclose()
+        logger.info("cz_snapshot.already_running", user_id=user_id)
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            integ = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one_or_none()
+            if not integ:
+                return
+            res = await refresh_snapshot(db, integ)
+            await db.commit()
+        r2 = aioredis.from_url(settings.REDIS_URL)
+        try:
+            await r2.set(f"cz_snapshot:result:{user_id}", _json.dumps(res), ex=3600)
+        finally:
+            await r2.aclose()
+    except Exception as exc:
+        logger.error("cz_snapshot.error", user_id=user_id, error=str(exc))
+    finally:
+        try:
+            await r.delete(lock_key); await r.aclose()
+        except Exception:
+            pass
