@@ -69,6 +69,19 @@ class DocRow(BaseModel):
     note: Optional[str] = None
 
 
+def _to_dt(d: str, end: bool = False) -> str:
+    """«ДД.ММ.ГГГГ» → «ДД.ММ.ГГГГ ЧЧ.ММ.СС» для СписокИзменений."""
+    d = (d or "").strip()
+    if len(d) <= 10:
+        return f"{d} {'23.59.59' if end else '00.00.00'}"
+    return d
+
+
+def _default_from() -> str:
+    from datetime import datetime, timedelta
+    return (datetime.now() - timedelta(days=30)).strftime("%d.%m.%Y")
+
+
 class DocumentsRequest(BaseModel):
     direction: str = "Исходящий"
     doc_type: Optional[str] = None
@@ -199,14 +212,14 @@ async def saby_documents(
     integ = await _get_integration(db, current_user.id)
     client = _client_from_integration(integ)
 
-    async def _once() -> list:
+    # «Быстрый просмотр» — первая страница ленты изменений (одна пачка ~25 последних
+    # событий). Полный охват периода — через синхронизацию в БД (/edo/sync).
+    df = _to_dt(body.date_from) if body.date_from else _to_dt(_default_from())
+    dt = _to_dt(body.date_to, end=True) if body.date_to else None
+
+    async def _once() -> object:
         auth = await _get_auth(current_user.id, client)
-        return await client.list_documents(
-            auth,
-            direction=body.direction,
-            date_from=body.date_from,
-            date_to=body.date_to,
-        )
+        return await client.changes_page(auth, date_from=df, date_to=dt)
 
     try:
         try:
@@ -244,13 +257,6 @@ class SyncRequest(BaseModel):
     date_from: str          # «ДД.ММ.ГГГГ»
     date_to: Optional[str] = None
     use_cursor: bool = False
-
-
-def _to_dt(d: str, end: bool = False) -> str:
-    d = (d or "").strip()
-    if len(d) <= 10:
-        return f"{d} {'23.59.59' if end else '00.00.00'}"
-    return d
 
 
 @router.post("/edo/sync")
