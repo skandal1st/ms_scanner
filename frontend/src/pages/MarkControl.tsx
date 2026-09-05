@@ -5,6 +5,7 @@ import {
   type EdoDocRow,
   type EdoSyncResult,
   type EdoDbDoc,
+  type EdoStuckResult,
 } from '../api/client'
 
 /** Дата ДД.ММ.ГГГГ из Date. */
@@ -93,11 +94,26 @@ export function MarkControlPage() {
   const [syncResult, setSyncResult] = useState<EdoSyncResult | null>(null)
   const [dbDocs, setDbDocs] = useState<EdoDbDoc[]>([])
 
+  const [stuck, setStuck] = useState<EdoStuckResult | null>(null)
+  const [stuckLoading, setStuckLoading] = useState(false)
+
   const loadDbDocs = async () => {
     try {
       const r = await markControlApi.edoDocumentsDb()
       setDbDocs(r.data)
     } catch { /* ignore */ }
+  }
+
+  const loadStuck = async () => {
+    setStuckLoading(true)
+    try {
+      const r = await markControlApi.edoStuck()
+      setStuck(r.data)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось сверить с ЧЗ')
+    } finally {
+      setStuckLoading(false)
+    }
   }
 
   const startSync = async () => {
@@ -119,6 +135,7 @@ export function MarkControlPage() {
         if (!r.data.running) {
           setSyncRunning(false)
           loadDbDocs()
+          loadStuck()
         }
       } catch { /* ignore */ }
     }, 4000)
@@ -126,7 +143,10 @@ export function MarkControlPage() {
   }, [syncRunning])
 
   useEffect(() => {
-    if (status?.connected) loadDbDocs()
+    if (status?.connected) {
+      loadDbDocs()
+      loadStuck()
+    }
   }, [status?.connected])
 
   const shown = onlyUnsigned ? docs.filter(isUnsigned) : docs
@@ -138,6 +158,70 @@ export function MarkControlPage() {
         Отлов исходящих УПД, которые покупатель не принял/не подписал — марки «зависают» на
         продавце в ЧЗ. Данные из ЭДО Saby (СБИС).
       </p>
+
+      {/* ГЛАВНОЕ: Не принятые УПД (сверка ЭДО с остатком ЧЗ) */}
+      {status?.connected && (
+        <section style={{ ...card, borderColor: '#f0c0c0', background: '#fffafa' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <h2 style={{ ...h2, marginBottom: 0 }}>⚠️ Не принятые УПД (марки зависли на нас)</h2>
+            <button style={btnGhost} onClick={loadStuck} disabled={stuckLoading}>
+              {stuckLoading ? 'Сверка…' : 'Обновить'}
+            </button>
+          </div>
+          <div style={{ color: '#8a8f98', fontSize: 13, margin: '8px 0 12px' }}>
+            Марки отгружены по УПД, но всё ещё числятся за нами в ЧЗ → контрагент не принял
+            документ (право не перешло).
+          </div>
+          {!stuck ? (
+            <div style={{ color: '#888' }}>{stuckLoading ? 'Сверка…' : ''}</div>
+          ) : !stuck.has_snapshot ? (
+            <div style={{ color: '#b26a00' }}>
+              Нет снимка остатка ЧЗ для сверки. Загрузите выгрузку ЧЗ (237k марок) — тогда
+              появится список не принятых УПД.
+            </div>
+          ) : stuck.documents.length === 0 ? (
+            <div style={{ color: '#2e7d32' }}>
+              Не принятых УПД не найдено (снимок ЧЗ: {stuck.snapshot_size.toLocaleString('ru')} марок).
+            </div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 10, color: '#444' }}>
+                Не принятых УПД: <b style={{ color: '#c0392b' }}>{stuck.stuck_docs}</b> ·
+                зависло марок: <b style={{ color: '#c0392b' }}>{stuck.stuck_marks?.toLocaleString('ru')}</b> ·
+                снимок ЧЗ: {stuck.snapshot_size.toLocaleString('ru')}
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={table}>
+                  <thead>
+                    <tr>
+                      <th style={th}>УПД №</th>
+                      <th style={th}>Дата</th>
+                      <th style={th}>Покупатель</th>
+                      <th style={th}>ИНН</th>
+                      <th style={th}>Статус ЭДО</th>
+                      <th style={th}>Зависло / всего</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {stuck.documents.map((d, i) => (
+                      <tr key={(d.number || '') + i} style={{ background: '#fff5f5' }}>
+                        <td style={td}>{d.number || '—'}</td>
+                        <td style={td}>{d.doc_date || '—'}</td>
+                        <td style={td}>{d.counterparty_name || '—'}</td>
+                        <td style={td}>{d.counterparty_inn || '—'}</td>
+                        <td style={td}>{d.state_name || '—'}</td>
+                        <td style={{ ...td, fontWeight: 600, color: '#c0392b' }}>
+                          {d.stuck} / {d.total}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       {/* Подключение Saby */}
       <section style={card}>

@@ -286,6 +286,26 @@ class EdoMark(Base):
     document = relationship("EdoDocument", back_populates="marks")
 
 
+class CzOwnerMark(Base):
+    """Снимок остатка марок в ЧЗ (что числится за участником) — для сверки с ЭДО.
+
+    Заполняется выгрузкой dispenser (FILTERED_CIS_REPORT). Пер-клиент, ключ —
+    канонический CIS. Сверка: edo_marks ∩ cz_owner_marks по (user_id, cis_canonical)."""
+    __tablename__ = "cz_owner_marks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "cis_canonical", name="ix_cz_owner_marks_user_cis"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    cis_canonical = Column(String(60), nullable=False, index=True)
+    gtin = Column(String(14), nullable=True)
+    status = Column(String(32), nullable=True)
+    package_type = Column(String(16), nullable=True)
+    product_group = Column(String(32), nullable=True)
+    snapshot_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class CzLog(Base):
     """Все запросы в Честный Знак — критично для отладки."""
     __tablename__ = "cz_logs"

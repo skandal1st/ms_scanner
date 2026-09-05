@@ -19,7 +19,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token, encrypt_token
-from app.db.models import EdoDocument, EdoMark, Integration, User
+from app.db.models import CzOwnerMark, EdoDocument, EdoMark, Integration, User
 from app.db.session import get_db
 from app.services.saby import (
     SabyAuthError,
@@ -320,3 +320,59 @@ async def edo_documents_db(
         }
         for d in rows
     ]
+
+
+@router.get("/edo/stuck")
+async def edo_stuck(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Не принятые УПД: марки отгружены по УПД, но всё ещё числятся за нами в ЧЗ
+    (право не перешло → контрагент не принял). Сверка edo_marks ∩ cz_owner_marks.
+
+    stuck — сколько марок документа ещё за нами; total — всего марок в УПД."""
+    from sqlalchemy import func, text
+
+    # Есть ли вообще снимок ЧЗ.
+    snap = (
+        await db.execute(
+            select(func.count()).select_from(CzOwnerMark).where(CzOwnerMark.user_id == current_user.id)
+        )
+    ).scalar_one()
+    if not snap:
+        return {"has_snapshot": False, "snapshot_size": 0, "documents": []}
+
+    q = text("""
+        SELECT d.number, d.doc_date, d.counterparty_inn, d.counterparty_name,
+               d.state_name, d.codes_total AS total,
+               count(o.id) AS stuck
+        FROM edo_documents d
+        JOIN edo_marks m ON m.document_id = d.id
+        LEFT JOIN cz_owner_marks o
+               ON o.user_id = d.user_id AND o.cis_canonical = m.cis_canonical
+        WHERE d.user_id = :uid AND d.direction = 'Исходящий' AND d.codes_total > 0
+        GROUP BY d.id, d.number, d.doc_date, d.counterparty_inn, d.counterparty_name,
+                 d.state_name, d.codes_total
+        HAVING count(o.id) > 0
+        ORDER BY count(o.id) DESC
+    """)
+    res = await db.execute(q, {"uid": str(current_user.id)})
+    docs = [
+        {
+            "number": r.number,
+            "doc_date": r.doc_date,
+            "counterparty_inn": r.counterparty_inn,
+            "counterparty_name": r.counterparty_name,
+            "state_name": r.state_name,
+            "total": int(r.total or 0),
+            "stuck": int(r.stuck or 0),
+        }
+        for r in res
+    ]
+    return {
+        "has_snapshot": True,
+        "snapshot_size": int(snap),
+        "documents": docs,
+        "stuck_docs": len(docs),
+        "stuck_marks": sum(d["stuck"] for d in docs),
+    }
