@@ -11,7 +11,7 @@ from jose import JWTError
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
 from app.core.security import decode_token
-from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance, support, mark_control
+from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance, support, mark_control, inventory
 
 
 class WebSocketManager:
@@ -102,6 +102,7 @@ app.include_router(products.router)
 app.include_router(acceptance.router)
 app.include_router(support.router)
 app.include_router(mark_control.router)
+app.include_router(inventory.router)
 
 
 @app.websocket("/ws/{user_id}")

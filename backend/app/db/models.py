@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
-    Column, String, DateTime, Boolean, Integer, Text, Enum,
+    Column, String, DateTime, Boolean, Integer, Numeric, Text, Enum,
     ForeignKey, JSON, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
@@ -100,6 +100,10 @@ class Integration(Base):
     saby_last_event_dt = Column(String(32), nullable=True)   # «ДД.ММ.ГГГГ ЧЧ.ММ.СС»
     saby_last_doc_id = Column(String(64), nullable=True)
     saby_synced_at = Column(DateTime(timezone=True), nullable=True)
+    # Инвентаризация: карта «наши склады» — id складов МС периметра юрлица, по которым
+    # берём учётный остаток для сверки с ЧЗ (мультиюрлицо: остаток МС по складу, а не по
+    # юрлицу). Пустой список = все склады. См. ms_stock_snapshot / api/inventory.py.
+    inventory_store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")
@@ -303,6 +307,30 @@ class CzOwnerMark(Base):
     status = Column(String(32), nullable=True)
     package_type = Column(String(16), nullable=True)
     product_group = Column(String(32), nullable=True)
+    snapshot_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class MsStockSnapshot(Base):
+    """Снимок учётного остатка МойСклада по маркированным товарам — для сверки с ЧЗ.
+
+    Заполняется фоново (app/services/ms_stock.refresh_ms_stock) по «нашим складам»
+    (Integration.inventory_store_ids). Только товары, чей GTIN присутствует в снимке ЧЗ
+    (cz_owner_marks). Сверка: cz_owner_marks (агрегат по gtin) ↔ ms_stock_snapshot по
+    (user_id, gtin). folder_* = группа товаров МС = «бренд» для среза инвентаризации."""
+    __tablename__ = "ms_stock_snapshot"
+    __table_args__ = (
+        UniqueConstraint("user_id", "gtin", name="ix_ms_stock_snapshot_user_gtin"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    product_id = Column(String(64), nullable=False)      # МС product id
+    gtin = Column(String(14), nullable=False, index=True)
+    product_name = Column(String(500), nullable=True)
+    folder_id = Column(String(64), nullable=True)         # группа товаров МС (productFolder id)
+    folder_name = Column(String(500), nullable=True)      # «бренд» = имя/путь группы
+    qty = Column(Numeric, nullable=False, default=0, server_default="0")
+    store_breakdown = Column(JSONB, nullable=True)        # {склад: кол-во}
     snapshot_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 

@@ -205,6 +205,66 @@ export interface EdoDbDoc {
   marks_parsed: boolean
 }
 
+// ── Инвентаризация: сверка остатков ЧЗ ↔ МС ──────────────────────────────────
+
+export interface InventoryStore {
+  id: string
+  name: string
+  href: string
+}
+
+export interface SnapshotStatus {
+  running: boolean
+  size: number
+  at: string | null
+  result: any
+}
+
+export interface ReconcileRow {
+  gtin: string | null
+  product_name: string | null
+  folder_id: string | null
+  folder_name: string
+  qty_cz: number
+  qty_ms: number
+  diff: number
+}
+
+export interface ReconcileBrand {
+  folder_id: string | null
+  folder_name: string
+  positions: number
+  qty_cz: number
+  qty_ms: number
+  diff: number
+}
+
+export interface ReconcileResult {
+  has_ms_snapshot: boolean
+  ms_size: number
+  cz_size: number
+  brands: ReconcileBrand[]
+  rows: ReconcileRow[]
+  totals: { positions: number; qty_cz: number; qty_ms: number; diff: number }
+}
+
+export type ReconcileDiff = 'all' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
+
+export const inventoryApi = {
+  stores: () =>
+    api.get<{ stores: InventoryStore[]; selected: string[] }>('/inventory/stores'),
+  saveStores: (store_ids: string[]) =>
+    api.post<{ stores: InventoryStore[]; selected: string[] }>('/inventory/stores', { store_ids }),
+  czRefresh: () => api.post<{ status: string }>('/inventory/cz-stock/refresh'),
+  czStatus: () => api.get<SnapshotStatus>('/inventory/cz-stock/status'),
+  msRefresh: () => api.post<{ status: string }>('/inventory/ms-stock/refresh'),
+  msStatus: () => api.get<SnapshotStatus>('/inventory/ms-stock/status'),
+  reconcile: (brand?: string, diff: ReconcileDiff = 'all') =>
+    api.get<ReconcileResult>('/inventory/reconcile', { params: { brand: brand || undefined, diff } }),
+  reconcileXlsx: (brand?: string, diff: ReconcileDiff = 'all') =>
+    api.get('/inventory/reconcile.xlsx', { params: { brand: brand || undefined, diff }, responseType: 'blob' }),
+}
+
 export const documentsApi = {
   listMs: (kind: DocumentKind, search?: string) =>
     api.get<MsDocument[]>(`/documents/moysklad/${kind}`, {

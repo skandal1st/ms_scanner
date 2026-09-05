@@ -60,7 +60,7 @@ async def main():
             await db.commit()
             print(f"  {min(i + B, len(rows))}/{len(rows)}")
         cnt = (await db.execute(text(
-            "SELECT count(*) FROM cz_owner_marks WHERE user_id=:u").bindparams(u=user_id))).scalar_one()
+            "SELECT count(*) FROM cz_owner_marks WHERE user_id=CAST(:u AS uuid)").bindparams(u=user_id))).scalar_one()
     print(f"в БД cz_owner_marks: {cnt}")
 
 

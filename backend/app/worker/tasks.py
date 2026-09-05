@@ -1617,6 +1617,48 @@ async def _cz_snapshot_refresh_async(user_id: str):
             pass
 
 
+@celery_app.task(name="ms_stock_refresh")
+def ms_stock_refresh_task(user_id: str):
+    """Обновить снимок учётного остатка МС (ms_stock_snapshot) по «нашим складам»."""
+    _run(_ms_stock_refresh_async(user_id))
+
+
+async def _ms_stock_refresh_async(user_id: str):
+    import json as _json
+    import redis.asyncio as aioredis
+    from app.core.config import settings
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Integration
+    from app.services.ms_stock import refresh_ms_stock
+    from sqlalchemy import select
+
+    lock_key = f"ms_stock:lock:{user_id}"
+    r = aioredis.from_url(settings.REDIS_URL)
+    if not await r.set(lock_key, "1", nx=True, ex=3600):
+        await r.aclose()
+        logger.info("ms_stock.already_running", user_id=user_id)
+        return
+    try:
+        async with AsyncSessionLocal() as db:
+            integ = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one_or_none()
+            if not integ:
+                return
+            res = await refresh_ms_stock(db, integ)
+            await db.commit()
+        r2 = aioredis.from_url(settings.REDIS_URL)
+        try:
+            await r2.set(f"ms_stock:result:{user_id}", _json.dumps(res), ex=3600)
+        finally:
+            await r2.aclose()
+    except Exception as exc:
+        logger.error("ms_stock.error", user_id=user_id, error=str(exc))
+    finally:
+        try:
+            await r.delete(lock_key); await r.aclose()
+        except Exception:
+            pass
+
+
 @celery_app.task(name="edo_auto_sync_all")
 def edo_auto_sync_all_task():
     """Beat: инкрементальный добор ЭДО для всех клиентов с подключённым Saby (по курсору)."""

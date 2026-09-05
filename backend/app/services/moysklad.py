@@ -739,4 +739,73 @@ class MoySkladService:
             logger.info("ms.add_barcode.ok", product_id=product_id, gtin=g)
             return True
 
+    # --- Инвентаризация: склады и учётный остаток ---
+
+    @staticmethod
+    def _id_from_href(href: str) -> str:
+        """UUID сущности из meta.href (…/entity/<type>/<uuid>[?params])."""
+        href = (href or "").split("?", 1)[0]
+        return href.rstrip("/").rsplit("/", 1)[-1]
+
+    async def get_stores(self) -> List[Dict[str, Any]]:
+        """Список складов МС ({id, name, href}) — для карты «наши склады» инвентаризации."""
+        out: List[Dict[str, Any]] = []
+        async with httpx.AsyncClient(timeout=20) as client:
+            offset = 0
+            while True:
+                resp = await self._request_with_retry(
+                    client, "GET", f"{self.base_url}/entity/store",
+                    params={"limit": 1000, "offset": offset},
+                )
+                resp.raise_for_status()
+                rows = resp.json().get("rows", []) or []
+                for r in rows:
+                    href = (r.get("meta") or {}).get("href", "")
+                    out.append({
+                        "id": r.get("id") or self._id_from_href(href),
+                        "name": r.get("name") or "",
+                        "href": href,
+                    })
+                if len(rows) < 1000:
+                    break
+                offset += 1000
+        return out
+
+    async def get_stock_map(self, store_hrefs: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Учётный остаток по товарам (report/stock/all, groupBy=product) по складам.
+
+        Возвращает {product_id: {qty, folder_id, folder_name}}. Пустой store_hrefs = все
+        склады. Остаток по нескольким складам агрегируется (периметр «наших складов»,
+        мультиюрлицо). folder — группа товаров МС («бренд» для среза инвентаризации).
+        Может вернуть 403, если у токена нет права на отчёт остатков — вызывающий ловит."""
+        params: Dict[str, Any] = {"groupBy": "product", "limit": 1000}
+        if store_hrefs:
+            params["filter"] = ";".join(f"store={h}" for h in store_hrefs)
+        out: Dict[str, Dict[str, Any]] = {}
+        async with httpx.AsyncClient(timeout=60) as client:
+            offset = 0
+            while True:
+                resp = await self._request_with_retry(
+                    client, "GET", f"{self.base_url}/report/stock/all",
+                    params=dict(params, offset=offset),
+                )
+                if resp.status_code != 200:
+                    logger.warning("ms.stock.failed", status=resp.status_code, body=resp.text[:300])
+                    resp.raise_for_status()
+                rows = resp.json().get("rows", []) or []
+                for r in rows:
+                    pid = self._id_from_href((r.get("meta") or {}).get("href", ""))
+                    if not pid:
+                        continue
+                    folder = r.get("folder") or {}
+                    out[pid] = {
+                        "qty": r.get("stock") or r.get("quantity") or 0,
+                        "folder_id": self._id_from_href((folder.get("meta") or {}).get("href", "")) or None,
+                        "folder_name": folder.get("pathName") or folder.get("name") or None,
+                    }
+                if len(rows) < 1000:
+                    break
+                offset += 1000
+        return out
+
     # --- Алиасы для backward-совместимости старого приёмочного кода ---
