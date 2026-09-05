@@ -748,28 +748,39 @@ class MoySkladService:
         return href.rstrip("/").rsplit("/", 1)[-1]
 
     async def get_stores(self) -> List[Dict[str, Any]]:
-        """Список складов МС ({id, name, href}) — для карты «наши склады» инвентаризации."""
-        out: List[Dict[str, Any]] = []
-        async with httpx.AsyncClient(timeout=20) as client:
-            offset = 0
-            while True:
-                resp = await self._request_with_retry(
-                    client, "GET", f"{self.base_url}/entity/store",
-                    params={"limit": 1000, "offset": offset},
-                )
-                resp.raise_for_status()
-                rows = resp.json().get("rows", []) or []
-                for r in rows:
+        """Список складов МС ({id, name, href}) — для карты «наши склады» инвентаризации.
+
+        В custom scope право на `/entity/store` часто закрыто (403, code 1016). Тогда
+        собираем склады из документов (demand/supply, expand=store) — на них право есть.
+        Мультиюрлицо: разные склады = разные юрлица, кладовщик выбирает свой."""
+        stores: Dict[str, Dict[str, Any]] = {}
+        async with httpx.AsyncClient(timeout=30) as client:
+            # Прямой справочник складов — если право есть (полнее и включает пустые склады).
+            resp = await self._request_with_retry(
+                client, "GET", f"{self.base_url}/entity/store", params={"limit": 1000}
+            )
+            if resp.status_code == 200:
+                for r in resp.json().get("rows", []) or []:
                     href = (r.get("meta") or {}).get("href", "")
-                    out.append({
-                        "id": r.get("id") or self._id_from_href(href),
-                        "name": r.get("name") or "",
-                        "href": href,
-                    })
-                if len(rows) < 1000:
-                    break
-                offset += 1000
-        return out
+                    if href:
+                        stores[href] = {"id": r.get("id") or self._id_from_href(href),
+                                        "name": r.get("name") or "", "href": href}
+                return list(stores.values())
+            # Фолбэк: склады из недавних документов (expand=store требует limit ≤ 100).
+            for ent in ("demand", "supply"):
+                resp = await self._request_with_retry(
+                    client, "GET", f"{self.base_url}/entity/{ent}",
+                    params={"expand": "store", "limit": 100, "order": "moment,desc"},
+                )
+                if resp.status_code != 200:
+                    continue
+                for row in resp.json().get("rows", []) or []:
+                    st = row.get("store") or {}
+                    href = (st.get("meta") or {}).get("href", "")
+                    if href and href not in stores:
+                        stores[href] = {"id": self._id_from_href(href),
+                                        "name": st.get("name") or "", "href": href}
+        return list(stores.values())
 
     async def get_stock_map(self, store_hrefs: List[str]) -> Dict[str, Dict[str, Any]]:
         """Учётный остаток по товарам (report/stock/all, groupBy=product) по складам.
