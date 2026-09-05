@@ -390,6 +390,10 @@ async def edo_stuck(
     if not snap:
         return {"has_snapshot": False, "snapshot_size": 0, "documents": []}
 
+    # «Не принято» = документ НЕ завершён успешно и НЕ отменён/черновик:
+    #   исключаем 7 (Выполнено успешно), 19 (Отозван мной), 22 (Аннулирован),
+    #   20 (Удалён контрагентом), 0 (Черновик/редактируется).
+    # Дополнительно на каждый УПД: stuck = сколько его марок ещё числится за нами (ЧЗ).
     q = text("""
         SELECT d.number, d.doc_date, d.counterparty_inn, d.counterparty_name,
                d.state_name, d.codes_total AS total,
@@ -399,10 +403,10 @@ async def edo_stuck(
         LEFT JOIN cz_owner_marks o
                ON o.user_id = d.user_id AND o.cis_canonical = m.cis_canonical
         WHERE d.user_id = :uid AND d.direction = 'Исходящий' AND d.codes_total > 0
+          AND coalesce(d.state_code, -1) NOT IN (7, 19, 22, 20, 0)
         GROUP BY d.id, d.number, d.doc_date, d.counterparty_inn, d.counterparty_name,
                  d.state_name, d.codes_total
-        HAVING count(o.id) > 0
-        ORDER BY count(o.id) DESC
+        ORDER BY d.doc_date DESC
     """)
     res = await db.execute(q, {"uid": str(current_user.id)})
     docs = [
@@ -418,7 +422,7 @@ async def edo_stuck(
         for r in res
     ]
 
-    # Сводка по контрагентам: сколько не принятых УПД и зависших марок у каждого.
+    # Сводка по контрагентам: не принятых УПД + марок (всего в них) + ещё за нами (ЧЗ).
     by_cp: dict[str, dict] = {}
     for d in docs:
         key = d["counterparty_inn"] or (d["counterparty_name"] or "—")
@@ -428,10 +432,12 @@ async def edo_stuck(
                 "counterparty_inn": d["counterparty_inn"],
                 "counterparty_name": d["counterparty_name"],
                 "not_accepted_upd": 0,
+                "marks_total": 0,
                 "stuck_marks": 0,
             }
             by_cp[key] = c
         c["not_accepted_upd"] += 1
+        c["marks_total"] += d["total"]
         c["stuck_marks"] += d["stuck"]
         if not c["counterparty_name"] and d["counterparty_name"]:
             c["counterparty_name"] = d["counterparty_name"]

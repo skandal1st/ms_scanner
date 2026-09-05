@@ -161,6 +161,7 @@ export interface EdoStuckCounterparty {
   counterparty_inn?: string | null
   counterparty_name?: string | null
   not_accepted_upd: number
+  marks_total: number
   stuck_marks: number
 }
 

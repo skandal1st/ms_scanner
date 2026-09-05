@@ -212,8 +212,9 @@ export function MarkControlPage() {
             </div>
           </div>
           <div style={{ color: '#8a8f98', fontSize: 13, margin: '8px 0 12px' }}>
-            Марки отгружены по УПД, но всё ещё числятся за нами в ЧЗ → контрагент не принял
-            документ (право не перешло).
+            Не принято = документ не утверждён покупателем в ЭДО (Доставлен/Отправлен/
+            Приглашение/Проблемы), кроме аннулированных. «Марок за нами» — сколько кодов
+            этих УПД ещё числится на нас в ЧЗ (физически зависли).
             {snapInfo && (
               <> Остаток ЧЗ: <b>{snapInfo.size.toLocaleString('ru')}</b> марок
               {snapInfo.at ? `, от ${new Date(snapInfo.at).toLocaleString('ru')}` : ''}.</>
@@ -234,9 +235,9 @@ export function MarkControlPage() {
           ) : (
             <>
               <div style={{ marginBottom: 10, color: '#444' }}>
-                Контрагентов с непринятыми: <b style={{ color: '#c0392b' }}>{stuck.counterparties?.length ?? 0}</b> ·
+                Контрагентов: <b style={{ color: '#c0392b' }}>{stuck.counterparties?.length ?? 0}</b> ·
                 не принятых УПД: <b style={{ color: '#c0392b' }}>{stuck.stuck_docs}</b> ·
-                зависло марок: <b style={{ color: '#c0392b' }}>{stuck.stuck_marks?.toLocaleString('ru')}</b>
+                из них марок ещё за нами: <b style={{ color: '#c0392b' }}>{stuck.stuck_marks?.toLocaleString('ru')}</b>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button style={stuckView === 'counterparties' ? tabActive : tab} onClick={() => setStuckView('counterparties')}>
@@ -255,7 +256,8 @@ export function MarkControlPage() {
                         <th style={th}>Контрагент</th>
                         <th style={th}>ИНН</th>
                         <th style={th}>Не принято УПД</th>
-                        <th style={th}>Зависло марок</th>
+                        <th style={th}>Марок всего</th>
+                        <th style={th}>Марок за нами</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -264,6 +266,7 @@ export function MarkControlPage() {
                           <td style={{ ...td, fontWeight: 500 }}>{c.counterparty_name || '—'}</td>
                           <td style={td}>{c.counterparty_inn || '—'}</td>
                           <td style={{ ...td, fontWeight: 700, color: '#c0392b' }}>{c.not_accepted_upd}</td>
+                          <td style={{ ...td, color: '#888' }}>{c.marks_total.toLocaleString('ru')}</td>
                           <td style={{ ...td, color: '#c0392b' }}>{c.stuck_marks.toLocaleString('ru')}</td>
                         </tr>
                       ))}
