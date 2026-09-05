@@ -61,9 +61,10 @@ async def refresh_ms_stock(db, integ: Integration) -> dict:
         f"{ms.base_url}/entity/store/{sid}" for sid in (integ.inventory_store_ids or [])
     ]
 
-    # 2. Учётный остаток по «нашим складам» (может упасть 403 без права на отчёт).
+    # 2. Учётный остаток по «нашим складам» + карта каталога (оба пакетно; 403 без права).
     try:
         stock_map = await ms.get_stock_map(store_hrefs)
+        product_map = await ms.get_products_barcode_map()
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
         if code == 403:
@@ -72,42 +73,29 @@ async def refresh_ms_stock(db, integ: Integration) -> dict:
     except httpx.HTTPError as exc:
         return {"error": f"МойСклад недоступен: {exc}"}
 
-    # 3. Резолв GTIN → товар МС + остаток + группа (бренд).
+    # 3. Резолв GTIN → товар МС (каталог → кэш) + остаток по складу + группа (бренд).
     out: dict[str, dict] = {}
     resolved = 0
     for gtin in gtins:
-        pid = pname = None
-        row = None
-        cached = await get_gtin_product(db, integ.user_id, gtin)
-        if cached:
-            pid, pname = cached
-        else:
-            try:
-                row = await ms.find_product_by_gtin(gtin)
-            except httpx.HTTPError:
-                row = None
-            if row:
-                pid = row.get("id")
-                pname = row.get("name")
-                await remember_gtin_product(db, integ.user_id, gtin, pid, pname)
-        if not pid:
+        prod = product_map.get(gtin)
+        if not prod:
+            # GTIN не среди штрихкодов каталога — пробуем запомненную связку.
+            cached = await get_gtin_product(db, integ.user_id, gtin)
+            if cached:
+                prod = {"id": cached[0], "name": cached[1], "folder_id": None, "folder_name": None}
+        if not prod or not prod.get("id"):
             # GTIN есть в ЧЗ, но товара в МС нет — в сверке всплывёт со стороны ЧЗ (МС=0).
             continue
+        pid = prod["id"]
+        await remember_gtin_product(db, integ.user_id, gtin, pid, prod.get("name"))
         info = stock_map.get(pid) or {}
-        folder_id = info.get("folder_id")
-        folder_name = info.get("folder_name")
-        if not folder_name and row is not None:
-            folder_name = row.get("pathName")
-            folder_id = ms._id_from_href(
-                ((row.get("productFolder") or {}).get("meta") or {}).get("href", "")
-            ) or None
         out[gtin] = {
             "user_id": integ.user_id,
             "product_id": pid,
             "gtin": gtin,
-            "product_name": pname,
-            "folder_id": folder_id,
-            "folder_name": folder_name,
+            "product_name": prod.get("name"),
+            "folder_id": prod.get("folder_id") or info.get("folder_id"),
+            "folder_name": prod.get("folder_name") or info.get("folder_name"),
             "qty": Decimal(str(info.get("qty") or 0)),
         }
         resolved += 1

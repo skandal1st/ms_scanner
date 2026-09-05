@@ -819,4 +819,40 @@ class MoySkladService:
                 offset += 1000
         return out
 
+    async def get_products_barcode_map(self) -> Dict[str, Dict[str, Any]]:
+        """Карта {GTIN-14: {id, name, folder_id, folder_name}} из каталога /entity/product.
+
+        Один пакетный проход (пагинация 1000) вместо точечных find_product_by_gtin на каждый
+        GTIN — резко меньше запросов и почти нет 429. GTIN нормализуется (13↔14) как на стороне
+        ЧЗ. Бренд (папка) берётся из product.pathName / productFolder."""
+        out: Dict[str, Dict[str, Any]] = {}
+        async with httpx.AsyncClient(timeout=60) as client:
+            offset = 0
+            while True:
+                resp = await self._request_with_retry(
+                    client, "GET", f"{self.base_url}/entity/product",
+                    params={"limit": 1000, "offset": offset},
+                )
+                resp.raise_for_status()
+                rows = resp.json().get("rows", []) or []
+                for r in rows:
+                    folder = r.get("productFolder") or {}
+                    info = {
+                        "id": r.get("id"),
+                        "name": r.get("name") or "",
+                        "folder_id": self._id_from_href((folder.get("meta") or {}).get("href", "")) or None,
+                        "folder_name": r.get("pathName") or None,
+                    }
+                    for bc in (r.get("barcodes") or []):
+                        if not isinstance(bc, dict):
+                            continue
+                        for v in bc.values():
+                            key = normalize_gtin_key(str(v))
+                            if key:
+                                out.setdefault(key, info)
+                if len(rows) < 1000:
+                    break
+                offset += 1000
+        return out
+
     # --- Алиасы для backward-совместимости старого приёмочного кода ---
