@@ -144,6 +144,29 @@ export const markControlApi = {
     page?: number
     page_size?: number
   }) => api.post<EdoDocumentsResult>('/mark-control/saby/documents', params),
+  edoSync: (date_from: string, date_to?: string, use_cursor = false) =>
+    api.post<{ status: string }>('/mark-control/edo/sync', { date_from, date_to, use_cursor }),
+  edoSyncStatus: () =>
+    api.get<{ running: boolean; result: EdoSyncResult | null }>('/mark-control/edo/sync/status'),
+  edoDocumentsDb: () => api.get<EdoDbDoc[]>('/mark-control/edo/documents-db'),
+}
+
+export interface EdoSyncResult {
+  pages: number
+  documents: number
+  out_realizations: number
+  parsed_docs: number
+  marks_saved: number
+}
+
+export interface EdoDbDoc {
+  number?: string | null
+  doc_date?: string | null
+  counterparty_name?: string | null
+  counterparty_inn?: string | null
+  state_name?: string | null
+  codes_total: number
+  marks_parsed: boolean
 }
 
 export const documentsApi = {

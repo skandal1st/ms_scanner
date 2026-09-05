@@ -19,7 +19,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token, encrypt_token
-from app.db.models import Integration, User
+from app.db.models import EdoDocument, EdoMark, Integration, User
 from app.db.session import get_db
 from app.services.saby import (
     SabyAuthError,
@@ -233,6 +233,80 @@ async def saby_documents(
         # Только реализации (исходящие УПД) — прочие регламенты отсеиваем.
         if body.direction == "Исходящий" and (parsed.get("type") or "") and "реализац" not in str(parsed["type"]).lower():
             continue
-        rows.append(DocRow(**parsed))
+        rows.append(DocRow(**{k: parsed.get(k) for k in DocRow.model_fields}))
     unsigned = sum(1 for r in rows if r.unsigned)
     return DocumentsResponse(documents=rows, unsigned_count=unsigned)
+
+
+# ── Синхронизация ЭДО + отчёт по маркам ──────────────────────────────────────
+
+class SyncRequest(BaseModel):
+    date_from: str          # «ДД.ММ.ГГГГ»
+    date_to: Optional[str] = None
+    use_cursor: bool = False
+
+
+def _to_dt(d: str, end: bool = False) -> str:
+    d = (d or "").strip()
+    if len(d) <= 10:
+        return f"{d} {'23.59.59' if end else '00.00.00'}"
+    return d
+
+
+@router.post("/edo/sync")
+async def edo_sync(
+    body: SyncRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Запустить фоновую синхронизацию ЭДО (лента Saby → БД марок) за период."""
+    integ = await _get_integration(db, current_user.id)
+    _client_from_integration(integ)
+    from app.worker.tasks import edo_sync_task
+
+    edo_sync_task.delay(
+        str(current_user.id),
+        _to_dt(body.date_from),
+        _to_dt(body.date_to, end=True) if body.date_to else None,
+        body.use_cursor,
+    )
+    return {"status": "started"}
+
+
+@router.get("/edo/sync/status")
+async def edo_sync_status(current_user: User = Depends(get_current_user)):
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        running = await r.get(f"edo_sync:lock:{current_user.id}")
+        res = await r.get(f"edo_sync:result:{current_user.id}")
+    finally:
+        await r.aclose()
+    result = json.loads(res.decode() if isinstance(res, (bytes, bytearray)) else res) if res else None
+    return {"running": bool(running), "result": result}
+
+
+@router.get("/edo/documents-db")
+async def edo_documents_db(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Синхронизированные исходящие реализации из БД (что уже вытянули из ЭДО)."""
+    rows = (
+        await db.execute(
+            select(EdoDocument)
+            .where(EdoDocument.user_id == current_user.id, EdoDocument.direction == "Исходящий")
+            .order_by(EdoDocument.doc_date.desc())
+        )
+    ).scalars().all()
+    return [
+        {
+            "number": d.number,
+            "doc_date": d.doc_date,
+            "counterparty_name": d.counterparty_name,
+            "counterparty_inn": d.counterparty_inn,
+            "state_name": d.state_name,
+            "codes_total": d.codes_total,
+            "marks_parsed": d.marks_parsed,
+        }
+        for d in rows
+    ]

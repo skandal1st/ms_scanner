@@ -3,6 +3,8 @@ import {
   markControlApi,
   type SabyStatus,
   type EdoDocRow,
+  type EdoSyncResult,
+  type EdoDbDoc,
 } from '../api/client'
 
 /** Дата ДД.ММ.ГГГГ из Date. */
@@ -84,6 +86,48 @@ export function MarkControlPage() {
       setLoading(false)
     }
   }
+
+  // Синхронизация ЭДО в БД (полный проход за период → марки)
+  const [syncFrom, setSyncFrom] = useState(fmt(new Date(Date.now() - 90 * 24 * 3600 * 1000)))
+  const [syncRunning, setSyncRunning] = useState(false)
+  const [syncResult, setSyncResult] = useState<EdoSyncResult | null>(null)
+  const [dbDocs, setDbDocs] = useState<EdoDbDoc[]>([])
+
+  const loadDbDocs = async () => {
+    try {
+      const r = await markControlApi.edoDocumentsDb()
+      setDbDocs(r.data)
+    } catch { /* ignore */ }
+  }
+
+  const startSync = async () => {
+    setErr(null)
+    try {
+      await markControlApi.edoSync(syncFrom)
+      setSyncRunning(true)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось запустить синхронизацию')
+    }
+  }
+
+  useEffect(() => {
+    if (!syncRunning) return
+    const t = setInterval(async () => {
+      try {
+        const r = await markControlApi.edoSyncStatus()
+        if (r.data.result) setSyncResult(r.data.result)
+        if (!r.data.running) {
+          setSyncRunning(false)
+          loadDbDocs()
+        }
+      } catch { /* ignore */ }
+    }, 4000)
+    return () => clearInterval(t)
+  }, [syncRunning])
+
+  useEffect(() => {
+    if (status?.connected) loadDbDocs()
+  }, [status?.connected])
 
   const shown = onlyUnsigned ? docs.filter(isUnsigned) : docs
 
@@ -241,6 +285,70 @@ export function MarkControlPage() {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Синхронизация ЭДО в базу (полный проход за период → марки) */}
+      {status?.connected && (
+        <section style={card}>
+          <h2 style={h2}>Синхронизация ЭДО в базу (для сверки с ЧЗ)</h2>
+          <div style={{ color: '#8a8f98', fontSize: 13, marginBottom: 12 }}>
+            Полный проход по ленте изменений Saby за период: скачиваем исходящие УПД,
+            извлекаем коды маркировки в базу. Затем их можно сверить с остатком ЧЗ и найти
+            марки, зависшие на продавце (контрагент не принял).
+          </div>
+          <div style={{ display: 'flex', gap: 12, alignItems: 'end', flexWrap: 'wrap', marginBottom: 12 }}>
+            <Field label="Синхронизировать с даты (ДД.ММ.ГГГГ)">
+              <input style={{ ...inp, width: 150 }} value={syncFrom} onChange={(e) => setSyncFrom(e.target.value)} />
+            </Field>
+            <button style={btn} disabled={syncRunning} onClick={startSync}>
+              {syncRunning ? 'Синхронизация…' : 'Синхронизировать'}
+            </button>
+            <button style={btnGhost} onClick={loadDbDocs}>Обновить таблицу</button>
+          </div>
+
+          {syncResult && (
+            <div style={{ marginBottom: 10, color: '#444' }}>
+              Обработано страниц: <b>{syncResult.pages}</b> · документов: <b>{syncResult.documents}</b> ·
+              реализаций: <b>{syncResult.out_realizations}</b> · с марками: <b>{syncResult.parsed_docs}</b> ·
+              кодов сохранено: <b style={{ color: '#1e63d6' }}>{syncResult.marks_saved}</b>
+            </div>
+          )}
+
+          {dbDocs.length > 0 ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>Номер</th>
+                    <th style={th}>Дата</th>
+                    <th style={th}>Покупатель</th>
+                    <th style={th}>ИНН</th>
+                    <th style={th}>Статус</th>
+                    <th style={th}>Кодов</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {dbDocs.map((d, i) => (
+                    <tr key={(d.number || '') + i}>
+                      <td style={td}>{d.number || '—'}</td>
+                      <td style={td}>{d.doc_date || '—'}</td>
+                      <td style={td}>{d.counterparty_name || '—'}</td>
+                      <td style={td}>{d.counterparty_inn || '—'}</td>
+                      <td style={td}>{d.state_name || '—'}</td>
+                      <td style={{ ...td, textAlign: 'right' }}>
+                        {d.marks_parsed ? d.codes_total : '…'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ color: '#888' }}>
+              База пуста — запустите синхронизацию за нужный период.
             </div>
           )}
         </section>

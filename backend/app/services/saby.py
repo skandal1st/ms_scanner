@@ -156,32 +156,41 @@ class SabyClient:
             raise SabyError(f"{method}: {err.get('message') or ''} {('· ' + str(detail)) if detail else ''}".strip())
         return data.get("result") if isinstance(data, dict) else data
 
-    async def list_documents(
+    async def changes_page(
         self,
         auth: tuple[str, str],
         *,
-        direction: str = "Исходящий",
-        date_from: Optional[str] = None,
+        date_from: str,
         date_to: Optional[str] = None,
-        **_ignore: Any,
+        event_id: Optional[str] = None,
+        doc_id: Optional[str] = None,
+        with_extension: bool = True,
     ) -> Any:
-        """Список документов через **СБИС.СписокИзменений** (эмпирически: у приложения
-        доступен именно он, а СписокДокументов «недоступен»).
+        """Одна страница СБИС.СписокИзменений (лента событий ДО). Возвращает сырой result
+        `{Документ:[...], Навигация:{ЕстьЕще}}`.
 
-        ВАЖНО: `protocol=3` обязателен; объект `Навигация` слать НЕЛЬЗЯ — с ним метод
-        резолвится в несуществующую версию «/2» (-32601). Метод возвращает документы,
-        по которым были события ДО; фильтр `ТипРеестра=Документы` + `Направление` + даты.
-        Один документ может прийти несколькими строками (по событиям) — дедуп по
-        Идентификатору делает вызывающий. Возвращает сырой result (ключ `Документ`)."""
-        flt: dict[str, Any] = {"Направление": direction, "ТипРеестра": "Документы"}
-        if date_from:
-            flt["ДатаС"] = date_from
+        КУРСОР (проверено на проде): период — `ДатаВремяС`/`ДатаВремяПо` («ДД.ММ.ГГГГ ЧЧ.ММ.СС»);
+        объект `Навигация` НЕ слать (ломает → /2, размер стр. фикс. 25). Для след. страницы —
+        `ИдентификаторСобытия`+`ИдентификаторДокумента`+`ДатаВремяС` последнего события.
+        `protocol=3`. `ПолныйСертификатЭП:Нет` ускоряет; `ДопПоля:Расширение` → СостояниеМарк."""
+        flt: dict[str, Any] = {"ДатаВремяС": date_from, "ПолныйСертификатЭП": "Нет"}
         if date_to:
-            flt["ДатаПо"] = date_to
-        result = await self.call("СБИС.СписокИзменений", {"Фильтр": flt}, auth, protocol=3)
-        docs = _extract_doc_list(result)
-        logger.info("saby.list_documents.raw", direction=direction, count=len(docs))
-        return result
+            flt["ДатаВремяПо"] = date_to
+        if event_id:
+            flt["ИдентификаторСобытия"] = event_id
+        if doc_id:
+            flt["ИдентификаторДокумента"] = doc_id
+        if with_extension:
+            flt["ДопПоля"] = "Расширение"
+        return await self.call("СБИС.СписокИзменений", {"Фильтр": flt}, auth, protocol=3)
+
+    async def download(self, auth: tuple[str, str], url: str) -> bytes:
+        """Скачать бинарное вложение по Файл.Ссылка (GET с тем же auth-заголовком)."""
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            r = await c.get(url, headers={auth[0]: auth[1]})
+        if r.status_code != 200:
+            raise SabyError(f"Скачивание вложения: HTTP {r.status_code}")
+        return r.content
 
 
 def _extract_doc_list(result: Any) -> list:
@@ -228,6 +237,13 @@ def parse_document(d: dict) -> dict:
     awaiting = ("ожида" in haystack) or ("не подписан" in haystack)
     unsigned = (not terminal) and (awaiting or incomplete)
 
+    rasm = d.get("Расширение") if isinstance(d.get("Расширение"), dict) else {}
+    mark_state = None
+    if rasm.get("СостояниеМарк") or rasm.get("СостояниеГосСистемы"):
+        mark_state = {
+            "mark": rasm.get("СостояниеМарк"),
+            "gis": rasm.get("СостояниеГосСистемы"),
+        }
     return {
         "id": d.get("Идентификатор"),
         "number": d.get("Номер"),
@@ -241,5 +257,43 @@ def parse_document(d: dict) -> dict:
         "state_desc": state_desc or None,
         "incomplete": incomplete,
         "unsigned": unsigned,
+        "mark_state": mark_state,
         "note": d.get("Примечание") or None,
     }
+
+
+def last_event_cursor(docs: list) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Курсор для следующей страницы: (ИдентификаторСобытия, ДатаВремя, ИдентификаторДокумента)
+    последнего события последнего документа страницы."""
+    for doc in reversed(docs):
+        evs = doc.get("Событие") or []
+        if evs:
+            ev = evs[-1]
+            return ev.get("Идентификатор"), ev.get("ДатаВремя"), doc.get("Идентификатор")
+    return None, None, None
+
+
+def primary_upd_link(doc: dict) -> Optional[str]:
+    """Ссылка на первичное исходящее вложение УПД/реализации (ФНС-XML с марками).
+
+    Ищем во всех событиях: Вложение с Направление=Исходящий, Служебный=Нет и именем/типом
+    формализованного счёта-фактуры/УПД (ON_NSCHFDOPPR…). Возвращает Файл.Ссылка или None."""
+    def _is_upd(att: dict) -> bool:
+        f = att.get("Файл") or {}
+        nm = (att.get("Название") or "").lower()
+        fname = (f.get("Имя") or "") if isinstance(f, dict) else ""
+        if att.get("Направление") != "Исходящий" or str(att.get("Служебный")).lower() != "нет":
+            return False
+        if not (isinstance(f, dict) and f.get("Ссылка")):
+            return False
+        return ("nschfdoppr" in fname.lower()) or ("упд" in nm) or ("фактура" in nm)
+
+    for ev in (doc.get("Событие") or []):
+        for att in (ev.get("Вложение") or []):
+            if _is_upd(att):
+                return (att.get("Файл") or {}).get("Ссылка")
+    # запасной путь — вложения на уровне документа
+    for att in (doc.get("Вложение") or []):
+        if _is_upd(att):
+            return (att.get("Файл") or {}).get("Ссылка")
+    return None

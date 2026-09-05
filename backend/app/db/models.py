@@ -94,6 +94,12 @@ class Integration(Base):
     saby_app_client_id = Column(String(128), nullable=True)
     saby_app_secret = Column(Text, nullable=True)        # encrypted («защитный ключ»)
     saby_secret_key = Column(Text, nullable=True)        # encrypted (если требуется)
+    # Курсор ленты СБИС.СписокИзменений для инкрементальной синхронизации ЭДО:
+    # id/дата последнего обработанного события + id документа (см. project_mark_control_saby).
+    saby_last_event_id = Column(String(64), nullable=True)
+    saby_last_event_dt = Column(String(32), nullable=True)   # «ДД.ММ.ГГГГ ЧЧ.ММ.СС»
+    saby_last_doc_id = Column(String(64), nullable=True)
+    saby_synced_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     user = relationship("User", back_populates="integration")
@@ -228,6 +234,56 @@ class GtinCzGroup(Base):
     # Источник значения: ms (из trackingType карточки), cz (подтверждён ответом ЧЗ).
     source = Column(String(16), nullable=False, default="ms")
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class EdoDocument(Base):
+    """Документ ЭДО (Saby) для контроля оборота марок — исходящие УПД/реализации.
+
+    Синхронизируется из СБИС.СписокИзменений (курсор в Integration). Марки берём из
+    первичного XML-вложения через upd_parser. Пер-клиент, дедуп по (user_id, external_id).
+    """
+    __tablename__ = "edo_documents"
+    __table_args__ = (
+        UniqueConstraint("user_id", "external_id", name="ix_edo_documents_user_external"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    provider = Column(String(16), nullable=False, default="saby", server_default="saby")
+    external_id = Column(String(64), nullable=False)     # Документ.Идентификатор
+    number = Column(String(64), nullable=True)
+    doc_date = Column(String(16), nullable=True)          # «ДД.ММ.ГГГГ» как в Saby
+    direction = Column(String(16), nullable=True)         # Исходящий/Входящий
+    doc_type = Column(String(64), nullable=True)          # Регламент.Название («Реализация»)
+    counterparty_inn = Column(String(12), nullable=True, index=True)
+    counterparty_name = Column(String(500), nullable=True)
+    state_code = Column(Integer, nullable=True)           # Состояние.Код
+    state_name = Column(String(200), nullable=True)
+    # Статус документа с маркированным товаром в ГИС МТ (Расширение.СостояниеМарк/ГосСистемы).
+    mark_state = Column(JSONB, nullable=True)
+    marks_parsed = Column(Boolean, nullable=False, default=False, server_default="false")
+    codes_total = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    marks = relationship("EdoMark", back_populates="document", cascade="all, delete-orphan")
+
+
+class EdoMark(Base):
+    """Код маркировки из исходящего УПД ЭДО. cis_canonical — для сверки с остатком ЧЗ."""
+    __tablename__ = "edo_marks"
+    __table_args__ = (
+        UniqueConstraint("document_id", "cis_canonical", name="ix_edo_marks_doc_cis"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("edo_documents.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    cis_raw = Column(Text, nullable=False)
+    cis_canonical = Column(String(60), nullable=False, index=True)
+    gtin = Column(String(14), nullable=True)
+
+    document = relationship("EdoDocument", back_populates="marks")
 
 
 class CzLog(Base):
