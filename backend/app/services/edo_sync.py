@@ -135,31 +135,37 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
         for d in docs:
             parsed = parse_document(d)
             ext = parsed.get("id")
-            if not ext or ext in seen_ext:
+            if not ext:
                 continue
-            seen_ext.add(ext)
-            docs_seen += 1
-            # Интересуют исходящие реализации (УПД) с марками.
+            # Храним ТОЛЬКО исходящие реализации (УПД) — контроль отгруженных марок.
             is_out_realiz = parsed.get("direction") == "Исходящий" and "реализац" in (parsed.get("type") or "").lower()
+            if not is_out_realiz:
+                continue
+            first_time = ext not in seen_ext
+            if first_time:
+                seen_ext.add(ext)
+                docs_seen += 1
+                out_docs += 1
+            # Метаданные (контрагент/состояние) обновляем на каждом событии документа —
+            # контрагент/статус могут заполниться/измениться в более позднем событии.
             row = await _upsert_document(db, user_id, parsed)
             await db.flush()
-            if is_out_realiz:
-                out_docs += 1
-                if not row.marks_parsed:
-                    link = primary_upd_link(d)
-                    if link:
-                        try:
-                            raw = await client.download(auth, link)
-                            from app.services.upd_parser import parse_upd_503
-                            upd = parse_upd_503(raw)
-                            codes = [c for p in upd.positions for c in (p.codes or [])]
-                            saved = await _save_marks(db, row, user_id, codes)
-                            row.codes_total = saved
-                            row.marks_parsed = True
-                            marks_saved += saved
-                            parsed_docs += 1
-                        except Exception as exc:
-                            logger.warning("edo_sync.parse_failed", ext=ext, error=str(exc))
+            # Марки качаем один раз (когда в событии есть первичное вложение УПД).
+            if not row.marks_parsed:
+                link = primary_upd_link(d)
+                if link:
+                    try:
+                        raw = await client.download(auth, link)
+                        from app.services.upd_parser import parse_upd_503
+                        upd = parse_upd_503(raw)
+                        codes = [c for p in upd.positions for c in (p.codes or [])]
+                        saved = await _save_marks(db, row, user_id, codes)
+                        row.codes_total = saved
+                        row.marks_parsed = True
+                        marks_saved += saved
+                        parsed_docs += 1
+                    except Exception as exc:
+                        logger.warning("edo_sync.parse_failed", ext=ext, error=str(exc))
         await db.commit()
 
         # Курсор следующей страницы

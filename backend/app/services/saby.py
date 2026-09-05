@@ -220,8 +220,18 @@ def parse_document(d: dict) -> dict:
     if not isinstance(contractor, dict):
         contractor = {}
     ur = contractor.get("СвЮЛ") if isinstance(contractor.get("СвЮЛ"), dict) else {}
-    inn = ur.get("ИНН") or contractor.get("ИНН")
-    name = ur.get("Название") or contractor.get("Название") or contractor.get("Наименование")
+    fl = contractor.get("СвФЛ") if isinstance(contractor.get("СвФЛ"), dict) else {}
+    # Контрагент может быть ЮЛ (СвЮЛ) или ИП/физлицо (СвФЛ) — берём непустой.
+    inn = ur.get("ИНН") or fl.get("ИНН") or contractor.get("ИНН")
+    fio = " ".join(
+        s for s in (fl.get("Фамилия"), fl.get("Имя"), fl.get("Отчество")) if s
+    ).strip()
+    name = (
+        ur.get("Название")
+        or contractor.get("Название")
+        or contractor.get("Наименование")
+        or (fio or None)
+    )
 
     code = state.get("Код")
     try:

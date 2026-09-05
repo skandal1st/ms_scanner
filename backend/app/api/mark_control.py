@@ -300,7 +300,11 @@ async def edo_documents_db(
     rows = (
         await db.execute(
             select(EdoDocument)
-            .where(EdoDocument.user_id == current_user.id, EdoDocument.direction == "Исходящий")
+            .where(
+                EdoDocument.user_id == current_user.id,
+                EdoDocument.direction == "Исходящий",
+                EdoDocument.codes_total > 0,  # без марок не показываем
+            )
             .order_by(EdoDocument.doc_date.desc())
         )
     ).scalars().all()
