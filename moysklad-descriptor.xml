@@ -13,6 +13,9 @@
         <resource>https://api.moysklad.ru/api/remap/1.2</resource>
         <scope>custom</scope>
         <permissions>
+            <!-- Просмотр отчёта «Остатки» (report/stock) — для сверки остатков в Инвентаризации.
+                 Без него report/stock/all возвращает нули. -->
+            <viewStockReport/>
             <supply>
                 <view/>
                 <update/>
@@ -28,6 +31,10 @@
             <employee>
                 <view/>
             </employee>
+            <!-- Склады (справочник): список складов + остаток по конкретному складу (мультиюрлицо). -->
+            <warehouse>
+                <view/>
+            </warehouse>
         </permissions>
     </access>
 </ServerApplication>
