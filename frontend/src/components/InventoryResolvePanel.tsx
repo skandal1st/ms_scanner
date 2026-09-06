@@ -25,9 +25,8 @@ function productLabel(p: ProductSearchItem): string {
   return extra ? `${p.name} — ${extra}` : p.name
 }
 
-// Внешний поиск по GTIN (GS1 Verified). Для ручного определения товара по коду.
-const gs1Url = (gtin: string) =>
-  `https://www.gs1.org/services/verified-by-gs1/results?gtin=${encodeURIComponent(gtin)}`
+// Внешний поиск по GTIN (реестр GS1 RUS). Для ручного определения товара по коду.
+const gs1Url = (gtin: string) => `https://search.gs1ru.org/gtin/${encodeURIComponent(gtin.trim())}`
 
 /**
  * Ручная обработка «не опознанных» позиций (нет ни в МС, ни в базе имён). По каждому GTIN
@@ -151,7 +150,13 @@ export function InventoryResolvePanel({
             Всего: <b>{nf(total)}</b> · показано <b>{nf(items.length)}</b>
           </div>
           <div className="mc-table-wrap">
-            <table className="ui-table">
+            <table className="ui-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <colgroup>
+                <col style={{ width: 190 }} />
+                <col style={{ width: 64 }} />
+                <col />
+                <col />
+              </colgroup>
               <thead>
                 <tr>
                   <th>GTIN</th>
@@ -167,7 +172,7 @@ export function InventoryResolvePanel({
                   if (!st) return null
                   return (
                     <tr key={k + i} style={st.done ? { opacity: 0.55 } : undefined}>
-                      <td className="tabular" style={{ whiteSpace: 'nowrap' }}>
+                      <td className="tabular" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {it.gtin || '—'}
                         {it.gtin && (
                           <>
@@ -184,11 +189,11 @@ export function InventoryResolvePanel({
                         </td>
                       ) : (
                         <>
-                          <td style={{ minWidth: 260 }}>
+                          <td>
                             <div className="flex-row gap-8">
                               <input
                                 className="ui-input"
-                                style={{ flex: 1 }}
+                                style={{ flex: 1, minWidth: 0 }}
                                 placeholder="Наименование товара"
                                 value={st.name}
                                 onChange={(e) => patch(k, { name: e.target.value })}
@@ -200,12 +205,15 @@ export function InventoryResolvePanel({
                                 {st.busy ? '…' : 'Сохранить'}
                               </button>
                             </div>
+                            {st.error && (
+                              <div style={{ color: 'var(--st-err-fg)', fontSize: 12, marginTop: 4 }}>{st.error}</div>
+                            )}
                           </td>
-                          <td style={{ minWidth: 320 }}>
+                          <td>
                             <div className="flex-row gap-8">
                               <input
                                 className="ui-input"
-                                style={{ flex: 1 }}
+                                style={{ flex: 1, minWidth: 0 }}
                                 placeholder="Поиск в МС (имя/артикул)…"
                                 value={st.query}
                                 onChange={(e) => patch(k, { query: e.target.value })}
@@ -218,7 +226,7 @@ export function InventoryResolvePanel({
                             </div>
                             {st.options.length > 0 && (
                               <div className="flex-row gap-8" style={{ marginTop: 6 }}>
-                                <select className="ui-input" style={{ flex: 1 }} value={st.selectedId}
+                                <select className="ui-input" style={{ flex: 1, minWidth: 0 }} value={st.selectedId}
                                   onChange={(e) => patch(k, { selectedId: e.target.value })}>
                                   {st.options.map((o) => (
                                     <option key={o.id} value={o.id}>{productLabel(o)}</option>
@@ -233,9 +241,6 @@ export function InventoryResolvePanel({
                             )}
                           </td>
                         </>
-                      )}
-                      {st.error && (
-                        <td className="text-muted" style={{ color: 'var(--st-err-fg)', fontSize: 12 }}>{st.error}</td>
                       )}
                     </tr>
                   )

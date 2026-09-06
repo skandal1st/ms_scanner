@@ -143,7 +143,14 @@ export function InventoryMatchPanel({
             </div>
           )}
           <div className="mc-table-wrap" style={{ marginTop: 8 }}>
-            <table className="ui-table">
+            <table className="ui-table" style={{ tableLayout: 'fixed', width: '100%' }}>
+              <colgroup>
+                <col />
+                <col style={{ width: 64 }} />
+                <col style={{ width: 96 }} />
+                <col style={{ width: '42%' }} />
+                <col style={{ width: 116 }} />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Товар (из УПД)</th>
@@ -186,7 +193,7 @@ export function InventoryMatchPanel({
                             <div className="flex-row gap-8" style={{ marginTop: 6 }}>
                               <input
                                 className="ui-input"
-                                style={{ flex: 1 }}
+                                style={{ flex: 1, minWidth: 0 }}
                                 placeholder="Уточнить поиск в МС (имя/артикул)…"
                                 value={st.query}
                                 onChange={(e) => patch(key, { query: e.target.value })}
