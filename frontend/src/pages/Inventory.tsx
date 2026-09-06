@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
+import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
 import {
   inventoryApi,
   type InventoryStore,
@@ -37,6 +38,7 @@ export function InventoryPage() {
   const [diff, setDiff] = useState<ReconcileDiff>('to_search')
   const [match, setMatch] = useState<ReconcileMatch>('all')
   const [showMatch, setShowMatch] = useState(false)
+  const [showResolve, setShowResolve] = useState(false)
 
   const [err, setErr] = useState<string | null>(null)
 
@@ -365,6 +367,13 @@ export function InventoryPage() {
                 <Icon name="check" size={15} />
                 {showMatch ? 'Скрыть подбор' : 'Подобрать в МС по имени'}
               </button>
+              {recon.unmatched_positions > 0 && (
+                <button className="button" style={{ marginBottom: 4 }} onClick={() => setShowResolve((v) => !v)}
+                  title="Ручная обработка позиций без имени и без товара в МС: прописать наименование или привязать товар МС">
+                  <Icon name="check" size={15} />
+                  {showResolve ? 'Скрыть' : `Обработать не опознанные (${nf(recon.unmatched_positions)})`}
+                </button>
+              )}
             </div>
 
             {showMatch && (
@@ -373,6 +382,16 @@ export function InventoryPage() {
                   brand={brand}
                   onClose={() => setShowMatch(false)}
                   onLinked={() => { /* остаток МС пересоберётся по кнопке «Обновить остаток МС» */ }}
+                />
+              </div>
+            )}
+
+            {showResolve && (
+              <div style={{ padding: '0 20px' }}>
+                <InventoryResolvePanel
+                  brand={brand}
+                  onClose={() => setShowResolve(false)}
+                  onResolved={() => { /* пересверить вручную после обработки */ }}
                 />
               </div>
             )}

@@ -309,6 +309,27 @@ export const inventoryApi = {
       moysklad_product_id,
       product_name: product_name ?? null,
     }),
+  unmatched: (brand?: string, limit = 200, offset = 0) =>
+    api.get<InventoryUnmatchedResult>('/inventory/unmatched', {
+      params: { brand: brand || undefined, limit, offset },
+    }),
+  setName: (gtin: string, product_name: string) =>
+    api.post<{ status: string; gtin: string; name: string }>('/inventory/set-name', {
+      gtin,
+      product_name,
+    }),
+}
+
+export interface InventoryUnmatchedItem {
+  gtin: string | null
+  qty_cz: number
+  folder_name: string
+}
+
+export interface InventoryUnmatchedResult {
+  total: number
+  unmatched_marks: number
+  items: InventoryUnmatchedItem[]
 }
 
 export interface InventoryMatchItem {

@@ -443,6 +443,67 @@ async def inventory_match_suggestions(
     return {"items": items, "total_candidates": len(cands)}
 
 
+@router.get("/unmatched")
+async def inventory_unmatched(
+    brand: Optional[str] = None,
+    limit: int = 200,
+    offset: int = 0,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список «не опознанных» позиций (нет ни в МС, ни в базе имён) — для ручной обработки.
+    Сортировка по убыванию марок ЧЗ (сначала самые крупные). Пагинация."""
+    data = await _compute_reconcile(db, current_user.id, brand, "all", "unmatched")
+    rows = sorted(data["rows"], key=lambda r: -r["qty_cz"])
+    total = len(rows)
+    lim = max(1, min(int(limit or 200), 500))
+    page = rows[max(0, int(offset or 0)): max(0, int(offset or 0)) + lim]
+    return {
+        "total": total,
+        "unmatched_marks": data.get("unmatched_marks", 0),
+        "items": [{"gtin": r["gtin"], "qty_cz": r["qty_cz"], "folder_name": r["folder_name"]} for r in page],
+    }
+
+
+class InventorySetNameRequest(BaseModel):
+    gtin: str
+    product_name: str
+
+
+@router.post("/set-name")
+async def inventory_set_name(
+    body: InventorySetNameRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Прописать наименование для GTIN вручную (без товара МС) → gtin_name_map. Позиция
+    получает имя в сверке и перестаёт быть «не сопоставленной»."""
+    from app.db.models import GtinNameMap
+    from app.services.chestnyznak import normalize_gtin_key
+
+    key = normalize_gtin_key(body.gtin)
+    if not key:
+        raise HTTPException(status_code=400, detail="Некорректный GTIN")
+    name = (body.product_name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Пустое наименование")
+    nm = (
+        await db.execute(
+            select(GtinNameMap).where(
+                GtinNameMap.user_id == current_user.id, GtinNameMap.gtin == key
+            )
+        )
+    ).scalar_one_or_none()
+    if nm:
+        nm.product_name = name[:500]
+        nm.source = "manual"
+    else:
+        db.add(GtinNameMap(user_id=current_user.id, gtin=key, product_name=name[:500], source="manual"))
+    await db.commit()
+    logger.info("inventory.set_name.done", gtin=key)
+    return {"status": "ok", "gtin": key, "name": name[:500]}
+
+
 class InventoryLinkRequest(BaseModel):
     gtin: str
     moysklad_product_id: str
