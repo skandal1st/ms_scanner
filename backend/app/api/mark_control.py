@@ -410,12 +410,15 @@ async def cz_snapshot_status(
     }
 
 
-async def _compute_stuck(db: AsyncSession, user_id) -> dict:
+async def _compute_stuck(db: AsyncSession, user_id, only_stuck: bool = True) -> dict:
     """Отчёт «не принятые УПД» (по контрагентам + по документам). Единый источник для
     JSON-эндпоинта и XLSX-экспорта.
 
     «Не принято» = документ НЕ завершён успешно и НЕ отменён/черновик (исключаем коды
-    7/19/22/20/0). stuck — сколько марок УПД ещё числится за нами в ЧЗ."""
+    7/19/22/20/0). stuck — сколько марок УПД ещё числится за нами в ЧЗ.
+    only_stuck=True (по умолчанию) — оставить только документы, где за нами реально ещё
+    числятся марки (stuck>0): контрагенты/УПД без непереданных марок для анализа фантомов
+    не нужны. False — показать все не принятые УПД."""
     from sqlalchemy import func, text
 
     snap = (
@@ -455,6 +458,11 @@ async def _compute_stuck(db: AsyncSession, user_id) -> dict:
         for r in res
     ]
 
+    # Для анализа фантомов интересны только УПД с ещё не переданными марками (stuck>0);
+    # контрагенты/документы, где за нами уже ничего не числится, отсекаем (по умолчанию).
+    if only_stuck:
+        docs = [d for d in docs if d["stuck"] > 0]
+
     by_cp: dict[str, dict] = {}
     for d in docs:
         key = d["counterparty_inn"] or (d["counterparty_name"] or "—")
@@ -489,15 +497,19 @@ async def _compute_stuck(db: AsyncSession, user_id) -> dict:
 
 @router.get("/edo/stuck")
 async def edo_stuck(
+    only_stuck: bool = True,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Не принятые УПД: сводка по контрагентам + по документам."""
-    return await _compute_stuck(db, current_user.id)
+    """Не принятые УПД: сводка по контрагентам + по документам.
+
+    only_stuck=True (по умолчанию) — только с непереданными марками (stuck>0)."""
+    return await _compute_stuck(db, current_user.id, only_stuck=only_stuck)
 
 
 @router.get("/edo/stuck.xlsx")
 async def edo_stuck_xlsx(
+    only_stuck: bool = True,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -508,7 +520,7 @@ async def edo_stuck_xlsx(
     from fastapi.responses import Response
     from openpyxl import Workbook
 
-    data = await _compute_stuck(db, current_user.id)
+    data = await _compute_stuck(db, current_user.id, only_stuck=only_stuck)
     wb = Workbook()
 
     ws1 = wb.active

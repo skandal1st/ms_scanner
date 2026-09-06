@@ -153,14 +153,15 @@ export const markControlApi = {
       '/mark-control/edo/sync/status',
     ),
   edoDocumentsDb: () => api.get<EdoDbDoc[]>('/mark-control/edo/documents-db'),
-  edoStuck: () => api.get<EdoStuckResult>('/mark-control/edo/stuck'),
+  edoStuck: (onlyStuck = true) =>
+    api.get<EdoStuckResult>('/mark-control/edo/stuck', { params: { only_stuck: onlyStuck } }),
   czSnapshotRefresh: () => api.post<{ status: string }>('/mark-control/cz/snapshot/refresh'),
   czSnapshotStatus: () =>
     api.get<{ running: boolean; size: number; at: string | null; result: any }>(
       '/mark-control/cz/snapshot/status',
     ),
-  edoStuckXlsx: () =>
-    api.get('/mark-control/edo/stuck.xlsx', { responseType: 'blob' }),
+  edoStuckXlsx: (onlyStuck = true) =>
+    api.get('/mark-control/edo/stuck.xlsx', { params: { only_stuck: onlyStuck }, responseType: 'blob' }),
 }
 
 export interface EdoStuckCounterparty {

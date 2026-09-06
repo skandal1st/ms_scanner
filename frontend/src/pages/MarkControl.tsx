@@ -63,6 +63,8 @@ export function MarkControlPage() {
   const [stuck, setStuck] = useState<EdoStuckResult | null>(null)
   const [stuckLoading, setStuckLoading] = useState(false)
   const [stuckView, setStuckView] = useState<'counterparties' | 'documents'>('counterparties')
+  // По умолчанию показываем только УПД с ещё не переданными марками (stuck>0).
+  const [stuckOnlyStuck, setStuckOnlyStuck] = useState(true)
   const [snapRunning, setSnapRunning] = useState(false)
   const [snapInfo, setSnapInfo] = useState<{ size: number; at: string | null } | null>(null)
 
@@ -134,10 +136,10 @@ export function MarkControlPage() {
     } catch { /* ignore */ }
   }
 
-  const loadStuck = async () => {
+  const loadStuck = async (only = stuckOnlyStuck) => {
     setStuckLoading(true)
     try {
-      const r = await markControlApi.edoStuck()
+      const r = await markControlApi.edoStuck(only)
       setStuck(r.data)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось сверить с ЧЗ')
@@ -229,7 +231,7 @@ export function MarkControlPage() {
 
   const exportXlsx = async () => {
     try {
-      const r = await markControlApi.edoStuckXlsx()
+      const r = await markControlApi.edoStuckXlsx(stuckOnlyStuck)
       const url = URL.createObjectURL(r.data as Blob)
       const a = document.createElement('a')
       a.href = url
@@ -265,7 +267,7 @@ export function MarkControlPage() {
                 Экспорт XLSX
               </button>
             )}
-            <button className="button" onClick={loadStuck} disabled={stuckLoading}>
+            <button className="button" onClick={() => loadStuck()} disabled={stuckLoading}>
               <Icon name="refresh" size={15} />
               {stuckLoading ? 'Сверка…' : 'Пересверить'}
             </button>
@@ -319,6 +321,18 @@ export function MarkControlPage() {
         <section className="mc-report">
           <div className="mc-report__bar">
             <h2 className="mc-report__title">Не принятые УПД</h2>
+            {stuck?.has_snapshot && (
+              <label className="flex-row gap-8" style={{ alignItems: 'center', fontSize: 13, marginLeft: 'auto' }}
+                title="Скрыть контрагентов и УПД, по которым за нами уже не числится ни одной марки">
+                <input
+                  type="checkbox"
+                  checked={stuckOnlyStuck}
+                  disabled={stuckLoading}
+                  onChange={(e) => { setStuckOnlyStuck(e.target.checked); loadStuck(e.target.checked) }}
+                />
+                Только с непереданными марками
+              </label>
+            )}
             {stuck?.has_snapshot && (stuck.documents.length > 0) && (
               <div className="seg" role="tablist">
                 <button
@@ -348,7 +362,10 @@ export function MarkControlPage() {
             </div>
           ) : stuck.documents.length === 0 ? (
             <div className="mc-empty">
-              Не принятых УПД не найдено. Снимок ЧЗ: {nf(stuck.snapshot_size)} марок.
+              {stuckOnlyStuck
+                ? 'Не принятых УПД с непереданными марками нет. Снимите галочку «Только с непереданными марками», чтобы увидеть все.'
+                : 'Не принятых УПД не найдено.'}{' '}
+              Снимок ЧЗ: {nf(stuck.snapshot_size)} марок.
             </div>
           ) : (
             <>
