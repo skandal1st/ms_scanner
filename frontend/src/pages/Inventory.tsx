@@ -6,6 +6,7 @@ import {
   type SnapshotStatus,
   type ReconcileResult,
   type ReconcileDiff,
+  type ReconcileMatch,
 } from '../api/client'
 
 const nf = (n: number) => n.toLocaleString('ru')
@@ -33,6 +34,7 @@ export function InventoryPage() {
   const [reconLoading, setReconLoading] = useState(false)
   const [brand, setBrand] = useState<string>('')
   const [diff, setDiff] = useState<ReconcileDiff>('to_search')
+  const [match, setMatch] = useState<ReconcileMatch>('all')
 
   const [err, setErr] = useState<string | null>(null)
 
@@ -67,10 +69,10 @@ export function InventoryPage() {
     }
   }
 
-  const loadRecon = async (b = brand, d = diff) => {
+  const loadRecon = async (b = brand, d = diff, m = match) => {
     setReconLoading(true)
     try {
-      const r = await inventoryApi.reconcile(b, d)
+      const r = await inventoryApi.reconcile(b, d, m)
       setRecon(r.data)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось выполнить сверку')
@@ -144,16 +146,20 @@ export function InventoryPage() {
 
   const selectBrand = (b: string) => {
     setBrand(b)
-    loadRecon(b, diff)
+    loadRecon(b, diff, match)
   }
   const selectDiff = (d: ReconcileDiff) => {
     setDiff(d)
-    loadRecon(brand, d)
+    loadRecon(brand, d, match)
+  }
+  const selectMatch = (m: ReconcileMatch) => {
+    setMatch(m)
+    loadRecon(brand, diff, m)
   }
 
   const exportXlsx = async () => {
     try {
-      const r = await inventoryApi.reconcileXlsx(brand, diff)
+      const r = await inventoryApi.reconcileXlsx(brand, diff, match)
       const url = URL.createObjectURL(r.data as Blob)
       const a = document.createElement('a')
       a.href = url
@@ -324,10 +330,14 @@ export function InventoryPage() {
                 </div>
                 <div className="mc-stat__label">нужно искать</div>
               </div>
+              <div className="mc-stat">
+                <div className="mc-stat__num">{nf(recon.unmatched_positions)}</div>
+                <div className="mc-stat__label">не сопоставлено</div>
+              </div>
             </div>
 
-            {/* Фильтр по бренду */}
-            <div className="mc-form" style={{ padding: '0 20px 4px' }}>
+            {/* Фильтры: бренд + сопоставленность */}
+            <div className="mc-form" style={{ padding: '0 20px 4px', alignItems: 'flex-end' }}>
               <div className="mc-form__field" style={{ minWidth: 260 }}>
                 <label className="field-label">Бренд (группа товаров)</label>
                 <select className="ui-input" value={brand} onChange={(e) => selectBrand(e.target.value)}>
@@ -339,6 +349,15 @@ export function InventoryPage() {
                   ))}
                 </select>
               </div>
+              <label className="flex-row gap-8" style={{ alignItems: 'center', fontSize: 13, paddingBottom: 8 }}
+                title="Позиции, которых нет ни в остатках МС, ни в базе имён из УПД — их не удалось опознать">
+                <input
+                  type="checkbox"
+                  checked={match === 'unmatched'}
+                  onChange={(e) => selectMatch(e.target.checked ? 'unmatched' : 'all')}
+                />
+                Только не сопоставленные ({nf(recon.unmatched_positions)})
+              </label>
             </div>
 
             <div className="mc-table-wrap">
@@ -359,7 +378,11 @@ export function InventoryPage() {
                   {recon.rows.map((r, i) => (
                     <tr key={(r.gtin || '') + i}>
                       <td className="mc-state">{r.folder_name}</td>
-                      <td style={{ fontWeight: 500 }}>{r.product_name || '—'}</td>
+                      <td style={{ fontWeight: 500 }}>
+                        {r.product_name || (r.unmatched
+                          ? <span className="text-muted" style={{ fontWeight: 400 }}>— не опознан</span>
+                          : '—')}
+                      </td>
                       <td className="tabular">{r.gtin || '—'}</td>
                       <td className="mc-num">{nf(r.qty_cz)}</td>
                       <td className="mc-num">{nf(r.qty_upd)}</td>

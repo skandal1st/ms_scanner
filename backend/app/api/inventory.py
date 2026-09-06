@@ -226,11 +226,13 @@ LEFT JOIN nm ON nm.gtin = coalesce(cz.gtin, ms.gtin)
 """)
 
 
-async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], diff: str) -> dict:
+async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], diff: str,
+                             match: str = "all") -> dict:
     """Сводка расхождений ЧЗ↔МС с учётом отгруженного по УПД. Единый источник для JSON и XLSX.
 
     to_search = qty_cz − qty_upd − qty_ms (сколько марок реально искать).
-    diff: to_search (фантомы после УПД) | cz_gt_ms (сырое ЧЗ>МС) | ms_gt_cz | mismatch | all."""
+    diff: to_search (фантомы после УПД) | cz_gt_ms (сырое ЧЗ>МС) | ms_gt_cz | mismatch | all.
+    match: all | unmatched (нет ни в МС, ни в базе имён) | matched."""
     ms_size = (
         await db.execute(select(func.count()).select_from(MsStockSnapshot).where(MsStockSnapshot.user_id == user_id))
     ).scalar_one()
@@ -245,6 +247,9 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         qty_upd = int(r.qty_upd or 0)
         qty_ms = int(r.qty_ms or 0)
         not_in_ms = bool(r.not_in_ms)
+        # «Не сопоставлен» — нет ни в остатках МС, ни в базе имён из УПД (product_name пуст).
+        # Такую позицию мы вообще ничем не опознали: не привязать к товару, не назвать.
+        unmatched = not_in_ms and not (r.product_name and str(r.product_name).strip())
         all_rows.append({
             "gtin": r.gtin,
             "product_name": r.product_name,
@@ -256,6 +261,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
             "diff": qty_cz - qty_ms,
             "to_search": qty_cz - qty_upd - qty_ms,
             "not_in_ms": not_in_ms,
+            "unmatched": unmatched,
         })
 
     # Бренды (для фильтра) — из полного набора, до среза.
@@ -280,6 +286,13 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         rows = [x for x in rows if (x["folder_id"] == brand or x["folder_name"] == brand)]
     # «Сколько искать» — сумма положительных to_search по срезу бренда, независимо от таба diff.
     search_total = sum(x["to_search"] for x in rows if x["to_search"] > 0)
+    # «Не сопоставлено» — позиций и марок ЧЗ, ничем не опознанных (для заголовка и кнопки).
+    unmatched_positions = sum(1 for x in rows if x["unmatched"])
+    unmatched_marks = sum(x["qty_cz"] for x in rows if x["unmatched"])
+    if match == "unmatched":
+        rows = [x for x in rows if x["unmatched"]]
+    elif match == "matched":
+        rows = [x for x in rows if not x["unmatched"]]
     if diff == "to_search":
         rows = [x for x in rows if x["to_search"] > 0]
     elif diff == "cz_gt_ms":
@@ -296,6 +309,8 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         "ms_size": int(ms_size),
         "cz_size": int(cz_size),
         "search_total": int(search_total),
+        "unmatched_positions": int(unmatched_positions),
+        "unmatched_marks": int(unmatched_marks),
         "brands": brand_list,
         "rows": rows,
         "totals": {
@@ -313,17 +328,19 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
 async def reconcile(
     brand: Optional[str] = None,
     diff: str = "all",
+    match: str = "all",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Сверка остатков ЧЗ↔МС по GTIN, срез по бренду (группе товаров МС)."""
-    return await _compute_reconcile(db, current_user.id, brand, diff)
+    return await _compute_reconcile(db, current_user.id, brand, diff, match)
 
 
 @router.get("/reconcile.xlsx")
 async def reconcile_xlsx(
     brand: Optional[str] = None,
     diff: str = "all",
+    match: str = "all",
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -334,7 +351,7 @@ async def reconcile_xlsx(
     from fastapi.responses import Response
     from openpyxl import Workbook
 
-    data = await _compute_reconcile(db, current_user.id, brand, diff)
+    data = await _compute_reconcile(db, current_user.id, brand, diff, match)
     wb = Workbook()
 
     ws1 = wb.active

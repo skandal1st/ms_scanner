@@ -252,6 +252,7 @@ export interface ReconcileRow {
   diff: number
   to_search: number
   not_in_ms?: boolean
+  unmatched?: boolean
 }
 
 export interface ReconcileBrand {
@@ -270,12 +271,15 @@ export interface ReconcileResult {
   ms_size: number
   cz_size: number
   search_total: number
+  unmatched_positions: number
+  unmatched_marks: number
   brands: ReconcileBrand[]
   rows: ReconcileRow[]
   totals: { positions: number; qty_cz: number; qty_upd: number; qty_ms: number; diff: number; to_search: number }
 }
 
 export type ReconcileDiff = 'all' | 'to_search' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
+export type ReconcileMatch = 'all' | 'unmatched' | 'matched'
 
 export interface StoresResponse {
   stores: InventoryStore[]
@@ -291,10 +295,10 @@ export const inventoryApi = {
   czStatus: () => api.get<SnapshotStatus>('/inventory/cz-stock/status'),
   msRefresh: () => api.post<{ status: string }>('/inventory/ms-stock/refresh'),
   msStatus: () => api.get<SnapshotStatus>('/inventory/ms-stock/status'),
-  reconcile: (brand?: string, diff: ReconcileDiff = 'all') =>
-    api.get<ReconcileResult>('/inventory/reconcile', { params: { brand: brand || undefined, diff } }),
-  reconcileXlsx: (brand?: string, diff: ReconcileDiff = 'all') =>
-    api.get('/inventory/reconcile.xlsx', { params: { brand: brand || undefined, diff }, responseType: 'blob' }),
+  reconcile: (brand?: string, diff: ReconcileDiff = 'all', match: ReconcileMatch = 'all') =>
+    api.get<ReconcileResult>('/inventory/reconcile', { params: { brand: brand || undefined, diff, match } }),
+  reconcileXlsx: (brand?: string, diff: ReconcileDiff = 'all', match: ReconcileMatch = 'all') =>
+    api.get('/inventory/reconcile.xlsx', { params: { brand: brand || undefined, diff, match }, responseType: 'blob' }),
 }
 
 export const documentsApi = {
