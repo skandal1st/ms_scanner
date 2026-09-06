@@ -208,17 +208,21 @@ upd AS (
 ms AS (
     SELECT gtin, qty AS qty_ms, product_name, folder_id, folder_name
     FROM ms_stock_snapshot WHERE user_id = CAST(:uid AS uuid)
+),
+nm AS (
+    SELECT gtin, product_name FROM gtin_name_map WHERE user_id = CAST(:uid AS uuid)
 )
 SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(cz.qty_cz, 0)                  AS qty_cz,
        coalesce(upd.qty_upd, 0)                AS qty_upd,
        coalesce(ms.qty_ms, 0)                  AS qty_ms,
-       coalesce(ms.product_name, cz.product_name) AS product_name,
+       coalesce(ms.product_name, cz.product_name, nm.product_name) AS product_name,
        ms.folder_id, ms.folder_name,
        (ms.gtin IS NULL)                       AS not_in_ms
 FROM cz
 FULL OUTER JOIN ms ON cz.gtin = ms.gtin
 LEFT JOIN upd ON upd.gtin = cz.gtin
+LEFT JOIN nm ON nm.gtin = coalesce(cz.gtin, ms.gtin)
 """)
 
 

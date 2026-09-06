@@ -66,6 +66,29 @@ async def _upsert_document(db, user_id, parsed: dict) -> EdoDocument:
     return row
 
 
+async def _save_gtin_names(db, user_id, pairs: dict[str, str]) -> int:
+    """Запомнить наименования по GTIN из позиций УПД (upsert в gtin_name_map).
+
+    Имя обновляем на непустое — более свежий УПД уточняет наименование."""
+    from app.db.models import GtinNameMap
+
+    n = 0
+    for gtin, name in pairs.items():
+        if not gtin or not (name or "").strip():
+            continue
+        stmt = (
+            pg_insert(GtinNameMap)
+            .values(user_id=user_id, gtin=gtin, product_name=name.strip()[:500], source="upd")
+            .on_conflict_do_update(
+                constraint="ix_gtin_name_map_user_gtin",
+                set_={"product_name": name.strip()[:500]},
+            )
+        )
+        await db.execute(stmt)
+        n += 1
+    return n
+
+
 async def _save_marks(db, doc: EdoDocument, user_id, codes: list[str]) -> int:
     """Сохранить марки документа (idempotent upsert по (document_id, cis_canonical))."""
     from app.services.chestnyznak import strip_ai_brackets, extract_gtin, normalize_gtin_key
@@ -94,10 +117,12 @@ async def _save_marks(db, doc: EdoDocument, user_id, codes: list[str]) -> int:
 
 
 async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional[str] = None,
-                    use_cursor: bool = True) -> dict:
+                    use_cursor: bool = True, backfill_names: bool = False) -> dict:
     """Синхронизировать документы ЭДО пользователя за период. date_from/to — «ДД.ММ.ГГГГ ЧЧ.ММ.СС».
 
     use_cursor=True — продолжить с сохранённого курсора Integration (инкремент); иначе с date_from.
+    backfill_names=True — докачивать первичный УПД даже у уже разобранных документов, чтобы
+    заполнить `gtin_name_map` именами по историческим отгрузкам (марки/marks_parsed не трогаем).
     """
     client = _client(integ)
     if client is None:
@@ -111,7 +136,7 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
     doc_id = integ.saby_last_doc_id if use_cursor else None
     cur_from = event_dt or date_from
 
-    pages = docs_seen = out_docs = marks_saved = parsed_docs = 0
+    pages = docs_seen = out_docs = marks_saved = parsed_docs = names_saved = 0
     seen_ext: set[str] = set()
 
     for _ in range(_MAX_PAGES):
@@ -150,20 +175,26 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             # контрагент/статус могут заполниться/измениться в более позднем событии.
             row = await _upsert_document(db, user_id, parsed)
             await db.flush()
-            # Марки качаем один раз (когда в событии есть первичное вложение УПД).
-            if not row.marks_parsed:
+            # Первичный УПД качаем: (1) когда марки ещё не разобраны, либо (2) в режиме
+            # backfill_names — чтобы дозаполнить имена по историческим документам.
+            if (not row.marks_parsed) or backfill_names:
                 link = primary_upd_link(d)
                 if link:
                     try:
                         raw = await client.download(auth, link)
                         from app.services.upd_parser import parse_upd_503
                         upd = parse_upd_503(raw)
-                        codes = [c for p in upd.positions for c in (p.codes or [])]
-                        saved = await _save_marks(db, row, user_id, codes)
-                        row.codes_total = saved
-                        row.marks_parsed = True
-                        marks_saved += saved
-                        parsed_docs += 1
+                        if not row.marks_parsed:
+                            codes = [c for p in upd.positions for c in (p.codes or [])]
+                            saved = await _save_marks(db, row, user_id, codes)
+                            row.codes_total = saved
+                            row.marks_parsed = True
+                            marks_saved += saved
+                            parsed_docs += 1
+                        # Обогащаем базу знаний GTIN→наименование из позиций УПД (для имён
+                        # в инвентаризации, где ЧЗ/НК имён не дают).
+                        names = {p.gtin: p.name for p in upd.positions if p.gtin and p.name}
+                        names_saved += await _save_gtin_names(db, user_id, names)
                     except Exception as exc:
                         logger.warning("edo_sync.parse_failed", ext=ext, error=str(exc))
         await db.commit()
@@ -183,6 +214,6 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             break
 
     logger.info("edo_sync.done", user_id=str(user_id), pages=pages, docs=docs_seen,
-                out_docs=out_docs, parsed=parsed_docs, marks=marks_saved)
+                out_docs=out_docs, parsed=parsed_docs, marks=marks_saved, names=names_saved)
     return {"pages": pages, "documents": docs_seen, "out_realizations": out_docs,
-            "parsed_docs": parsed_docs, "marks_saved": marks_saved}
+            "parsed_docs": parsed_docs, "marks_saved": marks_saved, "names_saved": names_saved}

@@ -279,6 +279,31 @@ async def edo_sync(
     return {"status": "started"}
 
 
+class BackfillNamesRequest(BaseModel):
+    # За сколько дней назад пройтись по ленте (по умолчанию год). Имена в gtin_name_map.
+    days: int = 365
+
+
+@router.post("/edo/backfill-names")
+async def edo_backfill_names(
+    body: BackfillNamesRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Разово докачать первичные УПД по историческим документам и заполнить наименования
+    по GTIN (gtin_name_map) — для имён в «Инвентаризации». Марки не трогает."""
+    from datetime import datetime, timedelta
+
+    integ = await _get_integration(db, current_user.id)
+    _client_from_integration(integ)
+    from app.worker.tasks import edo_sync_task
+
+    days = max(1, min(int(body.days or 365), 1825))
+    date_from = _to_dt((datetime.now() - timedelta(days=days)).strftime("%d.%m.%Y"))
+    edo_sync_task.delay(str(current_user.id), date_from, None, False, True)
+    return {"status": "started", "days": days}
+
+
 @router.get("/edo/sync/status")
 async def edo_sync_status(current_user: User = Depends(get_current_user)):
     r = aioredis.from_url(settings.REDIS_URL)

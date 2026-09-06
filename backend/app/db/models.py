@@ -220,6 +220,30 @@ class GtinProductMap(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class GtinNameMap(Base):
+    """База знаний «GTIN → наименование товара» из первичных XML УПД (ЭДО Saby).
+
+    Имена из ЧЗ по кодам баланса вытащить не удалось (dispenser productName пуст,
+    cises/info не находит коды без криптохвоста), а Национальный каталог требует
+    отдельного доступа. Но каждый исходящий УПД несёт пару НаимТов↔GTIN — при синке
+    ЭДО (edo_sync) её сохраняем сюда. Инвентаризация (reconcile) берёт имя фолбэком
+    после МС и ЧЗ. Отдельно от GtinProductMap: там product_id (МС) NOT NULL, а УПД
+    его не даёт — здесь только имя. Пер-клиент (наименование поставщика/своё).
+    """
+    __tablename__ = "gtin_name_map"
+    __table_args__ = (
+        UniqueConstraint("user_id", "gtin", name="ix_gtin_name_map_user_gtin"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    gtin = Column(String(14), nullable=False)
+    product_name = Column(String(500), nullable=False)
+    source = Column(String(16), nullable=False, default="upd", server_default="upd")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class GtinCzGroup(Base):
     """Кэш «GTIN → товарная группа ЧЗ (pg)» — засевается из trackingType карточки МС.
 

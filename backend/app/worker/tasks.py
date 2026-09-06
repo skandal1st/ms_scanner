@@ -1531,12 +1531,14 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
 
 
 @celery_app.task(name="edo_sync")
-def edo_sync_task(user_id: str, date_from: str, date_to: str = None, use_cursor: bool = True):
+def edo_sync_task(user_id: str, date_from: str, date_to: str = None, use_cursor: bool = True,
+                  backfill_names: bool = False):
     """Синхронизация ЭДО Saby (лента изменений) в EdoDocument/EdoMark для контроля марок."""
-    _run(_edo_sync_async(user_id, date_from, date_to, use_cursor))
+    _run(_edo_sync_async(user_id, date_from, date_to, use_cursor, backfill_names))
 
 
-async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: bool):
+async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: bool,
+                          backfill_names: bool = False):
     import redis.asyncio as aioredis
     from app.core.config import settings
     from app.db.session import AsyncSessionLocal
@@ -1557,7 +1559,8 @@ async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: boo
             integ = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one_or_none()
             if not integ:
                 return
-            res = await sync_user(db, integ, date_from=date_from, date_to=date_to, use_cursor=use_cursor)
+            res = await sync_user(db, integ, date_from=date_from, date_to=date_to,
+                                  use_cursor=use_cursor, backfill_names=backfill_names)
             await db.commit()
         # результат в Redis для опроса фронтом
         import json as _json
