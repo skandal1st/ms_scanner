@@ -290,6 +290,9 @@ class EdoDocument(Base):
     # Статус документа с маркированным товаром в ГИС МТ (Расширение.СостояниеМарк/ГосСистемы).
     mark_state = Column(JSONB, nullable=True)
     marks_parsed = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Имена по GTIN из позиций УПД уже извлечены в gtin_name_map (для инкрементального
+    # backfill: повторный прогон не перекачивает уже обработанные документы).
+    names_parsed = Column(Boolean, nullable=False, default=False, server_default="false")
     codes_total = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

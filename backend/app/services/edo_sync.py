@@ -216,16 +216,19 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             # контрагент/статус могут заполниться/измениться в более позднем событии.
             row = await _upsert_document(db, user_id, parsed)
             await db.flush()
-            # Первичный УПД качаем: (1) когда марки ещё не разобраны, либо (2) в режиме
-            # backfill_names — чтобы дозаполнить имена по историческим документам.
-            if (not row.marks_parsed) or backfill_names:
+            # Первичный УПД качаем, только если есть что доставать: марки ещё не разобраны
+            # ЛИБО (в backfill) имена ещё не извлечены. Уже обработанные документы при
+            # повторном прогоне (напр. год → 3 года) пропускаем — не качаем повторно.
+            need_marks = not row.marks_parsed
+            need_names = backfill_names and not row.names_parsed
+            if need_marks or need_names:
                 link = primary_upd_link(d)
                 if link:
                     try:
                         raw = await client.download(auth, link)
                         from app.services.upd_parser import parse_upd_503
                         upd = parse_upd_503(raw)
-                        if not row.marks_parsed:
+                        if need_marks:
                             codes = [c for p in upd.positions for c in (p.codes or [])]
                             saved = await _save_marks(db, row, user_id, codes)
                             row.codes_total = saved
@@ -233,9 +236,11 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
                             marks_saved += saved
                             parsed_docs += 1
                         # Обогащаем базу знаний GTIN→наименование из позиций УПД (для имён
-                        # в инвентаризации, где ЧЗ/НК имён не дают).
-                        names = {p.gtin: p.name for p in upd.positions if p.gtin and p.name}
-                        names_saved += await _save_gtin_names(db, user_id, names)
+                        # в инвентаризации, где ЧЗ/НК имён не дают). Один раз на документ.
+                        if not row.names_parsed:
+                            names = {p.gtin: p.name for p in upd.positions if p.gtin and p.name}
+                            names_saved += await _save_gtin_names(db, user_id, names)
+                            row.names_parsed = True
                     except Exception as exc:
                         logger.warning("edo_sync.parse_failed", ext=ext, error=str(exc))
         await db.commit()
