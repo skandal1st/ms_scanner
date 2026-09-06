@@ -149,7 +149,9 @@ export const markControlApi = {
   edoBackfillNames: (days = 365) =>
     api.post<{ status: string; days: number }>('/mark-control/edo/backfill-names', { days }),
   edoSyncStatus: () =>
-    api.get<{ running: boolean; result: EdoSyncResult | null }>('/mark-control/edo/sync/status'),
+    api.get<{ running: boolean; result: EdoSyncResult | null; progress: EdoSyncProgress | null }>(
+      '/mark-control/edo/sync/status',
+    ),
   edoDocumentsDb: () => api.get<EdoDbDoc[]>('/mark-control/edo/documents-db'),
   edoStuck: () => api.get<EdoStuckResult>('/mark-control/edo/stuck'),
   czSnapshotRefresh: () => api.post<{ status: string }>('/mark-control/cz/snapshot/refresh'),
@@ -196,6 +198,17 @@ export interface EdoSyncResult {
   parsed_docs: number
   marks_saved: number
   names_saved?: number
+}
+
+export interface EdoSyncProgress {
+  pages: number
+  documents: number
+  out_realizations: number
+  parsed_docs: number
+  marks_saved: number
+  names_saved: number
+  percent: number | null
+  backfill: boolean
 }
 
 export interface EdoDbDoc {

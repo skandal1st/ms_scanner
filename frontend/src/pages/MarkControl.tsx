@@ -5,9 +5,19 @@ import {
   type SabyStatus,
   type EdoDocRow,
   type EdoSyncResult,
+  type EdoSyncProgress,
   type EdoDbDoc,
   type EdoStuckResult,
 } from '../api/client'
+
+// Глубина синка/backfill: подпись → дней.
+const DEPTH_OPTIONS: { label: string; days: number }[] = [
+  { label: '3 месяца', days: 90 },
+  { label: 'полгода', days: 180 },
+  { label: 'год', days: 365 },
+  { label: '2 года', days: 730 },
+  { label: '3 года', days: 1095 },
+]
 
 /** Дата ДД.ММ.ГГГГ из Date. */
 function fmt(d: Date): string {
@@ -44,6 +54,8 @@ export function MarkControlPage() {
   const [syncFrom, setSyncFrom] = useState(fmt(new Date(Date.now() - 90 * 24 * 3600 * 1000)))
   const [syncRunning, setSyncRunning] = useState(false)
   const [syncResult, setSyncResult] = useState<EdoSyncResult | null>(null)
+  const [syncProgress, setSyncProgress] = useState<EdoSyncProgress | null>(null)
+  const [backfillDays, setBackfillDays] = useState(365)
   const [dbDocs, setDbDocs] = useState<EdoDbDoc[]>([])
 
   const [stuck, setStuck] = useState<EdoStuckResult | null>(null)
@@ -136,6 +148,7 @@ export function MarkControlPage() {
     setErr(null)
     try {
       await markControlApi.edoSync(syncFrom)
+      setSyncProgress(null)
       setSyncRunning(true)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось запустить синхронизацию')
@@ -145,7 +158,8 @@ export function MarkControlPage() {
   const startBackfillNames = async () => {
     setErr(null)
     try {
-      await markControlApi.edoBackfillNames(365)
+      await markControlApi.edoBackfillNames(backfillDays)
+      setSyncProgress(null)
       setSyncRunning(true)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось запустить заполнение имён')
@@ -158,13 +172,15 @@ export function MarkControlPage() {
       try {
         const r = await markControlApi.edoSyncStatus()
         if (r.data.result) setSyncResult(r.data.result)
+        setSyncProgress(r.data.progress)
         if (!r.data.running) {
           setSyncRunning(false)
+          setSyncProgress(null)
           loadDbDocs()
           loadStuck()
         }
       } catch { /* ignore */ }
-    }, 4000)
+    }, 2000)
     return () => clearInterval(t)
   }, [syncRunning])
 
@@ -424,13 +440,48 @@ export function MarkControlPage() {
                 <button className="button button--primary" disabled={syncRunning} onClick={startSync}>
                   {syncRunning ? 'Синхронизация…' : 'Синхронизировать'}
                 </button>
+                <button className="button" onClick={loadDbDocs}>Обновить таблицу</button>
+              </div>
+
+              <div className="mc-form" style={{ marginTop: 8, alignItems: 'flex-end' }}>
+                <div className="mc-form__field" style={{ minWidth: 150 }}>
+                  <label className="field-label">Глубина «Заполнить имена»</label>
+                  <select className="ui-input" value={backfillDays} disabled={syncRunning}
+                    onChange={(e) => setBackfillDays(Number(e.target.value))}>
+                    {DEPTH_OPTIONS.map((o) => (
+                      <option key={o.days} value={o.days}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
                 <button className="button" disabled={syncRunning} onClick={startBackfillNames}
                   title="Разово докачать УПД по истории и заполнить наименования по GTIN для «Инвентаризации» (марки не трогает)">
                   {syncRunning ? 'Выполняется…' : 'Заполнить имена из истории'}
                 </button>
-                <button className="button" onClick={loadDbDocs}>Обновить таблицу</button>
               </div>
-              {syncResult && (
+
+              {syncRunning && (
+                <div className="mc-run-result" style={{ marginTop: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span>
+                      {syncProgress?.backfill ? 'Заполнение имён из истории' : 'Синхронизация'}
+                      {syncProgress ? <> · страниц: <b>{nf(syncProgress.pages)}</b> · реализаций: <b>{nf(syncProgress.out_realizations)}</b>
+                        {syncProgress.backfill
+                          ? <> · имён: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.names_saved)}</b></>
+                          : <> · кодов: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.marks_saved)}</b></>}
+                      </> : ' запускается…'}
+                    </span>
+                    <span>{syncProgress?.percent != null ? `${syncProgress.percent}%` : ''}</span>
+                  </div>
+                  <div className="mc-progress">
+                    <div
+                      className={`mc-progress__bar${syncProgress?.percent == null ? ' mc-progress__bar--indeterminate' : ''}`}
+                      style={syncProgress?.percent != null ? { width: `${syncProgress.percent}%` } : undefined}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!syncRunning && syncResult && (
                 <div className="mc-run-result">
                   Страниц: <b>{nf(syncResult.pages)}</b> · документов: <b>{nf(syncResult.documents)}</b> ·
                   реализаций: <b>{nf(syncResult.out_realizations)}</b> · с марками: <b>{nf(syncResult.parsed_docs)}</b> ·

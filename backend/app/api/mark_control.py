@@ -310,10 +310,12 @@ async def edo_sync_status(current_user: User = Depends(get_current_user)):
     try:
         running = await r.get(f"edo_sync:lock:{current_user.id}")
         res = await r.get(f"edo_sync:result:{current_user.id}")
+        prog = await r.get(f"edo_sync:progress:{current_user.id}")
     finally:
         await r.aclose()
     result = json.loads(res.decode() if isinstance(res, (bytes, bytearray)) else res) if res else None
-    return {"running": bool(running), "result": result}
+    progress = json.loads(prog.decode() if isinstance(prog, (bytes, bytearray)) else prog) if prog else None
+    return {"running": bool(running), "result": result, "progress": progress}
 
 
 @router.get("/edo/documents-db")

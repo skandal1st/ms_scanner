@@ -6,7 +6,7 @@ XML-вложение УПД и достаём марки нашим upd_parser. 
 в Integration для инкрементальной догрузки.
 """
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -26,6 +26,28 @@ from app.services.saby import (
 
 # Предохранитель от бесконечного цикла (25/стр → до 25000 документов за один синк).
 _MAX_PAGES = 1000
+
+
+def _parse_dt(s: Optional[str]) -> Optional[datetime]:
+    """Толерантный разбор даты Saby/наших курсоров: «ДД.ММ.ГГГГ ЧЧ.ММ.СС», «…ЧЧ:ММ:СС»,
+    «ДД.ММ.ГГГГ», ISO. None — если формат не распознан (тогда прогресс без процента)."""
+    if not s:
+        return None
+    s = s.strip()
+    for fmt in ("%d.%m.%Y %H.%M.%S", "%d.%m.%Y %H:%M:%S", "%d.%m.%Y", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _percent(start: Optional[datetime], end: datetime, cur: Optional[datetime]) -> Optional[int]:
+    """Доля пройденного окна [start, end] по дате курсора (0..100). None — не оценить."""
+    if not start or not cur or end <= start:
+        return None
+    frac = (cur - start).total_seconds() / (end - start).total_seconds()
+    return max(0, min(100, round(frac * 100)))
 
 
 def _client(integ: Integration) -> Optional[SabyClient]:
@@ -117,12 +139,15 @@ async def _save_marks(db, doc: EdoDocument, user_id, codes: list[str]) -> int:
 
 
 async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional[str] = None,
-                    use_cursor: bool = True, backfill_names: bool = False) -> dict:
+                    use_cursor: bool = True, backfill_names: bool = False,
+                    progress_cb: Optional[Callable[[dict], Awaitable[None]]] = None) -> dict:
     """Синхронизировать документы ЭДО пользователя за период. date_from/to — «ДД.ММ.ГГГГ ЧЧ.ММ.СС».
 
     use_cursor=True — продолжить с сохранённого курсора Integration (инкремент); иначе с date_from.
     backfill_names=True — докачивать первичный УПД даже у уже разобранных документов, чтобы
     заполнить `gtin_name_map` именами по историческим отгрузкам (марки/marks_parsed не трогаем).
+    progress_cb — необязательный async-колбэк, зовётся после каждой страницы с промежуточной сводкой
+    (для прогресс-бара; percent — доля окна по дате курсора, может быть None).
     """
     client = _client(integ)
     if client is None:
@@ -136,8 +161,24 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
     doc_id = integ.saby_last_doc_id if use_cursor else None
     cur_from = event_dt or date_from
 
+    # Окно оценки прогресса: от начала (курсор при инкременте / date_from) до конца (date_to / сейчас).
+    win_start = _parse_dt(cur_from)
+    win_end = _parse_dt(date_to) or datetime.now()
+
     pages = docs_seen = out_docs = marks_saved = parsed_docs = names_saved = 0
     seen_ext: set[str] = set()
+
+    async def _emit(percent: Optional[int]) -> None:
+        if progress_cb is None:
+            return
+        try:
+            await progress_cb({
+                "pages": pages, "documents": docs_seen, "out_realizations": out_docs,
+                "parsed_docs": parsed_docs, "marks_saved": marks_saved, "names_saved": names_saved,
+                "percent": percent, "backfill": backfill_names,
+            })
+        except Exception:
+            pass  # прогресс не должен ронять синк
 
     for _ in range(_MAX_PAGES):
         try:
@@ -210,6 +251,8 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             integ.saby_last_doc_id = did
         integ.saby_synced_at = datetime.now(timezone.utc)
         await db.commit()
+        # Прогресс по позиции курсора во времени (100% на последней странице).
+        await _emit(100 if not has_more else _percent(win_start, win_end, _parse_dt(edt)))
         if not has_more:
             break
 

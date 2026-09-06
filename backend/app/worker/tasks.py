@@ -1546,24 +1546,32 @@ async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: boo
     from app.services.edo_sync import sync_user
     from sqlalchemy import select
 
+    import json as _json
+
     # Идемпотентность: один активный синк на пользователя.
     lock_key = f"edo_sync:lock:{user_id}"
+    progress_key = f"edo_sync:progress:{user_id}"
     r = aioredis.from_url(settings.REDIS_URL)
     got = await r.set(lock_key, "1", nx=True, ex=1800)
     if not got:
         await r.aclose()
         logger.info("edo_sync.already_running", user_id=user_id)
         return
+
+    async def _progress_cb(p: dict) -> None:
+        await r.set(progress_key, _json.dumps(p), ex=1800)
+
     try:
+        await r.delete(progress_key)  # свежий прогон — старый прогресс убираем
         async with AsyncSessionLocal() as db:
             integ = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one_or_none()
             if not integ:
                 return
             res = await sync_user(db, integ, date_from=date_from, date_to=date_to,
-                                  use_cursor=use_cursor, backfill_names=backfill_names)
+                                  use_cursor=use_cursor, backfill_names=backfill_names,
+                                  progress_cb=_progress_cb)
             await db.commit()
         # результат в Redis для опроса фронтом
-        import json as _json
         r2 = aioredis.from_url(settings.REDIS_URL)
         try:
             await r2.set(f"edo_sync:result:{user_id}", _json.dumps(res), ex=3600)
@@ -1573,7 +1581,7 @@ async def _edo_sync_async(user_id: str, date_from: str, date_to, use_cursor: boo
         logger.error("edo_sync.error", user_id=user_id, error=str(exc))
     finally:
         try:
-            await r.delete(lock_key); await r.aclose()
+            await r.delete(lock_key); await r.delete(progress_key); await r.aclose()
         except Exception:
             pass
 
