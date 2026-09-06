@@ -143,6 +143,15 @@ async def _invalidate_auth(user_id) -> None:
         await r.aclose()
 
 
+async def _sync_running(user_id) -> bool:
+    """Идёт ли уже синхронизация/backfill ЭДО (лок в Redis) — чтобы не плодить задачи."""
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        return bool(await r.get(f"edo_sync:lock:{user_id}"))
+    finally:
+        await r.aclose()
+
+
 @router.post("/saby/connect", response_model=SabyStatusResponse)
 async def saby_connect(
     body: SabyConnectRequest,
@@ -268,6 +277,8 @@ async def edo_sync(
     """Запустить фоновую синхронизацию ЭДО (лента Saby → БД марок) за период."""
     integ = await _get_integration(db, current_user.id)
     _client_from_integration(integ)
+    if await _sync_running(current_user.id):
+        return {"status": "already_running"}
     from app.worker.tasks import edo_sync_task
 
     edo_sync_task.delay(
@@ -296,6 +307,8 @@ async def edo_backfill_names(
 
     integ = await _get_integration(db, current_user.id)
     _client_from_integration(integ)
+    if await _sync_running(current_user.id):
+        return {"status": "already_running"}
     from app.worker.tasks import edo_sync_task
 
     days = max(1, min(int(body.days or 365), 1825))

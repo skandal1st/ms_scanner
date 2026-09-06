@@ -9,6 +9,7 @@ import {
   type EdoDbDoc,
   type EdoStuckResult,
 } from '../api/client'
+import { useModal } from '../components/ModalProvider'
 
 // Глубина синка/backfill: подпись → дней.
 const DEPTH_OPTIONS: { label: string; days: number }[] = [
@@ -29,6 +30,7 @@ const nf = (n: number) => n.toLocaleString('ru')
 const isUnsigned = (r: EdoDocRow): boolean => Boolean(r.unsigned)
 
 export function MarkControlPage() {
+  const modal = useModal()
   const [status, setStatus] = useState<SabyStatus | null>(null)
   const [editConn, setEditConn] = useState(false)
   const [authMode, setAuthMode] = useState<'service' | 'login'>('service')
@@ -147,8 +149,12 @@ export function MarkControlPage() {
   const startSync = async () => {
     setErr(null)
     try {
-      await markControlApi.edoSync(syncFrom)
-      setSyncProgress(null)
+      const r = await markControlApi.edoSync(syncFrom)
+      if (r.data.status === 'already_running') {
+        void modal.alert('Синхронизация уже идёт в фоне — дождитесь её завершения.', { variant: 'warn' })
+      } else {
+        setSyncProgress(null)
+      }
       setSyncRunning(true)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось запустить синхронизацию')
@@ -158,8 +164,12 @@ export function MarkControlPage() {
   const startBackfillNames = async () => {
     setErr(null)
     try {
-      await markControlApi.edoBackfillNames(backfillDays)
-      setSyncProgress(null)
+      const r = await markControlApi.edoBackfillNames(backfillDays)
+      if (r.data.status === 'already_running') {
+        void modal.alert('Процесс уже идёт в фоне — дождитесь его завершения.', { variant: 'warn' })
+      } else {
+        setSyncProgress(null)
+      }
       setSyncRunning(true)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось запустить заполнение имён')
@@ -189,6 +199,19 @@ export function MarkControlPage() {
       loadDbDocs()
       loadStuck()
       loadSnapStatus()
+      // Синхронизация/backfill идёт в фоне (Celery). Если пользователь вернулся на
+      // вкладку во время прогона — подхватываем состояние и восстанавливаем прогресс-бар.
+      markControlApi
+        .edoSyncStatus()
+        .then((r) => {
+          if (r.data.running) {
+            setSyncProgress(r.data.progress)
+            setSyncRunning(true)
+          } else if (r.data.result) {
+            setSyncResult(r.data.result)
+          }
+        })
+        .catch(() => { /* ignore */ })
     }
   }, [status?.connected])
 
