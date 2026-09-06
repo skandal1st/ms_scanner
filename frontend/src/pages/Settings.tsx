@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { czApi, integrationsApi } from '../api/client'
 import type { Integration } from '../api/client'
+import { useModal } from '../components/ModalProvider'
 import {
   isWebSerialSupported,
   setScannerMode,
@@ -192,6 +193,7 @@ function ScannerSection() {
 }
 
 export function SettingsPage({ embedded = false }: SettingsPageProps) {
+  const modal = useModal()
   const [msToken, setMsToken] = useState('')
   const qc = useQueryClient()
 
@@ -263,15 +265,13 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
                     type="button"
                     className="button button--danger"
                     disabled={patchIntegration.isPending}
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          'Отвязать МойСклад? Приложение потеряет доступ к документам и записи ' +
-                            'кодов маркировки, пока вы не подключите его снова.',
-                        )
-                      ) {
-                        patchIntegration.mutate({ moysklad_token: '' })
-                      }
+                    onClick={async () => {
+                      const ok = await modal.confirm(
+                        'Отвязать МойСклад? Приложение потеряет доступ к документам и записи ' +
+                          'кодов маркировки, пока вы не подключите его снова.',
+                        { title: 'Отвязать МойСклад', danger: true, okText: 'Отвязать' },
+                      )
+                      if (ok) patchIntegration.mutate({ moysklad_token: '' })
                     }}
                   >
                     Отвязать МойСклад
@@ -301,6 +301,7 @@ function ChestnyZnakSection({
 }: {
   integration?: Integration | undefined
 }) {
+  const modal = useModal()
   const qc = useQueryClient()
   const boxModeMutation = useMutation({
     mutationFn: (enabled: boolean) =>
@@ -612,7 +613,7 @@ function ChestnyZnakSection({
                 <button
                   type="button"
                   className="button"
-                  onClick={() => window.alert(diagnosePlugin())}
+                  onClick={() => void modal.alert(diagnosePlugin(), { title: 'Диагностика плагина', variant: 'info' })}
                   title="Показать состояние window.cadesplugin"
                 >
                   Диагностика

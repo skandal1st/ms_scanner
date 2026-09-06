@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { scansApi, isSscc } from '../api/client'
 import { useScanStore } from '../store/scanStore'
+import { useModal } from '../components/ModalProvider'
 import { decodeJwtSub } from '../lib/jwt'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -50,6 +51,7 @@ function resolveWsUserId(): string | null {
 }
 
 export function useScanner(documentId: string | null) {
+  const modal = useModal()
   const { addScan, updateScan, flashScan } = useScanStore()
   const wsRef = useRef<WebSocket | null>(null)
 
@@ -181,7 +183,7 @@ export function useScanner(documentId: string | null) {
         )
         if (!existing) {
           playBeep('error')
-          window.alert('Код не найден в этом документе')
+          void modal.alert('Код не найден в этом документе', { variant: 'warn' })
           return
         }
         try {
@@ -241,11 +243,11 @@ export function useScanner(documentId: string | null) {
         playBeep('error')
         const ax = err as { response?: { data?: { detail?: unknown } } }
         const d = ax?.response?.data?.detail
-        if (typeof d === 'string' && d) window.alert(d)
+        if (typeof d === 'string' && d) void modal.alert(d, { variant: 'error' })
         console.error('Scan error:', err)
       }
     },
-    [documentId, addScan, flashScan]
+    [documentId, addScan, flashScan, modal]
   )
 
   return { submitCode }

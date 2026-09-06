@@ -8,6 +8,7 @@ import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { BulkMarksModal } from '../components/BulkMarksModal'
 import { Icon } from '../components/Icon'
+import { useModal } from '../components/ModalProvider'
 import { useScanStore, ownerCheckState } from '../store/scanStore'
 import { useLoadDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
@@ -16,6 +17,7 @@ import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
 export function ShipmentPage() {
+  const modal = useModal()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
@@ -78,7 +80,7 @@ export function ShipmentPage() {
       URL.revokeObjectURL(url)
     } catch (err) {
       console.error('Export XLSX error:', err)
-      window.alert('Не удалось выгрузить XLSX. Попробуйте ещё раз.')
+      modal.alert('Не удалось выгрузить XLSX. Попробуйте ещё раз.', { variant: 'error' })
     } finally {
       setExporting(false)
     }
@@ -123,7 +125,7 @@ export function ShipmentPage() {
     } catch (err) {
       setVerifying(false)
       console.error('Verify error:', err)
-      window.alert('Не удалось запустить проверку марок. Попробуйте ещё раз.')
+      modal.alert('Не удалось запустить проверку марок. Попробуйте ещё раз.', { variant: 'error' })
     }
   }
 

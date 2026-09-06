@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-do
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Icon } from './components/Icon'
 import type { IconName } from './components/Icon'
+import { ModalProvider } from './components/ModalProvider'
 import { ShipmentPage } from './pages/Shipment'
 import { AcceptancePage } from './pages/Acceptance'
 import { WriteoffPage } from './pages/Writeoff'
@@ -73,6 +74,7 @@ function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
+      <ModalProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -161,6 +163,7 @@ export default function App() {
           />
         </Routes>
       </BrowserRouter>
+      </ModalProvider>
     </QueryClientProvider>
   )
 }

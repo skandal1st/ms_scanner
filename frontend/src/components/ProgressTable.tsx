@@ -8,12 +8,14 @@ import {
 import type { OffPlanRow } from '../store/scanStore'
 import { scansApi } from '../api/client'
 import { useResizableHeight } from '../hooks/useResizableHeight'
+import { useModal } from './ModalProvider'
 import { Icon } from './Icon'
 import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
 
 export function ProgressTable() {
+  const modal = useModal()
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
   const overflow = useScanStore((s) => s.stats.overflow)
@@ -29,9 +31,10 @@ export function ProgressTable() {
 
   const handleDeleteOffPlan = async (row: OffPlanRow) => {
     if (!documentId) return
-    const ok = window.confirm(
+    const ok = await modal.confirm(
       `Удалить позицию «${row.product_name}» (${row.scanIds.length} код(ов))? ` +
         `Она не входит в план. Действие необратимо.`,
+      { title: 'Удалить позицию', danger: true, okText: 'Удалить' },
     )
     if (!ok) return
     setDeletingOff(row.gtin)
