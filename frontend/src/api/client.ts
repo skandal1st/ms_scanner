@@ -198,6 +198,8 @@ export interface EdoSyncResult {
   parsed_docs: number
   marks_saved: number
   names_saved?: number
+  downloaded?: number
+  skipped?: number
 }
 
 export interface EdoSyncProgress {
@@ -207,6 +209,8 @@ export interface EdoSyncProgress {
   parsed_docs: number
   marks_saved: number
   names_saved: number
+  downloaded: number
+  skipped: number
   percent: number | null
   backfill: boolean
 }

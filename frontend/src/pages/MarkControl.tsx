@@ -466,7 +466,9 @@ export function MarkControlPage() {
                       {syncProgress?.backfill ? 'Заполнение имён из истории' : 'Синхронизация'}
                       {syncProgress ? <> · страниц: <b>{nf(syncProgress.pages)}</b> · реализаций: <b>{nf(syncProgress.out_realizations)}</b>
                         {syncProgress.backfill
-                          ? <> · имён: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.names_saved)}</b></>
+                          ? <> · докачано: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.downloaded)}</b>
+                              · пропущено: <b>{nf(syncProgress.skipped)}</b>
+                              · имён: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.names_saved)}</b></>
                           : <> · кодов: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncProgress.marks_saved)}</b></>}
                       </> : ' запускается…'}
                     </span>
@@ -488,6 +490,10 @@ export function MarkControlPage() {
                   кодов сохранено: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncResult.marks_saved)}</b>
                   {syncResult.names_saved != null && (
                     <> · имён по GTIN: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncResult.names_saved)}</b></>
+                  )}
+                  {(syncResult.downloaded != null || syncResult.skipped != null) && (
+                    <> · докачано документов: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncResult.downloaded ?? 0)}</b>
+                      · пропущено (уже готовы): <b>{nf(syncResult.skipped ?? 0)}</b></>
                   )}
                 </div>
               )}

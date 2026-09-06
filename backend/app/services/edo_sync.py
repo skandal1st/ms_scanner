@@ -166,6 +166,7 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
     win_end = _parse_dt(date_to) or datetime.now()
 
     pages = docs_seen = out_docs = marks_saved = parsed_docs = names_saved = 0
+    downloaded = skipped = 0
     seen_ext: set[str] = set()
 
     async def _emit(percent: Optional[int]) -> None:
@@ -175,6 +176,7 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             await progress_cb({
                 "pages": pages, "documents": docs_seen, "out_realizations": out_docs,
                 "parsed_docs": parsed_docs, "marks_saved": marks_saved, "names_saved": names_saved,
+                "downloaded": downloaded, "skipped": skipped,
                 "percent": percent, "backfill": backfill_names,
             })
         except Exception:
@@ -228,6 +230,7 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
                         raw = await client.download(auth, link)
                         from app.services.upd_parser import parse_upd_503
                         upd = parse_upd_503(raw)
+                        downloaded += 1
                         if need_marks:
                             codes = [c for p in upd.positions for c in (p.codes or [])]
                             saved = await _save_marks(db, row, user_id, codes)
@@ -243,6 +246,9 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
                             row.names_parsed = True
                     except Exception as exc:
                         logger.warning("edo_sync.parse_failed", ext=ext, error=str(exc))
+            elif first_time:
+                # Документ уже обработан в прошлый прогон — тяжёлую загрузку пропускаем.
+                skipped += 1
         await db.commit()
 
         # Курсор следующей страницы
@@ -262,6 +268,8 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             break
 
     logger.info("edo_sync.done", user_id=str(user_id), pages=pages, docs=docs_seen,
-                out_docs=out_docs, parsed=parsed_docs, marks=marks_saved, names=names_saved)
+                out_docs=out_docs, parsed=parsed_docs, marks=marks_saved, names=names_saved,
+                downloaded=downloaded, skipped=skipped)
     return {"pages": pages, "documents": docs_seen, "out_realizations": out_docs,
-            "parsed_docs": parsed_docs, "marks_saved": marks_saved, "names_saved": names_saved}
+            "parsed_docs": parsed_docs, "marks_saved": marks_saved, "names_saved": names_saved,
+            "downloaded": downloaded, "skipped": skipped}
