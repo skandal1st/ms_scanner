@@ -161,8 +161,14 @@ async def ms_stock_status(
 
 # ── Сверка ЧЗ ↔ МС ────────────────────────────────────────────────────────────
 
-# Агрегат остатка ЧЗ по GTIN (только штучные марки; GTIN пустой — из cis, 14 цифр после AI 01)
-# FULL OUTER JOIN снимка МС по GTIN.
+# Три источника, свёрнутые по GTIN (только штучные марки; GTIN пустой — из cis, 14 цифр после AI 01):
+#   cz  — числится за нами в ЧЗ (cz_owner_marks)
+#   upd — из ЧЗ-остатка отгружено по УПД, но право ещё не перешло (пересечение с edo_marks по
+#         незавершённым исходящим документам) → «в пути к покупателю», НЕ фантом
+#   ms  — учётный остаток МойСклада
+# Расхождение «сколько искать» = qty_cz − qty_upd − qty_ms (не простое ЧЗ−МС): из числящегося за
+# нами в ЧЗ вычитаем и полку (МС), и то, что уже уехало по УПД (зависло на покупателе).
+# upd берёт gtin из той же cz_owner_marks (той же формулой) → qty_upd ⊆ qty_cz по каждому GTIN.
 _RECONCILE_SQL = text("""
 WITH cz AS (
     SELECT gtin_key AS gtin, count(*) AS qty_cz, max(pname) AS product_name
@@ -179,24 +185,48 @@ WITH cz AS (
     WHERE gtin_key IS NOT NULL
     GROUP BY gtin_key
 ),
+upd AS (
+    SELECT gtin_key AS gtin, count(DISTINCT oid) AS qty_upd
+    FROM (
+        SELECT o.id AS oid,
+               CASE
+                 WHEN o.gtin IS NOT NULL AND o.gtin <> '' THEN o.gtin
+                 WHEN o.cis_canonical LIKE '01%' AND length(o.cis_canonical) >= 16
+                   THEN substring(o.cis_canonical FROM 3 FOR 14)
+                 ELSE NULL END AS gtin_key
+        FROM cz_owner_marks o
+        JOIN edo_marks m ON m.user_id = o.user_id AND m.cis_canonical = o.cis_canonical
+        JOIN edo_documents d ON d.id = m.document_id
+        WHERE o.user_id = CAST(:uid AS uuid)
+          AND (o.package_type IS NULL OR o.package_type = 'UNIT')
+          AND d.direction = 'Исходящий'
+          AND coalesce(d.state_code, -1) NOT IN (7, 19, 22, 20, 0)
+    ) x
+    WHERE gtin_key IS NOT NULL
+    GROUP BY gtin_key
+),
 ms AS (
     SELECT gtin, qty AS qty_ms, product_name, folder_id, folder_name
     FROM ms_stock_snapshot WHERE user_id = CAST(:uid AS uuid)
 )
 SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(cz.qty_cz, 0)                  AS qty_cz,
+       coalesce(upd.qty_upd, 0)                AS qty_upd,
        coalesce(ms.qty_ms, 0)                  AS qty_ms,
        coalesce(ms.product_name, cz.product_name) AS product_name,
        ms.folder_id, ms.folder_name,
        (ms.gtin IS NULL)                       AS not_in_ms
-FROM cz FULL OUTER JOIN ms ON cz.gtin = ms.gtin
+FROM cz
+FULL OUTER JOIN ms ON cz.gtin = ms.gtin
+LEFT JOIN upd ON upd.gtin = cz.gtin
 """)
 
 
 async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], diff: str) -> dict:
-    """Сводка расхождений ЧЗ↔МС. Единый источник для JSON и XLSX.
+    """Сводка расхождений ЧЗ↔МС с учётом отгруженного по УПД. Единый источник для JSON и XLSX.
 
-    diff: cz_gt_ms (фантомы ЧЗ>МС) | ms_gt_cz | mismatch | all."""
+    to_search = qty_cz − qty_upd − qty_ms (сколько марок реально искать).
+    diff: to_search (фантомы после УПД) | cz_gt_ms (сырое ЧЗ>МС) | ms_gt_cz | mismatch | all."""
     ms_size = (
         await db.execute(select(func.count()).select_from(MsStockSnapshot).where(MsStockSnapshot.user_id == user_id))
     ).scalar_one()
@@ -208,6 +238,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
     all_rows = []
     for r in res:
         qty_cz = int(r.qty_cz or 0)
+        qty_upd = int(r.qty_upd or 0)
         qty_ms = int(r.qty_ms or 0)
         not_in_ms = bool(r.not_in_ms)
         all_rows.append({
@@ -216,8 +247,10 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
             "folder_id": r.folder_id,
             "folder_name": r.folder_name or ("Нет в МС" if not_in_ms else "Без группы"),
             "qty_cz": qty_cz,
+            "qty_upd": qty_upd,
             "qty_ms": qty_ms,
             "diff": qty_cz - qty_ms,
+            "to_search": qty_cz - qty_upd - qty_ms,
             "not_in_ms": not_in_ms,
         })
 
@@ -228,36 +261,46 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         b = brands.get(key)
         if not b:
             b = {"folder_id": row["folder_id"], "folder_name": row["folder_name"],
-                 "positions": 0, "qty_cz": 0, "qty_ms": 0, "diff": 0}
+                 "positions": 0, "qty_cz": 0, "qty_upd": 0, "qty_ms": 0, "diff": 0, "to_search": 0}
             brands[key] = b
         b["positions"] += 1
         b["qty_cz"] += row["qty_cz"]
+        b["qty_upd"] += row["qty_upd"]
         b["qty_ms"] += row["qty_ms"]
         b["diff"] += row["diff"]
+        b["to_search"] += row["to_search"]
     brand_list = sorted(brands.values(), key=lambda x: (x["folder_name"] or "").lower())
 
     rows = all_rows
     if brand:
         rows = [x for x in rows if (x["folder_id"] == brand or x["folder_name"] == brand)]
-    if diff == "cz_gt_ms":
+    # «Сколько искать» — сумма положительных to_search по срезу бренда, независимо от таба diff.
+    search_total = sum(x["to_search"] for x in rows if x["to_search"] > 0)
+    if diff == "to_search":
+        rows = [x for x in rows if x["to_search"] > 0]
+    elif diff == "cz_gt_ms":
         rows = [x for x in rows if x["diff"] > 0]
     elif diff == "ms_gt_cz":
         rows = [x for x in rows if x["diff"] < 0]
     elif diff == "mismatch":
         rows = [x for x in rows if x["diff"] != 0]
-    rows = sorted(rows, key=lambda x: abs(x["diff"]), reverse=True)
+    sort_key = (lambda x: x["to_search"]) if diff == "to_search" else (lambda x: abs(x["diff"]))
+    rows = sorted(rows, key=sort_key, reverse=True)
 
     return {
         "has_ms_snapshot": ms_size > 0,
         "ms_size": int(ms_size),
         "cz_size": int(cz_size),
+        "search_total": int(search_total),
         "brands": brand_list,
         "rows": rows,
         "totals": {
             "positions": len(rows),
             "qty_cz": sum(x["qty_cz"] for x in rows),
+            "qty_upd": sum(x["qty_upd"] for x in rows),
             "qty_ms": sum(x["qty_ms"] for x in rows),
             "diff": sum(x["diff"] for x in rows),
+            "to_search": sum(x["to_search"] for x in rows),
         },
     }
 
@@ -292,24 +335,24 @@ async def reconcile_xlsx(
 
     ws1 = wb.active
     ws1.title = "По брендам"
-    ws1.append(["Бренд (группа)", "Позиций", "ЧЗ", "МС", "Δ (ЧЗ−МС)"])
+    ws1.append(["Бренд (группа)", "Позиций", "ЧЗ", "УПД (в пути)", "МС", "Δ (ЧЗ−МС)", "Искать (ЧЗ−УПД−МС)"])
     for b in data["brands"]:
-        ws1.append([b["folder_name"], b["positions"], b["qty_cz"], b["qty_ms"], b["diff"]])
+        ws1.append([b["folder_name"], b["positions"], b["qty_cz"], b["qty_upd"], b["qty_ms"], b["diff"], b["to_search"]])
     ws1.column_dimensions["A"].width = 46
-    for col in ("B", "C", "D", "E"):
-        ws1.column_dimensions[col].width = 14
+    for col in ("B", "C", "D", "E", "F", "G"):
+        ws1.column_dimensions[col].width = 15
     ws1.freeze_panes = "A2"
 
     ws2 = wb.create_sheet("Позиции")
-    ws2.append(["Бренд", "Товар", "GTIN", "ЧЗ", "МС", "Δ (ЧЗ−МС)"])
+    ws2.append(["Бренд", "Товар", "GTIN", "ЧЗ", "УПД (в пути)", "МС", "Δ (ЧЗ−МС)", "Искать (ЧЗ−УПД−МС)"])
     for x in data["rows"]:
         ws2.append([x["folder_name"], x["product_name"] or "—", x["gtin"] or "",
-                    x["qty_cz"], x["qty_ms"], x["diff"]])
+                    x["qty_cz"], x["qty_upd"], x["qty_ms"], x["diff"], x["to_search"]])
     ws2.column_dimensions["A"].width = 32
     ws2.column_dimensions["B"].width = 46
     ws2.column_dimensions["C"].width = 20
-    for col in ("D", "E", "F"):
-        ws2.column_dimensions[col].width = 12
+    for col in ("D", "E", "F", "G", "H"):
+        ws2.column_dimensions[col].width = 15
     ws2.freeze_panes = "A2"
 
     buf = io.BytesIO()

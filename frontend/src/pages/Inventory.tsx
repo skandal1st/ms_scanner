@@ -12,7 +12,8 @@ const nf = (n: number) => n.toLocaleString('ru')
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString('ru') : '—')
 
 const DIFF_TABS: { value: ReconcileDiff; label: string }[] = [
-  { value: 'cz_gt_ms', label: 'ЧЗ > МС (фантомы)' },
+  { value: 'to_search', label: 'Искать (ЧЗ−УПД−МС)' },
+  { value: 'cz_gt_ms', label: 'ЧЗ > МС (сырое)' },
   { value: 'ms_gt_cz', label: 'МС > ЧЗ' },
   { value: 'mismatch', label: 'Все расхождения' },
   { value: 'all', label: 'Всё' },
@@ -31,7 +32,7 @@ export function InventoryPage() {
   const [recon, setRecon] = useState<ReconcileResult | null>(null)
   const [reconLoading, setReconLoading] = useState(false)
   const [brand, setBrand] = useState<string>('')
-  const [diff, setDiff] = useState<ReconcileDiff>('cz_gt_ms')
+  const [diff, setDiff] = useState<ReconcileDiff>('to_search')
 
   const [err, setErr] = useState<string | null>(null)
 
@@ -176,9 +177,10 @@ export function InventoryPage() {
         <div>
           <h1 className="mc-head__title">Инвентаризация</h1>
           <p className="mc-head__sub">
-            Сверка учётного остатка МойСклада с остатком марок в Честном Знаке по номенклатуре.
-            Расхождение ЧЗ&nbsp;&gt;&nbsp;МС — кандидаты на вывод из оборота. Инвентаризацию удобно
-            вести по одному бренду (группе товаров).
+            Сверка остатка марок в Честном Знаке с учётным остатком МойСклада по номенклатуре.
+            «Искать» = ЧЗ&nbsp;−&nbsp;УПД&nbsp;−&nbsp;МС: из числящегося за нами в ЧЗ вычитаем и полку
+            (МС), и уже отгруженное по УПД, но не принятое покупателем (в пути) — остаётся то, что
+            реально надо искать. Инвентаризацию удобно вести по одному бренду (группе товаров).
           </p>
         </div>
         {hasMs && (
@@ -309,14 +311,18 @@ export function InventoryPage() {
                 <div className="mc-stat__label">марок в ЧЗ</div>
               </div>
               <div className="mc-stat">
+                <div className="mc-stat__num">{nf(recon.totals.qty_upd)}</div>
+                <div className="mc-stat__label">в пути (УПД)</div>
+              </div>
+              <div className="mc-stat">
                 <div className="mc-stat__num">{nf(recon.totals.qty_ms)}</div>
                 <div className="mc-stat__label">учтено в МС</div>
               </div>
               <div className="mc-stat">
-                <div className={`mc-stat__num${recon.totals.diff !== 0 ? ' mc-stat__num--alert' : ''}`}>
-                  {recon.totals.diff > 0 ? '+' : ''}{nf(recon.totals.diff)}
+                <div className={`mc-stat__num${recon.search_total > 0 ? ' mc-stat__num--alert' : ''}`}>
+                  {nf(recon.search_total)}
                 </div>
-                <div className="mc-stat__label">разница (ЧЗ − МС)</div>
+                <div className="mc-stat__label">нужно искать</div>
               </div>
             </div>
 
@@ -328,7 +334,7 @@ export function InventoryPage() {
                   <option value="">Все бренды</option>
                   {recon.brands.map((b) => (
                     <option key={b.folder_id || b.folder_name} value={b.folder_id || b.folder_name}>
-                      {b.folder_name} · Δ {b.diff > 0 ? '+' : ''}{b.diff}
+                      {b.folder_name} · искать {b.to_search}
                     </option>
                   ))}
                 </select>
@@ -343,8 +349,10 @@ export function InventoryPage() {
                     <th>Товар</th>
                     <th>GTIN</th>
                     <th className="mc-num">ЧЗ</th>
+                    <th className="mc-num">УПД</th>
                     <th className="mc-num">МС</th>
                     <th className="mc-num">Δ</th>
+                    <th className="mc-num">Искать</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -354,14 +362,18 @@ export function InventoryPage() {
                       <td style={{ fontWeight: 500 }}>{r.product_name || '—'}</td>
                       <td className="tabular">{r.gtin || '—'}</td>
                       <td className="mc-num">{nf(r.qty_cz)}</td>
+                      <td className="mc-num">{nf(r.qty_upd)}</td>
                       <td className="mc-num">{nf(r.qty_ms)}</td>
                       <td className={r.diff !== 0 ? 'mc-num--alert' : 'mc-num'}>
                         {r.diff > 0 ? '+' : ''}{nf(r.diff)}
                       </td>
+                      <td className={r.to_search > 0 ? 'mc-num--alert' : 'mc-num'} style={{ fontWeight: 600 }}>
+                        {nf(r.to_search)}
+                      </td>
                     </tr>
                   ))}
                   {recon.rows.length === 0 && (
-                    <tr><td colSpan={6} className="text-muted" style={{ padding: 20 }}>Ничего не найдено по фильтру.</td></tr>
+                    <tr><td colSpan={8} className="text-muted" style={{ padding: 20 }}>Ничего не найдено по фильтру.</td></tr>
                   )}
                 </tbody>
               </table>

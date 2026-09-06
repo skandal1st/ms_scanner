@@ -226,8 +226,10 @@ export interface ReconcileRow {
   folder_id: string | null
   folder_name: string
   qty_cz: number
+  qty_upd: number
   qty_ms: number
   diff: number
+  to_search: number
   not_in_ms?: boolean
 }
 
@@ -236,20 +238,23 @@ export interface ReconcileBrand {
   folder_name: string
   positions: number
   qty_cz: number
+  qty_upd: number
   qty_ms: number
   diff: number
+  to_search: number
 }
 
 export interface ReconcileResult {
   has_ms_snapshot: boolean
   ms_size: number
   cz_size: number
+  search_total: number
   brands: ReconcileBrand[]
   rows: ReconcileRow[]
-  totals: { positions: number; qty_cz: number; qty_ms: number; diff: number }
+  totals: { positions: number; qty_cz: number; qty_upd: number; qty_ms: number; diff: number; to_search: number }
 }
 
-export type ReconcileDiff = 'all' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
+export type ReconcileDiff = 'all' | 'to_search' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
 
 export interface StoresResponse {
   stores: InventoryStore[]
