@@ -299,6 +299,30 @@ export const inventoryApi = {
     api.get<ReconcileResult>('/inventory/reconcile', { params: { brand: brand || undefined, diff, match } }),
   reconcileXlsx: (brand?: string, diff: ReconcileDiff = 'all', match: ReconcileMatch = 'all') =>
     api.get('/inventory/reconcile.xlsx', { params: { brand: brand || undefined, diff, match }, responseType: 'blob' }),
+  matchSuggestions: (brand?: string, limit = 40) =>
+    api.get<InventoryMatchResult>('/inventory/match-suggestions', {
+      params: { brand: brand || undefined, limit },
+    }),
+  linkGtin: (gtin: string, moysklad_product_id: string, product_name?: string | null) =>
+    api.post<{ status: string; gtin: string; barcode_written: boolean }>('/inventory/link-gtin', {
+      gtin,
+      moysklad_product_id,
+      product_name: product_name ?? null,
+    }),
+}
+
+export interface InventoryMatchItem {
+  gtin: string | null
+  name: string | null
+  qty_cz: number
+  confidence: 'high' | 'low' | 'none'
+  best: ProductSearchItem | null
+  suggestions: ProductSearchItem[]
+}
+
+export interface InventoryMatchResult {
+  items: InventoryMatchItem[]
+  total_candidates: number
 }
 
 export const documentsApi = {

@@ -384,3 +384,124 @@ async def reconcile_xlsx(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename=reconcile.xlsx; filename*=UTF-8''{quote(fname)}"},
     )
+
+
+# ── Подбор товара МС по имени (для позиций «есть имя, нет в остатках МС») ──────
+
+@router.get("/match-suggestions")
+async def inventory_match_suggestions(
+    brand: Optional[str] = None,
+    limit: int = 40,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Подсказки сопоставления для позиций «есть имя (из УПД), но нет в остатках МС».
+
+    По имени ищем товар в каталоге МС — он мог быть переименован или у него не привязан
+    этот GTIN. Возвращаем лучший кандидат + все найденные варианты (в т.ч. разные фасовки),
+    чтобы кладовщик мог выбрать правильный вручную. Несопоставленные (без имени) не идут."""
+    import asyncio
+    from app.api.products import (
+        MatchSuggestion, ProductSearchItem, _get_ms_service,
+        _ms_search_progressive, _norm_name,
+    )
+
+    data = await _compute_reconcile(db, current_user.id, brand, "all", "all")
+    cands = [r for r in data["rows"] if r["not_in_ms"] and (r["product_name"] or "").strip()]
+    cands.sort(key=lambda r: -r["qty_cz"])
+    cands = cands[: max(1, min(int(limit or 40), 100))]
+    if not cands:
+        return {"items": [], "total_candidates": 0}
+
+    ms = await _get_ms_service(current_user, db)
+    items = []
+    for r in cands:
+        name = r["product_name"]
+        rows, sig = await _ms_search_progressive(ms, name)
+        suggestions = [ProductSearchItem.model_validate(x) for x in rows]
+        best, confidence = None, "none"
+        if suggestions and sig:
+            sigset = set(sig)
+
+            def _score(pname: str) -> float:
+                pn = _norm_name(pname)
+                return sum(1 for t in sigset if t in pn) / len(sigset)
+
+            top = max(suggestions, key=lambda p: _score(p.name))
+            full_count = sum(1 for p in suggestions if _score(p.name) >= 1.0)
+            if _score(top.name) >= 1.0 and full_count == 1:
+                best, confidence = top, "high"
+            elif _score(top.name) >= 0.6:
+                best, confidence = top, "low"
+        items.append({
+            "gtin": r["gtin"], "name": name, "qty_cz": r["qty_cz"],
+            "confidence": confidence,
+            "best": best.model_dump() if best else None,
+            "suggestions": [s.model_dump() for s in suggestions],
+        })
+        await asyncio.sleep(0.1)  # щадим лимиты МС при десятках GTIN
+    return {"items": items, "total_candidates": len(cands)}
+
+
+class InventoryLinkRequest(BaseModel):
+    gtin: str
+    moysklad_product_id: str
+    product_name: Optional[str] = None
+
+
+@router.post("/link-gtin")
+async def inventory_link_gtin(
+    body: InventoryLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Привязать GTIN к товару МС из инвентаризации: пишем GtinProductMap (+ имя в
+    gtin_name_map) и закрепляем GTIN в штрихкодах карточки МС. Следующий снимок остатка
+    МС этот GTIN уже сопоставит."""
+    from app.api.products import _get_ms_service
+    from app.db.models import GtinNameMap, GtinProductMap
+    from app.services.chestnyznak import normalize_gtin_key
+
+    key = normalize_gtin_key(body.gtin)
+    if not key:
+        raise HTTPException(status_code=400, detail="Некорректный GTIN")
+    pid = (body.moysklad_product_id or "").strip()
+    if not pid or len(pid) > 64:
+        raise HTTPException(status_code=400, detail="Некорректный товар МС")
+    name = (body.product_name or "").strip() or None
+
+    row = (
+        await db.execute(
+            select(GtinProductMap).where(
+                GtinProductMap.user_id == current_user.id, GtinProductMap.gtin == key
+            )
+        )
+    ).scalar_one_or_none()
+    if row:
+        row.product_id = pid
+        row.product_name = name
+    else:
+        db.add(GtinProductMap(user_id=current_user.id, gtin=key, product_id=pid, product_name=name))
+    if name:
+        nm = (
+            await db.execute(
+                select(GtinNameMap).where(
+                    GtinNameMap.user_id == current_user.id, GtinNameMap.gtin == key
+                )
+            )
+        ).scalar_one_or_none()
+        if nm:
+            nm.product_name = name
+        else:
+            db.add(GtinNameMap(user_id=current_user.id, gtin=key, product_name=name, source="match"))
+    await db.commit()
+
+    barcode_written = False
+    try:
+        ms = await _get_ms_service(current_user, db)
+        await ms.add_gtin_barcode_to_product(pid, key)
+        barcode_written = True
+    except Exception as exc:
+        logger.warning("inventory.link_gtin.barcode_failed", gtin=key, error=str(exc))
+    logger.info("inventory.link_gtin.done", gtin=key, product_id=pid, barcode=barcode_written)
+    return {"status": "ok", "gtin": key, "barcode_written": barcode_written}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
+import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import {
   inventoryApi,
   type InventoryStore,
@@ -35,6 +36,7 @@ export function InventoryPage() {
   const [brand, setBrand] = useState<string>('')
   const [diff, setDiff] = useState<ReconcileDiff>('to_search')
   const [match, setMatch] = useState<ReconcileMatch>('all')
+  const [showMatch, setShowMatch] = useState(false)
 
   const [err, setErr] = useState<string | null>(null)
 
@@ -358,7 +360,22 @@ export function InventoryPage() {
                 />
                 Только не сопоставленные ({nf(recon.unmatched_positions)})
               </label>
+              <button className="button" style={{ marginBottom: 4 }} onClick={() => setShowMatch((v) => !v)}
+                title="Найти в каталоге МС товары для позиций с именем из УПД, но без остатка в МС (переименованные / без привязанного GTIN)">
+                <Icon name="check" size={15} />
+                {showMatch ? 'Скрыть подбор' : 'Подобрать в МС по имени'}
+              </button>
             </div>
+
+            {showMatch && (
+              <div style={{ padding: '0 20px' }}>
+                <InventoryMatchPanel
+                  brand={brand}
+                  onClose={() => setShowMatch(false)}
+                  onLinked={() => { /* остаток МС пересоберётся по кнопке «Обновить остаток МС» */ }}
+                />
+              </div>
+            )}
 
             <div className="mc-table-wrap">
               <table className="ui-table">
