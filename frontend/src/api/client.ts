@@ -146,6 +146,8 @@ export const markControlApi = {
   }) => api.post<EdoDocumentsResult>('/mark-control/saby/documents', params),
   edoSync: (date_from: string, date_to?: string, use_cursor = false) =>
     api.post<{ status: string }>('/mark-control/edo/sync', { date_from, date_to, use_cursor }),
+  edoBackfillNames: (days = 365) =>
+    api.post<{ status: string; days: number }>('/mark-control/edo/backfill-names', { days }),
   edoSyncStatus: () =>
     api.get<{ running: boolean; result: EdoSyncResult | null }>('/mark-control/edo/sync/status'),
   edoDocumentsDb: () => api.get<EdoDbDoc[]>('/mark-control/edo/documents-db'),
@@ -193,6 +195,7 @@ export interface EdoSyncResult {
   out_realizations: number
   parsed_docs: number
   marks_saved: number
+  names_saved?: number
 }
 
 export interface EdoDbDoc {

@@ -142,6 +142,16 @@ export function MarkControlPage() {
     }
   }
 
+  const startBackfillNames = async () => {
+    setErr(null)
+    try {
+      await markControlApi.edoBackfillNames(365)
+      setSyncRunning(true)
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось запустить заполнение имён')
+    }
+  }
+
   useEffect(() => {
     if (!syncRunning) return
     const t = setInterval(async () => {
@@ -414,6 +424,10 @@ export function MarkControlPage() {
                 <button className="button button--primary" disabled={syncRunning} onClick={startSync}>
                   {syncRunning ? 'Синхронизация…' : 'Синхронизировать'}
                 </button>
+                <button className="button" disabled={syncRunning} onClick={startBackfillNames}
+                  title="Разово докачать УПД по истории и заполнить наименования по GTIN для «Инвентаризации» (марки не трогает)">
+                  {syncRunning ? 'Выполняется…' : 'Заполнить имена из истории'}
+                </button>
                 <button className="button" onClick={loadDbDocs}>Обновить таблицу</button>
               </div>
               {syncResult && (
@@ -421,6 +435,9 @@ export function MarkControlPage() {
                   Страниц: <b>{nf(syncResult.pages)}</b> · документов: <b>{nf(syncResult.documents)}</b> ·
                   реализаций: <b>{nf(syncResult.out_realizations)}</b> · с марками: <b>{nf(syncResult.parsed_docs)}</b> ·
                   кодов сохранено: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncResult.marks_saved)}</b>
+                  {syncResult.names_saved != null && (
+                    <> · имён по GTIN: <b style={{ color: 'var(--brand-strong)' }}>{nf(syncResult.names_saved)}</b></>
+                  )}
                 </div>
               )}
               {dbDocs.length > 0 && (
