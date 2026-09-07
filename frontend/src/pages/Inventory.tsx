@@ -16,6 +16,12 @@ import {
 
 const nf = (n: number) => n.toLocaleString('ru')
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleString('ru') : '—')
+const fmtEta = (s?: number) => {
+  const t = Math.max(0, Math.round(s || 0))
+  if (t < 60) return `${t} сек`
+  const m = Math.round(t / 60)
+  return `${m} мин`
+}
 
 const DIFF_TABS: { value: ReconcileDiff; label: string }[] = [
   { value: 'to_search', label: 'Искать (ЧЗ−УПД−МС)' },
@@ -438,14 +444,17 @@ export function InventoryPage() {
                     <div style={{ fontSize: 13, color: 'var(--muted, #666)', marginBottom: 4 }}>
                       {enrich.phase === 'collecting'
                         ? 'Национальный каталог: собираем не опознанные позиции…'
+                        : enrich.phase === 'waiting'
+                        ? `Национальный каталог: достигнут лимит запросов, ждём ${fmtEta(enrich.wait_s)} · опознано ${nf(enrich.processed || 0)} / ${nf(enrich.total || 0)}`
                         : `Национальный каталог: опознаём ${nf(enrich.processed || 0)} / ${nf(enrich.total || 0)}` +
-                          (enrich.enriched ? ` · найдено имён: ${nf(enrich.enriched)}` : '')}
+                          (enrich.enriched ? ` · найдено имён: ${nf(enrich.enriched)}` : '') +
+                          (enrich.eta_s ? ` · ~${fmtEta(enrich.eta_s)}` : '')}
                     </div>
                     <div style={{ height: 6, borderRadius: 3, background: 'rgba(0,0,0,.08)', overflow: 'hidden' }}>
                       <div
                         style={{
                           height: '100%',
-                          background: 'var(--accent, #2f6fed)',
+                          background: enrich.phase === 'waiting' ? 'var(--warn, #e0a020)' : 'var(--accent, #2f6fed)',
                           width:
                             enrich.phase === 'collecting' || !enrich.total
                               ? '30%'
@@ -453,6 +462,9 @@ export function InventoryPage() {
                           transition: 'width .4s ease',
                         }}
                       />
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--muted, #999)', marginTop: 3 }}>
+                      Национальный каталог отдаёт ~100 позиций за 5 минут — при большом списке это займёт время. Окно можно закрыть, процесс идёт в фоне.
                     </div>
                   </>
                 ) : enrich.error ? (

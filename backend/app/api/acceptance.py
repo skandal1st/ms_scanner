@@ -652,13 +652,24 @@ async def _enrich_unmatched_names_nk(
     НК не даёт product_id МС (товар остаётся «нужна привязка»), но даёт наименование —
     подставляем его в scan.product_name и строки предпросмотра, чтобы кладовщик видел,
     что за марка, ещё до ручной привязки. Best-effort, cache-first, вне hot-path
-    резолва. Не трогает уже сопоставленные позиции."""
+    резолва. Не трогает уже сопоставленные позиции.
+
+    НК троттлится (~100/5мин), поэтому в hot-path приёмки ограничиваем ожидание бюджетом
+    (``NK_ACCEPTANCE_BUDGET_S``): что успели из кэша/быстрых запросов — применяем, остальное
+    доберётся позже (при следующем импорте, когда GTIN уже в кэше, или в инвентаризации)."""
     if not settings.nk_enabled or not unmatched:
         return
+    import asyncio
     from sqlalchemy import update
     from app.services.nk_store import resolve_cards, display_name
 
-    cards = await resolve_cards(db, sorted(unmatched))
+    try:
+        cards = await asyncio.wait_for(
+            resolve_cards(db, sorted(unmatched)), timeout=settings.NK_ACCEPTANCE_BUDGET_S
+        )
+    except asyncio.TimeoutError:
+        logger.info("acceptance.nk_enrich_budget", document_id=str(document_id))
+        return
     name_map: dict[str, str] = {}
     for gtin, card in cards.items():
         nm = display_name(card)

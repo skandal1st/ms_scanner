@@ -260,12 +260,14 @@ export interface ReconcileRow {
 
 export interface NkEnrichStatus {
   running: boolean
-  phase?: 'collecting' | 'enriching' | 'done' | 'error'
+  phase?: 'collecting' | 'enriching' | 'waiting' | 'done' | 'error'
   total?: number
   processed?: number
   enriched?: number
   done?: boolean
   error?: string
+  wait_s?: number
+  eta_s?: number
 }
 
 export interface ReconcileBrand {

@@ -1693,6 +1693,7 @@ async def _nk_enrich_names_async(user_id: str, brand: str | None):
     from app.db.session import AsyncSessionLocal
     from app.db.models import GtinNameMap
     from app.services.nk_store import resolve_cards, display_name
+    from app.services.national_catalog import cooldown_remaining
 
     lock_key = f"nk_enrich:lock:{user_id}"
     prog_key = f"nk_enrich:progress:{user_id}"
@@ -1723,9 +1724,19 @@ async def _nk_enrich_names_async(user_id: str, brand: str | None):
                 await _progress(phase="enriching", total=0, processed=0, enriched=0, done=True)
                 return
 
-            # Батчами: НК бьётся по одному GTIN, между батчами обновляем прогресс.
-            B = 20
+            # Батчами по одному GTIN (НК ~100/5мин, троттлинг внутри сервиса). Малый
+            # батч → прогресс двигается чаще. Оценка ETA — по интервалу троттлинга.
+            B = 10
+            interval = max(0.0, settings.NK_MIN_INTERVAL_MS / 1000.0)
             for i in range(0, total, B):
+                # Если активен кулдаун 429 — честно показываем «ждём снятия лимита».
+                cd = cooldown_remaining()
+                eta = int((total - processed) * interval + cd)
+                if cd > 3:
+                    await _progress(
+                        phase="waiting", total=total, processed=processed,
+                        enriched=enriched, done=False, wait_s=int(cd), eta_s=eta,
+                    )
                 chunk = gtins[i : i + B]
                 cards = await resolve_cards(db, chunk)
                 for gtin, card in cards.items():
@@ -1742,7 +1753,7 @@ async def _nk_enrich_names_async(user_id: str, brand: str | None):
                 processed = min(i + B, total)
                 await _progress(
                     phase="enriching", total=total, processed=processed,
-                    enriched=enriched, done=False,
+                    enriched=enriched, done=False, eta_s=int((total - processed) * interval),
                 )
         await _progress(
             phase="done", total=total, processed=processed, enriched=enriched, done=True,
