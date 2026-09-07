@@ -1478,16 +1478,22 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
                 if statuses.get(doc_id) in _WRITEOFF_OK:
                     continue
                 try:
-                    status = await cz.get_document_status(item["pg"], doc_id)
+                    info = await cz.get_document_info(item["pg"], doc_id)
                 except CZApiError as e:
                     error = str(e)
                     all_terminal = False
                     continue
+                status = info.get("status") if info else None
                 statuses[doc_id] = status
                 if status in _WRITEOFF_PENDING:
                     all_terminal = False
                 elif status not in _WRITEOFF_OK:
-                    error = f"Документ {doc_id}: статус {status}"
+                    reason = cz.format_document_errors(info) if info else None
+                    error = (
+                        f"Честный Знак отклонил документ: {reason}"
+                        if reason
+                        else f"Документ {doc_id}: статус {status}"
+                    )
             if all_terminal:
                 break
             await asyncio.sleep(4)

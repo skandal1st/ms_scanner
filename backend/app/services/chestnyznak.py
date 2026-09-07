@@ -1358,11 +1358,16 @@ class ChestnyZnakService:
                 f"Честный Знак отклонил документ (HTTP {e.response.status_code}): {e.response.text[:300]}"
             )
 
-    async def get_document_status(self, pg: str, doc_id: str) -> Optional[str]:
-        """GET .../doc/{docId}/info — текущий статус документа (успех = CHECKED_OK)."""
+    async def get_document_info(self, pg: str, doc_id: str) -> Optional[dict]:
+        """GET .../doc/{docId}/info — сведения о документе (успех = status CHECKED_OK).
+
+        ЧЗ v4 отдаёт **массив** ``[{...}]`` (не объект) — берём первый элемент. В нём,
+        помимо ``status``, есть ``errors``/``commonErrors`` с причиной отклонения при
+        CHECKED_NOT_OK — их нужно показать кладовщику.
+        """
         if self.mock:
             await asyncio.sleep(0.2)
-            return "CHECKED_OK"
+            return {"status": "CHECKED_OK"}
 
         from app.services.cz_logger import log_cz_request
 
@@ -1373,6 +1378,8 @@ class ChestnyZnakService:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(url, params={"pg": pg}, headers=headers)
                 body = resp.json() if resp.status_code == 200 else None
+                if isinstance(body, list):
+                    body = body[0] if body else None
                 await log_cz_request(
                     method="GET",
                     url=f"{url}?pg={pg}",
@@ -1382,15 +1389,30 @@ class ChestnyZnakService:
                     duration_ms=int((time.time() - start) * 1000),
                 )
                 resp.raise_for_status()
-                if isinstance(body, dict):
-                    return body.get("status")
-                return None
+                return body if isinstance(body, dict) else None
         except httpx.TimeoutException:
             raise CZApiError("Таймаут запроса к Честный Знак (doc/info)")
         except httpx.HTTPStatusError as e:
             raise CZApiError(
                 f"HTTP {e.response.status_code} при опросе статуса документа: {e.response.text[:300]}"
             )
+
+    @staticmethod
+    def format_document_errors(info: dict) -> Optional[str]:
+        """Человекочитаемая причина отклонения документа из info (errors/commonErrors)."""
+        errs = info.get("errors")
+        if isinstance(errs, list) and errs:
+            return "; ".join(str(e) for e in errs)
+        common = info.get("commonErrors")
+        if isinstance(common, list) and common:
+            msgs = [
+                str(e.get("errorMessage"))
+                for e in common
+                if isinstance(e, dict) and e.get("errorMessage")
+            ]
+            if msgs:
+                return "; ".join(msgs)
+        return None
 
 
 class CZApiError(Exception):
