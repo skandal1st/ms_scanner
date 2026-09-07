@@ -974,7 +974,9 @@ class ChestnyZnakService:
         # определяем через cises/check: он подтверждает годность кода в любой группе,
         # которой тот принадлежит. Без этого fallback годная марка уходит в unresolved
         # при списании («марка не распознана»). См. project_cz_cises_check_vs_info.
-        pg_via_check = await self._resolve_pg_via_check(code, cached_pg)
+        # ВАЖНО: в check шлём ОРИГИНАЛЬНЫЙ cis (с криптохвостом), а не перестроенный
+        # `code` — иначе check вернёт result:false (крипто-хвост участвует в проверке).
+        pg_via_check = await self._resolve_pg_via_check(cis, cached_pg)
         if pg_via_check:
             await set_cached_pg(gtin_key, pg_via_check)
             return (pg_via_check, None)
@@ -982,13 +984,15 @@ class ChestnyZnakService:
         return (None, reason or "Марка не найдена в Честном Знаке")
 
     async def _resolve_pg_via_check(
-        self, code: str, cached_pg: Optional[str] = None
+        self, cis: str, cached_pg: Optional[str] = None
     ) -> Optional[str]:
         """Определить товарную группу кода через cises/check (перебор групп).
 
         В отличие от cises/info, cises/check подтверждает годность кода в обороте даже
         если участник им не владеет. Возвращает pg первой группы, где код признан
         годным (``result:true`` или код отсутствует в списке негодных ``codes``).
+        ``cis`` — ОРИГИНАЛЬНЫЙ отсканированный код (с криптохвостом); режем только
+        скобки логистических AI, как в ``_cises_check_valid``.
         """
         if self.mock or not self.token:
             return None
@@ -1001,7 +1005,7 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
-        stripped = strip_ai_brackets(code)
+        stripped = strip_ai_brackets(cis)
         for pg in self._ordered_groups(cached_pg):
             start = time.time()
             try:
