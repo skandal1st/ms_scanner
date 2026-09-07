@@ -307,3 +307,29 @@ def primary_upd_link(doc: dict) -> Optional[str]:
         if _is_upd(att):
             return (att.get("Файл") or {}).get("Ссылка")
     return None
+
+
+def incoming_upd_link(doc: dict) -> Optional[str]:
+    """Ссылка на ВХОДЯЩЕЕ вложение УПД (ФНС-XML с марками) — для приёмки из ЭДО.
+
+    Зеркалит primary_upd_link, но ищет вложение с Направление=Входящий: это первичный
+    УПД, который прислал поставщик (проверено на проде: тип документа «Поступление»,
+    файл ON_NSCHFDOPPR_…xml, Служебный=Нет). Возвращает Файл.Ссылка или None."""
+    def _is_incoming_upd(att: dict) -> bool:
+        f = att.get("Файл") or {}
+        nm = (att.get("Название") or "").lower()
+        fname = (f.get("Имя") or "") if isinstance(f, dict) else ""
+        if att.get("Направление") != "Входящий" or str(att.get("Служебный")).lower() != "нет":
+            return False
+        if not (isinstance(f, dict) and f.get("Ссылка")):
+            return False
+        return ("nschfdoppr" in fname.lower()) or ("упд" in nm) or ("фактура" in nm)
+
+    for ev in (doc.get("Событие") or []):
+        for att in (ev.get("Вложение") or []):
+            if _is_incoming_upd(att):
+                return (att.get("Файл") or {}).get("Ссылка")
+    for att in (doc.get("Вложение") or []):
+        if _is_incoming_upd(att):
+            return (att.get("Файл") or {}).get("Ссылка")
+    return None

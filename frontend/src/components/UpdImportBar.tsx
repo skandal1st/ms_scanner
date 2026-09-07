@@ -3,6 +3,7 @@ import { acceptanceApi } from '../api/client'
 import type { ProductGroup, MsDocument } from '../api/client'
 import { useMsDocuments } from '../hooks/useDocuments'
 import { BulkMarksModal } from './BulkMarksModal'
+import { EdoImportModal } from './EdoImportModal'
 import { Icon } from './Icon'
 
 interface UpdImportBarProps {
@@ -10,6 +11,8 @@ interface UpdImportBarProps {
   onSubmit: (file: File, productGroup: string, moyskladId: string) => void
   /** Загрузить список марок вручную (альтернатива УПД) с выбранной группой/поступлением. */
   onSubmitMarks: (codes: string[], productGroup: string, moyskladId: string) => Promise<void>
+  /** Принять входящий УПД из ЭДО (Saby) с выбранной группой/поступлением. */
+  onSubmitEdo: (externalId: string, productGroup: string, moyskladId: string) => Promise<void>
 }
 
 /** Отображаемое имя поступления МС: "00123 — ООО Поставщик". */
@@ -23,7 +26,7 @@ function msSupplyLabel(m: MsDocument): string {
  * куда писать КМ) + XML-файл + кнопка «Загрузить». Сам импорт выполняет родитель
  * через onSubmit.
  */
-export function UpdImportBar({ busy, onSubmit, onSubmitMarks }: UpdImportBarProps) {
+export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: UpdImportBarProps) {
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [group, setGroup] = useState('')
   const [moyskladId, setMoyskladId] = useState('')
@@ -31,6 +34,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks }: UpdImportBarProp
   const [debounced, setDebounced] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [marksOpen, setMarksOpen] = useState(false)
+  const [edoOpen, setEdoOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -150,11 +154,33 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks }: UpdImportBarProp
         <Icon name="upload" size={15} /> Список марок
       </button>
 
+      <button
+        type="button"
+        className="button"
+        onClick={() => setEdoOpen(true)}
+        disabled={!group || busy}
+        title={
+          group
+            ? 'Принять входящий УПД из ЭДО (Saby)'
+            : 'Сначала выберите товарную группу'
+        }
+      >
+        <Icon name="acceptance" size={15} /> Из ЭДО
+      </button>
+
       <BulkMarksModal
         open={marksOpen}
         onClose={() => setMarksOpen(false)}
         busy={busy}
         onSubmit={(codes) => onSubmitMarks(codes, group, moyskladId)}
+      />
+
+      <EdoImportModal
+        open={edoOpen}
+        onClose={() => setEdoOpen(false)}
+        groupSelected={!!group}
+        busy={busy}
+        onPick={(externalId) => onSubmitEdo(externalId, group, moyskladId)}
       />
     </div>
   )

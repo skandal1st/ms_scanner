@@ -107,6 +107,36 @@ export function AcceptancePage() {
     }
   }
 
+  // Приёмка из ЭДО: создаёт документ из входящего УПД Saby (бэк скачивает XML).
+  const handleEdoImport = async (
+    externalId: string,
+    group: string,
+    moyskladId: string,
+  ) => {
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    setScans([])
+    setDoc(null)
+    resetSend()
+    try {
+      const { data } = await acceptanceApi.edoImport({
+        external_id: externalId,
+        product_group: group,
+        moysklad_id: moyskladId || undefined,
+      })
+      setDoc(data.document)
+      setResult(data.import_result)
+      const { data: sc } = await scansApi.list(data.document.id)
+      setScans(sc)
+    } catch (e) {
+      setError(errorDetail(e) ?? 'Не удалось принять УПД из ЭДО')
+      throw e
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // Коды маркировки по GTIN — для разворота строки позиции.
   const codesByGtin = useMemo(() => {
     const m = new Map<string, string[]>()
@@ -322,7 +352,12 @@ export function AcceptancePage() {
 
       <div className="acc-scroll">
       <div style={{ padding: '12px 16px 0' }}>
-        <UpdImportBar busy={busy} onSubmit={handleSubmit} onSubmitMarks={handleSubmitMarks} />
+        <UpdImportBar
+          busy={busy}
+          onSubmit={handleSubmit}
+          onSubmitMarks={handleSubmitMarks}
+          onSubmitEdo={handleEdoImport}
+        />
 
         {error && (
           <div className="alert alert--error" style={{ marginTop: 10 }}>

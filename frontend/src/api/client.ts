@@ -551,8 +551,34 @@ export interface ImportUpdResult {
   total_vat: number | null
 }
 
+export interface EdoIncomingDoc {
+  external_id: string
+  number: string | null
+  date: string | null
+  counterparty_name: string | null
+  counterparty_inn: string | null
+  state_name: string | null
+}
+
+export interface EdoImportResult {
+  document: AcceptanceDoc
+  import_result: ImportUpdResult
+}
+
 export const acceptanceApi = {
   productGroups: () => api.get<ProductGroup[]>('/acceptance/product-groups'),
+  /** Входящие УПД (Поступление) из ЭДО Saby, доступные для приёмки. */
+  edoIncoming: (days?: number) =>
+    api.get<EdoIncomingDoc[]>('/acceptance/edo/incoming', {
+      params: days ? { days } : undefined,
+    }),
+  /** Создать приёмку из входящего УПД ЭДО (скачивает XML из Saby и импортирует). */
+  edoImport: (body: {
+    external_id: string
+    product_group: string
+    moysklad_id?: string
+    name?: string
+  }) => api.post<EdoImportResult>('/acceptance/edo/import', body),
   createDoc: (name: string, product_group: string, moysklad_id?: string) =>
     api.post<AcceptanceDoc>('/acceptance/documents', {
       name,
