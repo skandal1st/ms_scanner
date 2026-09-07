@@ -424,7 +424,13 @@ async def inventory_match_suggestions(
     )
 
     data = await _compute_reconcile(db, current_user.id, brand, "all", "all")
-    cands = [r for r in data["rows"] if r["not_in_ms"] and (r["product_name"] or "").strip()]
+    # Кандидаты на подбор: есть имя, нет в остатках МС и ещё НЕ привязан явно
+    # (has_link из gtin_product_map). Уже привязанные из подбора убираем — иначе
+    # висят в списке даже после сопоставления (товар без остатка в снимок не попал).
+    cands = [
+        r for r in data["rows"]
+        if r["not_in_ms"] and not r.get("has_link") and (r["product_name"] or "").strip()
+    ]
     cands.sort(key=lambda r: -r["qty_cz"])
     cands = cands[: max(1, min(int(limit or 40), 100))]
     if not cands:
