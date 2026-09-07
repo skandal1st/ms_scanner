@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
+import { RelinkGtinModal } from '../components/RelinkGtinModal'
 import {
   inventoryApi,
   type InventoryStore,
   type SnapshotStatus,
   type ReconcileResult,
+  type ReconcileRow,
   type ReconcileDiff,
   type ReconcileMatch,
 } from '../api/client'
@@ -39,6 +41,9 @@ export function InventoryPage() {
   const [match, setMatch] = useState<ReconcileMatch>('all')
   const [showMatch, setShowMatch] = useState(false)
   const [showResolve, setShowResolve] = useState(false)
+  // Строка для смены привязки GTIN + подсказка «обновите остаток МС» после успеха.
+  const [relinkRow, setRelinkRow] = useState<ReconcileRow | null>(null)
+  const [relinkedHint, setRelinkedHint] = useState(false)
 
   const [err, setErr] = useState<string | null>(null)
 
@@ -408,6 +413,7 @@ export function InventoryPage() {
                     <th className="mc-num">МС</th>
                     <th className="mc-num">Δ</th>
                     <th className="mc-num">Искать</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -429,10 +435,22 @@ export function InventoryPage() {
                       <td className={r.to_search > 0 ? 'mc-num--alert' : 'mc-num'} style={{ fontWeight: 600 }}>
                         {nf(r.to_search)}
                       </td>
+                      <td className="mc-num">
+                        {r.gtin && (
+                          <button
+                            type="button"
+                            className="button button--sm"
+                            onClick={() => setRelinkRow(r)}
+                            title="Сменить товар, к которому привязан этот GTIN"
+                          >
+                            Сменить
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   ))}
                   {recon.rows.length === 0 && (
-                    <tr><td colSpan={8} className="text-muted" style={{ padding: 20 }}>Ничего не найдено по фильтру.</td></tr>
+                    <tr><td colSpan={9} className="text-muted" style={{ padding: 20 }}>Ничего не найдено по фильтру.</td></tr>
                   )}
                 </tbody>
               </table>
@@ -440,6 +458,30 @@ export function InventoryPage() {
           </>
         )}
       </section>
+
+      {relinkedHint && (
+        <div className="alert alert--ok" style={{ margin: '0 20px 16px' }}>
+          Привязка изменена. Нажмите «Обновить остаток МС», затем «Пересверить» —
+          снимок пересоберётся с новым товаром.
+          <button
+            type="button"
+            className="button button--sm"
+            style={{ marginLeft: 10 }}
+            onClick={() => setRelinkedHint(false)}
+          >
+            Скрыть
+          </button>
+        </div>
+      )}
+
+      <RelinkGtinModal
+        open={relinkRow !== null}
+        gtin={relinkRow?.gtin ?? ''}
+        currentName={relinkRow?.product_name ?? null}
+        oldProductId={relinkRow?.ms_product_id ?? null}
+        onClose={() => setRelinkRow(null)}
+        onRelinked={() => setRelinkedHint(true)}
+      />
     </div>
   )
 }

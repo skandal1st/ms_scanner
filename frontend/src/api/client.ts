@@ -244,6 +244,8 @@ export interface SnapshotStatus {
 export interface ReconcileRow {
   gtin: string | null
   product_name: string | null
+  /** Товар МС, на который сейчас привязан GTIN (из снимка остатка) — для смены привязки. */
+  ms_product_id: string | null
   folder_id: string | null
   folder_name: string
   qty_cz: number
@@ -309,6 +311,22 @@ export const inventoryApi = {
       moysklad_product_id,
       product_name: product_name ?? null,
     }),
+  /** Сменить привязку GTIN на другой товар МС (перенос штрихкода старая→новая карточка). */
+  relinkGtin: (
+    gtin: string,
+    moysklad_product_id: string,
+    product_name?: string | null,
+    old_moysklad_product_id?: string | null,
+  ) =>
+    api.post<{ status: string; gtin: string; barcode_written: boolean; removed_from: string[] }>(
+      '/inventory/relink-gtin',
+      {
+        gtin,
+        moysklad_product_id,
+        product_name: product_name ?? null,
+        old_moysklad_product_id: old_moysklad_product_id ?? null,
+      },
+    ),
   unmatched: (brand?: string, limit = 200, offset = 0) =>
     api.get<InventoryUnmatchedResult>('/inventory/unmatched', {
       params: { brand: brand || undefined, limit, offset },

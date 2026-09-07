@@ -739,6 +739,48 @@ class MoySkladService:
             logger.info("ms.add_barcode.ok", product_id=product_id, gtin=g)
             return True
 
+    async def remove_gtin_barcode_from_product(self, product_id: str, gtin: str) -> bool:
+        """Убрать GTIN из штрихкодов товара МС (при смене привязки — снять со старой
+        карточки). Учитывает ведущий ноль GTIN-14↔EAN-13. Best-effort: при ошибке False,
+        не бросает. Если штрихкода не было — считается успехом (True)."""
+        g = (gtin or "").strip()
+        if not g or not g.isdigit():
+            return False
+        variants = {g}
+        if len(g) == 14 and g.startswith("0"):
+            variants.add(g[1:])
+        if len(g) == 13:
+            variants.add("0" + g)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/entity/product/{product_id}", headers=self.headers
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "ms.remove_barcode.get_failed", status=resp.status_code, product_id=product_id
+                )
+                return False
+            barcodes = resp.json().get("barcodes") or []
+            kept = [
+                bc for bc in barcodes
+                if not (isinstance(bc, dict) and any(str(v) in variants for v in bc.values()))
+            ]
+            if len(kept) == len(barcodes):
+                return True  # такого штрихкода нет — нечего убирать
+            put = await client.put(
+                f"{self.base_url}/entity/product/{product_id}",
+                headers=self.headers,
+                json={"barcodes": kept},
+            )
+            if put.status_code not in (200, 201):
+                logger.warning(
+                    "ms.remove_barcode.put_failed",
+                    status=put.status_code, body=put.text[:300], product_id=product_id,
+                )
+                return False
+            logger.info("ms.remove_barcode.ok", product_id=product_id, gtin=g)
+            return True
+
     # --- Инвентаризация: склады и учётный остаток ---
 
     @staticmethod

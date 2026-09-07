@@ -206,7 +206,7 @@ upd AS (
     GROUP BY gtin_key
 ),
 ms AS (
-    SELECT gtin, qty AS qty_ms, product_name, folder_id, folder_name
+    SELECT gtin, qty AS qty_ms, product_id, product_name, folder_id, folder_name
     FROM ms_stock_snapshot WHERE user_id = CAST(:uid AS uuid)
 ),
 nm AS (
@@ -217,6 +217,7 @@ SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(upd.qty_upd, 0)                AS qty_upd,
        coalesce(ms.qty_ms, 0)                  AS qty_ms,
        coalesce(ms.product_name, cz.product_name, nm.product_name) AS product_name,
+       ms.product_id                           AS ms_product_id,
        ms.folder_id, ms.folder_name,
        (ms.gtin IS NULL)                       AS not_in_ms
 FROM cz
@@ -253,6 +254,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         all_rows.append({
             "gtin": r.gtin,
             "product_name": r.product_name,
+            "ms_product_id": r.ms_product_id,
             "folder_id": r.folder_id,
             "folder_name": r.folder_name or ("Нет в МС" if not_in_ms else "Без группы"),
             "qty_cz": qty_cz,
@@ -566,3 +568,92 @@ async def inventory_link_gtin(
         logger.warning("inventory.link_gtin.barcode_failed", gtin=key, error=str(exc))
     logger.info("inventory.link_gtin.done", gtin=key, product_id=pid, barcode=barcode_written)
     return {"status": "ok", "gtin": key, "barcode_written": barcode_written}
+
+
+class InventoryRelinkRequest(BaseModel):
+    gtin: str
+    moysklad_product_id: str            # новый (правильный) товар
+    product_name: Optional[str] = None
+    old_moysklad_product_id: Optional[str] = None  # текущий (ошибочный), если известен
+
+
+@router.post("/relink-gtin")
+async def inventory_relink_gtin(
+    body: InventoryRelinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сменить привязку GTIN на другой товар МС: обновить GtinProductMap и ПЕРЕНЕСТИ
+    штрихкод — снять GTIN со старой карточки и добавить в новую. Нужно, когда GTIN
+    случайно привязали не к той позиции: без снятия штрихкода со старой карточки снимок
+    остатка МС продолжал бы вешать остаток на неправильный товар."""
+    from app.api.products import _get_ms_service
+    from app.db.models import GtinNameMap, GtinProductMap
+    from app.services.chestnyznak import normalize_gtin_key
+
+    key = normalize_gtin_key(body.gtin)
+    if not key:
+        raise HTTPException(status_code=400, detail="Некорректный GTIN")
+    new_pid = (body.moysklad_product_id or "").strip()
+    if not new_pid or len(new_pid) > 64:
+        raise HTTPException(status_code=400, detail="Некорректный товар МС")
+    name = (body.product_name or "").strip() or None
+
+    row = (
+        await db.execute(
+            select(GtinProductMap).where(
+                GtinProductMap.user_id == current_user.id, GtinProductMap.gtin == key
+            )
+        )
+    ).scalar_one_or_none()
+
+    # Старые карточки, с которых снимаем штрихкод: явно переданная + текущая из карты.
+    old_pids = {
+        p for p in ((body.old_moysklad_product_id or "").strip(), row.product_id if row else None)
+        if p and p != new_pid
+    }
+
+    if row:
+        row.product_id = new_pid
+        row.product_name = name
+    else:
+        db.add(GtinProductMap(user_id=current_user.id, gtin=key, product_id=new_pid, product_name=name))
+    if name:
+        nm = (
+            await db.execute(
+                select(GtinNameMap).where(
+                    GtinNameMap.user_id == current_user.id, GtinNameMap.gtin == key
+                )
+            )
+        ).scalar_one_or_none()
+        if nm:
+            nm.product_name = name
+        else:
+            db.add(GtinNameMap(user_id=current_user.id, gtin=key, product_name=name, source="match"))
+    await db.commit()
+
+    removed_from: list[str] = []
+    barcode_written = False
+    try:
+        ms = await _get_ms_service(current_user, db)
+        # Сначала снимаем штрихкод со старых карточек — иначе МС не даст добавить в новую
+        # (один штрихкод на двух товарах запрещён).
+        for pid in old_pids:
+            try:
+                if await ms.remove_gtin_barcode_from_product(pid, key):
+                    removed_from.append(pid)
+            except Exception as exc:
+                logger.warning("inventory.relink.remove_failed", gtin=key, product_id=pid, error=str(exc))
+        barcode_written = await ms.add_gtin_barcode_to_product(new_pid, key)
+    except Exception as exc:
+        logger.warning("inventory.relink.ms_failed", gtin=key, error=str(exc))
+    logger.info(
+        "inventory.relink.done",
+        gtin=key, new_product_id=new_pid, removed_from=removed_from, barcode=barcode_written,
+    )
+    return {
+        "status": "ok",
+        "gtin": key,
+        "barcode_written": barcode_written,
+        "removed_from": removed_from,
+    }
