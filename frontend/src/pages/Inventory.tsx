@@ -534,6 +534,18 @@ export function InventoryPage() {
                             НК
                           </span>
                         )}
+                        {r.has_link && r.not_in_ms && (
+                          <span
+                            title="GTIN привязан к товару МС, но у товара нет остатка в снимке — сопоставлено по привязке"
+                            style={{
+                              marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: .3,
+                              padding: '1px 5px', borderRadius: 4, verticalAlign: 'middle',
+                              background: 'rgba(30,125,52,.12)', color: 'var(--ok, #1e7d34)',
+                            }}
+                          >
+                            привязано
+                          </span>
+                        )}
                       </td>
                       <td className="tabular">{r.gtin || '—'}</td>
                       <td className="mc-num">{nf(r.qty_cz)}</td>

@@ -8,8 +8,9 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration
+from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, GtinNameMap
 from app.api.deps import get_current_user
+from app.services.gtin_product_store import get_gtin_product
 from cryptography.fernet import InvalidToken
 
 from app.core.config import settings
@@ -210,12 +211,39 @@ async def _create_scan_record(
     else:
         local_status = ScanStatus.pending  # короб «целиком» → verify_box_task
 
+    # Опознание товара по базе знаний GTIN→товар (наполняется при отгрузках/приёмках):
+    # подставляем запомненные товар МС и наименование СРАЗУ при скане, локально, без ЧЗ/МС —
+    # кладовщик видит наименование и прогресс по плану мгновенно, не дожидаясь пакетной
+    # проверки. Пакетная «Проверить марки» затем подтвердит код в ЧЗ и при необходимости
+    # уточнит связку. Только для обычных КМ (короб опознаётся своей задачей).
+    resolved_pid = moysklad_product_id
+    if not is_box and gtin:
+        if resolved_pid is None:
+            known = await get_gtin_product(db, current_user_id, gtin)
+            if known:
+                resolved_pid, kb_name = known
+                if initial_name is None:
+                    initial_name = kb_name
+        if initial_name is None:
+            # Фолбэк имени: база наименований (УПД / Национальный каталог), даже когда
+            # товар МС по GTIN ещё не привязан — хоть что-то показать кладовщику.
+            nm_name = (
+                await db.execute(
+                    select(GtinNameMap.product_name).where(
+                        GtinNameMap.user_id == current_user_id,
+                        GtinNameMap.gtin == gtin,
+                    )
+                )
+            ).scalar_one_or_none()
+            if nm_name:
+                initial_name = (nm_name or "").strip() or None
+
     scan = Scan(
         document_id=document_id,
         code=code,
         gtin=gtin,
         serial=local_serial,
-        moysklad_product_id=moysklad_product_id,
+        moysklad_product_id=resolved_pid,
         status=local_status,
         product_name=initial_name,
         error_message=local_error,

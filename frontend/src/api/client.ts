@@ -255,6 +255,8 @@ export interface ReconcileRow {
   to_search: number
   not_in_ms?: boolean
   unmatched?: boolean
+  /** Есть явная привязка GTIN→товар МС (gtin_product_map), даже если товара нет в снимке остатка. */
+  has_link?: boolean
   name_via_nk?: boolean
 }
 

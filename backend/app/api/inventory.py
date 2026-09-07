@@ -211,21 +211,30 @@ ms AS (
 ),
 nm AS (
     SELECT gtin, product_name, source FROM gtin_name_map WHERE user_id = CAST(:uid AS uuid)
+),
+-- Явные привязки GTIN→товар МС (из инвентаризации/отгрузки). Не зависят от остатка МС:
+-- товар с нулевым остатком в снимок ms_stock_snapshot не попадает, но привязка тут остаётся.
+gpm AS (
+    SELECT gtin, product_id, product_name FROM gtin_product_map WHERE user_id = CAST(:uid AS uuid)
 )
 SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(cz.qty_cz, 0)                  AS qty_cz,
        coalesce(upd.qty_upd, 0)                AS qty_upd,
        coalesce(ms.qty_ms, 0)                  AS qty_ms,
-       coalesce(ms.product_name, cz.product_name, nm.product_name) AS product_name,
-       ms.product_id                           AS ms_product_id,
+       coalesce(ms.product_name, cz.product_name, gpm.product_name, nm.product_name) AS product_name,
+       coalesce(ms.product_id, gpm.product_id) AS ms_product_id,
        ms.folder_id, ms.folder_name,
        (ms.gtin IS NULL)                       AS not_in_ms,
+       -- есть явная привязка GTIN→товар МС (даже если товар без остатка в снимке)
+       (gpm.product_id IS NOT NULL)            AS has_link,
        -- имя показано из Национального каталога (не из МС/ЧЗ) — для пометки в UI
-       (ms.product_name IS NULL AND cz.product_name IS NULL AND nm.source = 'nk') AS name_via_nk
+       (ms.product_name IS NULL AND cz.product_name IS NULL AND gpm.product_id IS NULL
+        AND nm.source = 'nk')                  AS name_via_nk
 FROM cz
 FULL OUTER JOIN ms ON cz.gtin = ms.gtin
 LEFT JOIN upd ON upd.gtin = cz.gtin
 LEFT JOIN nm ON nm.gtin = coalesce(cz.gtin, ms.gtin)
+LEFT JOIN gpm ON gpm.gtin = coalesce(cz.gtin, ms.gtin)
 """)
 
 
@@ -250,9 +259,11 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         qty_upd = int(r.qty_upd or 0)
         qty_ms = int(r.qty_ms or 0)
         not_in_ms = bool(r.not_in_ms)
-        # «Не сопоставлен» — нет ни в остатках МС, ни в базе имён из УПД (product_name пуст).
-        # Такую позицию мы вообще ничем не опознали: не привязать к товару, не назвать.
-        unmatched = not_in_ms and not (r.product_name and str(r.product_name).strip())
+        has_link = bool(getattr(r, "has_link", False))
+        # «Не сопоставлен» — нет в остатках МС, нет явной привязки GTIN→товар и нет имени.
+        # Явная привязка (gtin_product_map) опознаёт позицию даже при нулевом остатке в МС,
+        # когда товара нет в снимке ms_stock_snapshot, — поэтому учитываем её отдельно.
+        unmatched = not_in_ms and not has_link and not (r.product_name and str(r.product_name).strip())
         all_rows.append({
             "gtin": r.gtin,
             "product_name": r.product_name,
@@ -266,6 +277,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
             "to_search": qty_cz - qty_upd - qty_ms,
             "not_in_ms": not_in_ms,
             "unmatched": unmatched,
+            "has_link": has_link,
             "name_via_nk": bool(r.name_via_nk),
         })
 
