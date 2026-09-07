@@ -970,75 +970,24 @@ class ChestnyZnakService:
                 reason = str(msg)
 
         # cises/info видит только коды, которыми участник ВЛАДЕЕТ/оперирует — для входящих
-        # (чужих) марок отвечает 404, хотя код в обороте и годен. Тогда товарную группу
-        # определяем через cises/check: он подтверждает годность кода в любой группе,
-        # которой тот принадлежит. Без этого fallback годная марка уходит в unresolved
-        # при списании («марка не распознана»). См. project_cz_cises_check_vs_info.
-        # ВАЖНО: в check шлём ОРИГИНАЛЬНЫЙ cis (с криптохвостом), а не перестроенный
-        # `code` — иначе check вернёт result:false (крипто-хвост участвует в проверке).
-        pg_via_check = await self._resolve_pg_via_check(cis, cached_pg)
-        if pg_via_check:
-            await set_cached_pg(gtin_key, pg_via_check)
-            return (pg_via_check, None)
-
+        # (чужих) марок отвечает 404, хотя код в обороте. Товарную группу в этом случае
+        # НЕЛЬЗЯ брать из cises/check: он не привязан к группе (возвращает result:true в
+        # ЛЮБОЙ pg), поэтому дал бы случайную (например otp-табак ушёл бы в tobacco).
+        # Берём группу из авторитетной карты GTIN→pg (cached_pg: ручная правка/МС
+        # trackingType). Если карты нет — оставляем без группы, но при годном коде даём
+        # понятную причину «укажите группу вручную», а не «марка не найдена».
+        if cached_pg:
+            return (cached_pg, None)
+        if await self._is_valid_via_check(cis):
+            return (None, "Не определена товарная группа — укажите её вручную")
         return (None, reason or "Марка не найдена в Честном Знаке")
 
-    async def _resolve_pg_via_check(
-        self, cis: str, cached_pg: Optional[str] = None
-    ) -> Optional[str]:
-        """Определить товарную группу кода через cises/check (перебор групп).
-
-        В отличие от cises/info, cises/check подтверждает годность кода в обороте даже
-        если участник им не владеет. Возвращает pg первой группы, где код признан
-        годным (``result:true`` или код отсутствует в списке негодных ``codes``).
-        ``cis`` — ОРИГИНАЛЬНЫЙ отсканированный код (с криптохвостом); режем только
-        скобки логистических AI, как в ``_cises_check_valid``.
-        """
+    async def _is_valid_via_check(self, cis: str) -> bool:
+        """Годен ли код в обороте по cises/check (перебор групп). Группу НЕ определяет."""
         if self.mock or not self.token:
-            return None
-
-        from app.services.cz_logger import log_cz_request
-
-        check_url = f"{self.base_url}/api/v3/true-api/cises/check"
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "accept": "application/json",
-            "Content-Type": "application/json",
-        }
-        stripped = strip_ai_brackets(cis)
-        for pg in self._ordered_groups(cached_pg):
-            start = time.time()
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    resp = await client.post(
-                        check_url,
-                        params={"pg": pg},
-                        headers=headers,
-                        json={"codes": [stripped]},
-                    )
-                    try:
-                        body = resp.json()
-                    except Exception:
-                        body = None
-                    await log_cz_request(
-                        method="POST",
-                        url=f"{check_url}?pg={pg}",
-                        request_body={"count": 1},
-                        response_status=resp.status_code,
-                        response_body=body if isinstance(body, dict) else None,
-                        duration_ms=int((time.time() - start) * 1000),
-                    )
-            except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                logger.warning("cz.resolve_pg_check.http_error", pg=pg, error=str(exc))
-                continue
-            if resp.status_code != 200 or not isinstance(body, dict):
-                continue
-            if body.get("result") is True:
-                return pg
-            invalid = body.get("codes")
-            if isinstance(invalid, list) and stripped not in set(invalid):
-                return pg
-        return None
+            return False
+        valid, _ = await self._cises_check_valid([cis])
+        return bool(valid)
 
     async def check_codes(self, codes: list[str]) -> list["CisCheck"]:
         """Пробить список КМ через True API cises/info батчами по товарным группам.

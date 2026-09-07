@@ -23,8 +23,10 @@ from app.services.chestnyznak import (
     CZApiError,
     WRITEOFF_REASONS,
     CZ_PRODUCT_GROUP_CATALOG,
+    CZ_PRODUCT_GROUP_CODES,
     normalize_product_groups,
 )
+from app.services.gtin_cz_group import set_manual_group
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
 
@@ -371,6 +373,31 @@ async def _load_owned_document(db: AsyncSession, document_id: UUID, user_id) -> 
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return doc
+
+
+class GtinGroupRequest(BaseModel):
+    gtin: str
+    product_group: str
+
+
+@router.post("/cz/gtin-group")
+async def cz_set_gtin_group(
+    body: GtinGroupRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Ручная привязка товарной группы ЧЗ к GTIN (перекрывает автоопределение из МС).
+
+    Нужна, когда карточка МС содержит неверный trackingType (напр. кальянный табак с
+    типом TOBACCO вместо OTP) — иначе марка ушла бы в документ ЧЗ под неверной группой.
+    """
+    pg = body.product_group.strip().lower()
+    if pg not in CZ_PRODUCT_GROUP_CODES:
+        raise HTTPException(status_code=400, detail="Неизвестная товарная группа")
+    if not body.gtin.strip():
+        raise HTTPException(status_code=400, detail="Не указан GTIN")
+    await set_manual_group(db, body.gtin, pg)
+    return {"gtin": body.gtin, "product_group": pg}
 
 
 @router.post("/cz/writeoff/prepare", response_model=WriteoffPrepareResponse)

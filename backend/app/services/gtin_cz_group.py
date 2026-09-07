@@ -31,16 +31,42 @@ async def _get_cached_from_db(db, gtins: list[str]) -> dict[str, str]:
     return {g: pg for g, pg in rows.all()}
 
 
+# Приоритет источников: ручная правка кладовщика > подтверждение ЧЗ > карточка МС.
+# Автосидинг из МС (ms) НЕ должен затирать ручную правку (manual) — иначе ошибочный
+# trackingType в карточке вернул бы неверную группу после исправления.
+_SOURCE_RANK = {"ms": 0, "cz": 1, "manual": 2}
+
+
 async def _store_pg(db, gtin: str, pg: str, source: str = "ms") -> None:
-    """Upsert GTIN → pg (глобальная таблица, ON CONFLICT по PK gtin)."""
-    stmt = pg_insert(GtinCzGroup).values(
-        gtin=gtin, product_group=pg, source=source
-    )
+    """Upsert GTIN → pg (глобальная таблица, ON CONFLICT по PK gtin).
+
+    Перезаписываем только если новый источник не ниже по приоритету существующего
+    (см. _SOURCE_RANK): ms-сидинг не перетирает manual/cz.
+    """
+    new_rank = _SOURCE_RANK.get(source, 0)
+    stmt = pg_insert(GtinCzGroup).values(gtin=gtin, product_group=pg, source=source)
     stmt = stmt.on_conflict_do_update(
         index_elements=["gtin"],
         set_={"product_group": pg, "source": source, "updated_at": stmt.excluded.updated_at},
+        where=GtinCzGroup.source.in_(
+            [s for s, r in _SOURCE_RANK.items() if r <= new_rank]
+        ),
     )
     await db.execute(stmt)
+
+
+async def set_manual_group(db, gtin: str, pg: str) -> None:
+    """Ручная правка товарной группы GTIN кладовщиком (перекрывает МС-сидинг).
+
+    Пишет source=manual в свою таблицу и в Redis-кэш порядка групп, коммитит.
+    """
+    key = normalize_gtin_key(gtin)
+    if not key or not pg:
+        return
+    await _store_pg(db, key, pg, source="manual")
+    await set_cached_pg(key, pg)
+    await db.commit()
+    logger.info("gtin_cz_group.manual_set", gtin=key, pg=pg)
 
 
 async def resolve_pgs_for_gtins(db, user_id, gtins: list[str]) -> set[str]:
