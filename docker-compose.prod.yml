@@ -54,6 +54,8 @@ services:
       CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
       CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
       CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
+      NK_ENABLED: ${NK_ENABLED:-false}
+      NK_API_KEY: ${NK_API_KEY:-}
       MONITORING_ENABLED: ${MONITORING_ENABLED:-false}
       MONITORING_URL: ${MONITORING_URL:-}
       MONITORING_KEY: ${MONITORING_KEY:-}
@@ -88,6 +90,8 @@ services:
       CZ_MOCK_MODE: ${CZ_MOCK_MODE:-false}
       CZ_API_BASE_URL: ${CZ_API_BASE_URL:-https://markirovka.crpt.ru}
       CZ_AUTH_METHOD: ${CZ_AUTH_METHOD:-cprob_plugin}
+      NK_ENABLED: ${NK_ENABLED:-false}
+      NK_API_KEY: ${NK_API_KEY:-}
       MONITORING_ENABLED: ${MONITORING_ENABLED:-false}
       MONITORING_URL: ${MONITORING_URL:-}
       MONITORING_KEY: ${MONITORING_KEY:-}
