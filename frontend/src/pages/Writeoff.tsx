@@ -15,6 +15,7 @@ import {
   documentsApi,
   integrationsApi,
   WRITEOFF_REASONS,
+  CZ_PRODUCT_GROUPS,
   type Document,
   type UnresolvedCode,
 } from '../api/client'
@@ -41,6 +42,9 @@ export function WriteoffPage() {
   const [reason, setReason] = useState(WRITEOFF_REASONS[0].value)
   const [basisNumber, setBasisNumber] = useState('')
   const [basisDate, setBasisDate] = useState('')
+  // Ручное переопределение товарной группы ЧЗ ('' = определять автоматически по МС/ЧЗ).
+  // Нужно, когда карточка МС содержит неверный trackingType (кальянный табак как TOBACCO).
+  const [groupOverride, setGroupOverride] = useState('')
   const [certs, setCerts] = useState<CzCertificate[]>([])
   const [thumbprint, setThumbprint] = useState('')
   const [phase, setPhase] = useState<Phase>('idle')
@@ -162,6 +166,16 @@ export function WriteoffPage() {
 
     try {
       setPhase('signing')
+
+      // Если кладовщик вручную указал товарную группу — привязываем её ко всем GTIN
+      // документа (перекрывает неверное автоопределение из МС) и запоминаем на будущее.
+      if (groupOverride) {
+        const gtins = Array.from(
+          new Set(scans.map((s) => s.gtin).filter((g): g is string => !!g)),
+        )
+        await Promise.all(gtins.map((g) => czApi.setGtinGroup(g, groupOverride)))
+      }
+
       const { data: prep } = await czApi.writeoffPrepare({
         document_id: document.id,
         reason,
@@ -266,7 +280,20 @@ export function WriteoffPage() {
           <StatsPanel />
           <ProgressTable />
 
-          <div className="section" style={{ marginTop: 12 }}>
+          <div
+            className="section"
+            style={{
+              marginTop: 12,
+              padding: 12,
+              border: '1px solid var(--bd, #d0d0d0)',
+              borderRadius: 'var(--r-md, 8px)',
+              background: 'var(--panel-bg, #fafafa)',
+            }}
+          >
+            <div className="h3" style={{ margin: '0 0 8px' }}>
+              Параметры списания
+            </div>
+
             <label className="field-label">Причина списания</label>
             <select
               className="ui-select ui-input--block"
@@ -276,6 +303,23 @@ export function WriteoffPage() {
               {WRITEOFF_REASONS.map((r) => (
                 <option key={r.value} value={r.value}>
                   {r.label}
+                </option>
+              ))}
+            </select>
+
+            <label className="field-label" style={{ marginTop: 8 }}>
+              Товарная группа
+            </label>
+            <select
+              className="ui-select ui-input--block"
+              value={groupOverride}
+              onChange={(e) => setGroupOverride(e.target.value)}
+              title="Укажите вручную, если группа определилась неверно (напр. кальянный табак как «Табачная продукция»)"
+            >
+              <option value="">Определять автоматически</option>
+              {CZ_PRODUCT_GROUPS.map((g) => (
+                <option key={g.value} value={g.value}>
+                  {g.label}
                 </option>
               ))}
             </select>

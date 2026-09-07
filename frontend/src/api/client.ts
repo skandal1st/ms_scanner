@@ -641,8 +641,31 @@ export const WRITEOFF_REASONS: { value: string; label: string }[] = [
   { value: 'non_commercial', label: 'Списание на общехоз. некоммерческую деятельность' },
 ]
 
+// Справочник товарных групп ЧЗ (для ручной привязки GTIN, когда автоопределение из МС неверно).
+export const CZ_PRODUCT_GROUPS: { value: string; label: string }[] = [
+  { value: 'milk', label: 'Молочная продукция' },
+  { value: 'water', label: 'Упакованная вода' },
+  { value: 'beer', label: 'Пиво и слабоалкогольные напитки' },
+  { value: 'softdrinks', label: 'Безалкогольные напитки и соки' },
+  { value: 'tobacco', label: 'Табачная продукция' },
+  { value: 'otp', label: 'Альтернативная табачная продукция' },
+  { value: 'ncp', label: 'Никотиносодержащая продукция' },
+  { value: 'shoes', label: 'Обувные товары' },
+  { value: 'lp', label: 'Товары лёгкой промышленности' },
+  { value: 'perfumery', label: 'Духи и туалетная вода' },
+  { value: 'tires', label: 'Шины и покрышки' },
+  { value: 'photo', label: 'Фотокамеры и лампы-вспышки' },
+  { value: 'bio', label: 'БАД к пище' },
+  { value: 'antiseptic', label: 'Антисептики' },
+]
+
 export const czApi = {
   challenge: () => api.post<CzChallenge>('/integrations/cz/challenge'),
+  setGtinGroup: (gtin: string, product_group: string) =>
+    api.post<{ gtin: string; product_group: string }>('/integrations/cz/gtin-group', {
+      gtin,
+      product_group,
+    }),
   login: (body: {
     uuid: string
     signed_data: string
