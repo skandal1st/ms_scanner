@@ -1676,6 +1676,93 @@ async def _ms_stock_refresh_async(user_id: str):
             pass
 
 
+@celery_app.task(name="nk_enrich_names")
+def nk_enrich_names_task(user_id: str, brand: str | None = None):
+    """Опознать «не опознанные» позиции инвентаризации через Национальный каталог.
+
+    Тянет карточки НК по GTIN (cache-first, батчами) и пишет найденные имена в
+    gtin_name_map (source=nk). Прогресс — в Redis, фронт опрашивает статус."""
+    _run(_nk_enrich_names_async(user_id, brand))
+
+
+async def _nk_enrich_names_async(user_id: str, brand: str | None):
+    import json as _json
+    import redis.asyncio as aioredis
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.core.config import settings
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import GtinNameMap
+    from app.services.nk_store import resolve_cards, display_name
+
+    lock_key = f"nk_enrich:lock:{user_id}"
+    prog_key = f"nk_enrich:progress:{user_id}"
+    r = aioredis.from_url(settings.REDIS_URL)
+    if not await r.set(lock_key, "1", nx=True, ex=3600):
+        await r.aclose()
+        logger.info("nk_enrich.already_running", user_id=user_id)
+        return
+
+    async def _progress(**kw):
+        try:
+            await r.set(prog_key, _json.dumps(kw), ex=3600)
+        except Exception:
+            pass
+
+    enriched = 0
+    processed = 0
+    try:
+        from app.api.inventory import _compute_reconcile
+
+        await _progress(phase="collecting", total=0, processed=0, enriched=0, done=False)
+        async with AsyncSessionLocal() as db:
+            data = await _compute_reconcile(db, user_id, brand or None, "all", "unmatched")
+            gtins = [row["gtin"] for row in data["rows"] if row.get("gtin")]
+            total = len(gtins)
+            await _progress(phase="enriching", total=total, processed=0, enriched=0, done=False)
+            if not total:
+                await _progress(phase="enriching", total=0, processed=0, enriched=0, done=True)
+                return
+
+            # Батчами: НК бьётся по одному GTIN, между батчами обновляем прогресс.
+            B = 20
+            for i in range(0, total, B):
+                chunk = gtins[i : i + B]
+                cards = await resolve_cards(db, chunk)
+                for gtin, card in cards.items():
+                    name = display_name(card)
+                    if not name:
+                        continue
+                    stmt = pg_insert(GtinNameMap).values(
+                        user_id=user_id, gtin=gtin, product_name=name[:500], source="nk"
+                    )
+                    stmt = stmt.on_conflict_do_nothing(constraint="ix_gtin_name_map_user_gtin")
+                    res = await db.execute(stmt)
+                    enriched += res.rowcount or 0
+                await db.commit()
+                processed = min(i + B, total)
+                await _progress(
+                    phase="enriching", total=total, processed=processed,
+                    enriched=enriched, done=False,
+                )
+        await _progress(
+            phase="done", total=total, processed=processed, enriched=enriched, done=True,
+        )
+        logger.info(
+            "nk_enrich.done", user_id=user_id, total=total, enriched=enriched,
+        )
+    except Exception as exc:
+        logger.error("nk_enrich.error", user_id=user_id, error=str(exc))
+        await _progress(
+            phase="error", processed=processed, enriched=enriched, done=True,
+            error="Ошибка опознания через Национальный каталог",
+        )
+    finally:
+        try:
+            await r.delete(lock_key); await r.aclose()
+        except Exception:
+            pass
+
+
 @celery_app.task(name="edo_auto_sync_all")
 def edo_auto_sync_all_task():
     """Beat: инкрементальный добор ЭДО для всех клиентов с подключённым Saby (по курсору)."""

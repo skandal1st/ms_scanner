@@ -18,7 +18,7 @@ from app.core.config import settings
 from app.core.logging import logger
 from app.db.models import NkProduct
 from app.services.chestnyznak import normalize_gtin_key
-from app.services.national_catalog import NkCard, lookup_products
+from app.services.national_catalog import NkCard, lookup_products_detailed
 
 
 def _card_from_row(row: NkProduct) -> Optional[NkCard]:
@@ -69,11 +69,13 @@ async def resolve_cards(db, gtins: list[str]) -> dict[str, NkCard]:
             missing.append(k)  # негатив протух — перепроверяем
 
     if missing and settings.nk_enabled:
-        fresh = await lookup_products(missing)
+        fresh, not_found = await lookup_products_detailed(missing)
         result.update(fresh)
-        # Апсертим и позитивы, и негативы (found=False) — чтобы не долбить НК повторно.
-        for k in missing:
-            card = fresh.get(k)
+        # Кэшируем ТОЛЬКО определённые ответы: позитивы (found) и точные негативы
+        # (not_found = HTTP 404). GTIN с ошибкой (429/5xx/сеть) не апсертим — иначе
+        # осели бы промахами и не перепроверялись; они добираются в следующий раз.
+        to_upsert = [(k, fresh.get(k)) for k in missing if (k in fresh or k in not_found)]
+        for k, card in to_upsert:
             values = dict(
                 gtin=k,
                 found=card is not None,

@@ -210,7 +210,7 @@ ms AS (
     FROM ms_stock_snapshot WHERE user_id = CAST(:uid AS uuid)
 ),
 nm AS (
-    SELECT gtin, product_name FROM gtin_name_map WHERE user_id = CAST(:uid AS uuid)
+    SELECT gtin, product_name, source FROM gtin_name_map WHERE user_id = CAST(:uid AS uuid)
 )
 SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(cz.qty_cz, 0)                  AS qty_cz,
@@ -219,7 +219,9 @@ SELECT coalesce(cz.gtin, ms.gtin)              AS gtin,
        coalesce(ms.product_name, cz.product_name, nm.product_name) AS product_name,
        ms.product_id                           AS ms_product_id,
        ms.folder_id, ms.folder_name,
-       (ms.gtin IS NULL)                       AS not_in_ms
+       (ms.gtin IS NULL)                       AS not_in_ms,
+       -- имя показано из Национального каталога (не из МС/ЧЗ) — для пометки в UI
+       (ms.product_name IS NULL AND cz.product_name IS NULL AND nm.source = 'nk') AS name_via_nk
 FROM cz
 FULL OUTER JOIN ms ON cz.gtin = ms.gtin
 LEFT JOIN upd ON upd.gtin = cz.gtin
@@ -264,6 +266,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
             "to_search": qty_cz - qty_upd - qty_ms,
             "not_in_ms": not_in_ms,
             "unmatched": unmatched,
+            "name_via_nk": bool(r.name_via_nk),
         })
 
     # Бренды (для фильтра) — из полного набора, до среза.
@@ -467,51 +470,54 @@ async def inventory_unmatched(
     }
 
 
+def _nk_enrich_keys(user_id) -> tuple[str, str]:
+    return f"nk_enrich:lock:{user_id}", f"nk_enrich:progress:{user_id}"
+
+
 @router.post("/enrich-names")
 async def inventory_enrich_names(
     brand: Optional[str] = None,
-    limit: int = 500,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Дозаполнить имена «не опознанных» позиций из Национального каталога (НК ЦРПТ).
+    """Запустить фоновое опознание «не опознанных» позиций через Национальный каталог.
 
-    Берём GTIN, у которых нет имени ни в МС, ни в ЧЗ, ни в базе имён, тянем карточку
-    НК по GTIN (cache-first) и пишем найденное имя в gtin_name_map (source=nk) — не
-    затирая ручные/сопоставленные имена (ON CONFLICT DO NOTHING). Следующая сверка
-    подхватит имена, и позиции перестанут быть «не сопоставленными».
-    """
+    Долгий процесс (НК отдаёт по одному GTIN за запрос с лимитами), поэтому — Celery-
+    задача с прогрессом в Redis; фронт опрашивает /enrich-names/status. Задача тянет
+    карточки НК по GTIN и пишет найденные имена в gtin_name_map (source=nk), не затирая
+    ручные/сопоставленные. Следующая сверка подхватит имена."""
     if not settings.nk_enabled:
         raise HTTPException(status_code=400, detail="Национальный каталог не подключён.")
 
-    from sqlalchemy.dialects.postgresql import insert as pg_insert
-    from app.db.models import GtinNameMap
-    from app.services.nk_store import resolve_cards, display_name
+    lock_key, _ = _nk_enrich_keys(current_user.id)
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        running = await r.get(lock_key)
+    finally:
+        await r.aclose()
+    if running:
+        return {"status": "already_running"}
 
-    data = await _compute_reconcile(db, current_user.id, brand, "all", "unmatched")
-    gtins = [r["gtin"] for r in data["rows"] if r.get("gtin")]
-    gtins = gtins[: max(1, min(int(limit or 500), 2000))]
-    if not gtins:
-        return {"checked": 0, "enriched": 0}
+    from app.worker.tasks import nk_enrich_names_task
 
-    cards = await resolve_cards(db, gtins)
-    enriched = 0
-    for gtin, card in cards.items():
-        name = display_name(card)
-        if not name:
-            continue
-        stmt = pg_insert(GtinNameMap).values(
-            user_id=current_user.id, gtin=gtin, product_name=name[:500], source="nk"
-        )
-        stmt = stmt.on_conflict_do_nothing(constraint="ix_gtin_name_map_user_gtin")
-        res = await db.execute(stmt)
-        enriched += res.rowcount or 0
-    await db.commit()
-    logger.info(
-        "inventory.enrich_names.done",
-        user_id=str(current_user.id), checked=len(gtins), enriched=enriched,
-    )
-    return {"checked": len(gtins), "enriched": enriched}
+    nk_enrich_names_task.delay(str(current_user.id), brand or None)
+    return {"status": "started"}
+
+
+@router.get("/enrich-names/status")
+async def inventory_enrich_names_status(
+    current_user: User = Depends(get_current_user),
+):
+    """Прогресс фонового опознания: {running, total, processed, enriched, done, error}."""
+    lock_key, prog_key = _nk_enrich_keys(current_user.id)
+    r = aioredis.from_url(settings.REDIS_URL)
+    try:
+        running = await r.get(lock_key)
+        raw = await r.get(prog_key)
+    finally:
+        await r.aclose()
+    prog = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw) if raw else {}
+    return {"running": bool(running), **prog}
 
 
 class InventorySetNameRequest(BaseModel):

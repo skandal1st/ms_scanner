@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
@@ -11,6 +11,7 @@ import {
   type ReconcileRow,
   type ReconcileDiff,
   type ReconcileMatch,
+  type NkEnrichStatus,
 } from '../api/client'
 
 const nf = (n: number) => n.toLocaleString('ru')
@@ -46,8 +47,8 @@ export function InventoryPage() {
   const [relinkedHint, setRelinkedHint] = useState(false)
 
   const [err, setErr] = useState<string | null>(null)
-  const [enriching, setEnriching] = useState(false)
-  const [enrichMsg, setEnrichMsg] = useState<string | null>(null)
+  const [enrich, setEnrich] = useState<NkEnrichStatus | null>(null)
+  const enrichPolling = useRef(false)
 
   const loadStores = async () => {
     try {
@@ -184,25 +185,47 @@ export function InventoryPage() {
     }
   }
 
-  const enrichNames = async () => {
-    setErr(null)
-    setEnrichMsg(null)
-    setEnriching(true)
+  const pollEnrich = async () => {
+    if (enrichPolling.current) return
+    enrichPolling.current = true
     try {
-      const r = await inventoryApi.enrichNames(brand)
-      setEnrichMsg(
-        r.data.enriched > 0
-          ? `Национальный каталог: опознано ${r.data.enriched} из ${r.data.checked}`
-          : `Национальный каталог: новых имён не нашлось (проверено ${r.data.checked})`,
-      )
-      if (r.data.enriched > 0) await loadRecon()
-    } catch (e: any) {
-      setErr(e?.response?.data?.detail || 'Не удалось дозаполнить имена из Национального каталога')
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const r = await inventoryApi.enrichStatus()
+        setEnrich(r.data)
+        if (r.data.done && !r.data.running) {
+          if (r.data.error) setErr(r.data.error)
+          else if ((r.data.enriched || 0) > 0) await loadRecon()
+          break
+        }
+        if (!r.data.running && !r.data.phase) break // ничего не запущено
+        await new Promise((res) => setTimeout(res, 1500))
+      }
     } finally {
-      setEnriching(false)
+      enrichPolling.current = false
     }
   }
 
+  const enrichNames = async () => {
+    setErr(null)
+    try {
+      await inventoryApi.enrichStart(brand)
+      setEnrich({ running: true, phase: 'collecting', done: false })
+      pollEnrich()
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось запустить опознание через Национальный каталог')
+    }
+  }
+
+  // Возобновить показ прогресса, если задача уже идёт (напр. после перезагрузки страницы).
+  useEffect(() => {
+    inventoryApi.enrichStatus().then((r) => {
+      if (r.data.running) { setEnrich(r.data); pollEnrich() }
+    }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const enrichBusy = Boolean(enrich?.running)
   const hasMs = Boolean(recon?.has_ms_snapshot)
   const czErr = cz?.result?.error as string | undefined
   const msErr = ms?.result?.error as string | undefined
@@ -401,15 +424,47 @@ export function InventoryPage() {
                 </button>
               )}
               {recon.unmatched_positions > 0 && (
-                <button className="button" style={{ marginBottom: 4 }} disabled={enriching} onClick={enrichNames}
+                <button className="button" style={{ marginBottom: 4 }} disabled={enrichBusy} onClick={enrichNames}
                   title="Автоматически подставить наименования из Национального каталога (по GTIN) для не опознанных позиций">
                   <Icon name="link" size={15} />
-                  {enriching ? 'Опознаём…' : 'Опознать в Нац. каталоге'}
+                  {enrichBusy ? 'Опознаём…' : 'Опознать в Нац. каталоге'}
                 </button>
               )}
             </div>
-            {enrichMsg && (
-              <div style={{ padding: '0 20px 4px', fontSize: 13, color: 'var(--muted, #666)' }}>{enrichMsg}</div>
+            {enrich && (enrich.running || enrich.done) && (
+              <div style={{ padding: '0 20px 8px' }}>
+                {enrich.running ? (
+                  <>
+                    <div style={{ fontSize: 13, color: 'var(--muted, #666)', marginBottom: 4 }}>
+                      {enrich.phase === 'collecting'
+                        ? 'Национальный каталог: собираем не опознанные позиции…'
+                        : `Национальный каталог: опознаём ${nf(enrich.processed || 0)} / ${nf(enrich.total || 0)}` +
+                          (enrich.enriched ? ` · найдено имён: ${nf(enrich.enriched)}` : '')}
+                    </div>
+                    <div style={{ height: 6, borderRadius: 3, background: 'rgba(0,0,0,.08)', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          height: '100%',
+                          background: 'var(--accent, #2f6fed)',
+                          width:
+                            enrich.phase === 'collecting' || !enrich.total
+                              ? '30%'
+                              : `${Math.min(100, Math.round(((enrich.processed || 0) / enrich.total) * 100))}%`,
+                          transition: 'width .4s ease',
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : enrich.error ? (
+                  <div style={{ fontSize: 13, color: 'var(--danger, #c0392b)' }}>⚠ {enrich.error}</div>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--muted, #666)' }}>
+                    {(enrich.enriched || 0) > 0
+                      ? `Национальный каталог: опознано ${nf(enrich.enriched || 0)} из ${nf(enrich.total || 0)}`
+                      : `Национальный каталог: новых имён не нашлось (проверено ${nf(enrich.total || 0)})`}
+                  </div>
+                )}
+              </div>
             )}
 
             {showMatch && (
@@ -455,6 +510,18 @@ export function InventoryPage() {
                         {r.product_name || (r.unmatched
                           ? <span className="text-muted" style={{ fontWeight: 400 }}>— не опознан</span>
                           : '—')}
+                        {r.name_via_nk && r.product_name && (
+                          <span
+                            title="Наименование определено через Национальный каталог (по GTIN)"
+                            style={{
+                              marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: .3,
+                              padding: '1px 5px', borderRadius: 4, verticalAlign: 'middle',
+                              background: 'rgba(47,111,237,.12)', color: 'var(--accent, #2f6fed)',
+                            }}
+                          >
+                            НК
+                          </span>
+                        )}
                       </td>
                       <td className="tabular">{r.gtin || '—'}</td>
                       <td className="mc-num">{nf(r.qty_cz)}</td>

@@ -255,6 +255,17 @@ export interface ReconcileRow {
   to_search: number
   not_in_ms?: boolean
   unmatched?: boolean
+  name_via_nk?: boolean
+}
+
+export interface NkEnrichStatus {
+  running: boolean
+  phase?: 'collecting' | 'enriching' | 'done' | 'error'
+  total?: number
+  processed?: number
+  enriched?: number
+  done?: boolean
+  error?: string
 }
 
 export interface ReconcileBrand {
@@ -336,10 +347,11 @@ export const inventoryApi = {
       gtin,
       product_name,
     }),
-  enrichNames: (brand?: string) =>
-    api.post<{ checked: number; enriched: number }>('/inventory/enrich-names', undefined, {
+  enrichStart: (brand?: string) =>
+    api.post<{ status: 'started' | 'already_running' }>('/inventory/enrich-names', undefined, {
       params: { brand: brand || undefined },
     }),
+  enrichStatus: () => api.get<NkEnrichStatus>('/inventory/enrich-names/status'),
 }
 
 export interface InventoryUnmatchedItem {
