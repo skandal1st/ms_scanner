@@ -24,7 +24,7 @@ from app.core.logging import logger
 from app.core.security import decrypt_token
 from app.db.models import (
     User, Document, DocumentKind, DocumentStatus, Integration, Scan, ScanStatus,
-    GtinProductMap,
+    GtinProductMap, EdoDocument,
 )
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
@@ -288,12 +288,6 @@ async def create_acceptance_document(
 
 # ── Приёмка из ЭДО (Saby): входящие УПД → документ приёмки ──────────────────────
 
-_EDO_LINK_TTL = 2 * 60 * 60  # ссылку на вложение Saby кешируем 2ч между list и import
-
-
-def _edo_link_key(user_id, ext: str) -> str:
-    return f"edo_upd_link:{user_id}:{ext}"
-
 
 class EdoIncomingDoc(BaseModel):
     external_id: str
@@ -316,100 +310,74 @@ class EdoImportResponse(BaseModel):
     import_result: ImportUpdResponse
 
 
+def _edo_incoming_query(user_id):
+    """Входящие УПД, ещё не превращённые в приёмку (accepted_document_id IS NULL)."""
+    return (
+        select(EdoDocument)
+        .where(
+            EdoDocument.user_id == user_id,
+            EdoDocument.direction == "Входящий",
+            EdoDocument.upd_link.isnot(None),
+            EdoDocument.accepted_document_id.is_(None),
+        )
+        .order_by(EdoDocument.created_at.desc())
+    )
+
+
 @router.get("/edo/incoming", response_model=List[EdoIncomingDoc])
 async def list_edo_incoming(
-    days: int = 60,
+    refresh: bool = False,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Входящие УПД (Поступление) из ЭДО Saby, доступные для приёмки.
+    """Входящие УПД (Поступление) для приёмки — из БД (наполняется периодическим синком).
 
-    Проходим несколько страниц ленты изменений за период, оставляем входящие
-    документы с первичным УПД-вложением. Ссылку на вложение кешируем в Redis по
-    external_id (для последующего /edo/import), наружу её не отдаём."""
-    import redis.asyncio as aioredis
-    from datetime import timedelta
-    from app.services.edo_sync import _client
-    from app.services.saby import (
-        SabyError,
-        SabyAuthError,
-        _extract_doc_list,
-        parse_document,
-        incoming_upd_link,
-        last_event_cursor,
-    )
+    refresh=1 — сначала живой скан ленты Saby (upsert новых входящих), затем чтение из БД.
+    Так бейдж/список отражают мониторинг, а кнопка «Обновить» подтягивает свежие сразу."""
+    if refresh:
+        from app.services.edo_sync import scan_incoming_upds
+        from app.services.saby import SabyError, SabyAuthError
 
-    integ = (
-        await db.execute(select(Integration).where(Integration.user_id == current_user.id))
-    ).scalar_one_or_none()
-    client = _client(integ) if integ else None
-    if client is None:
-        raise HTTPException(
-            status_code=400,
-            detail="ЭДО (Saby) не подключён — заполните доступ в настройках",
+        integ = (
+            await db.execute(select(Integration).where(Integration.user_id == current_user.id))
+        ).scalar_one_or_none()
+        if integ is None or (not integ.saby_app_client_id and not integ.saby_login):
+            raise HTTPException(
+                status_code=400, detail="ЭДО (Saby) не подключён — заполните доступ в настройках"
+            )
+        try:
+            await scan_incoming_upds(db, integ)
+        except SabyAuthError as exc:
+            raise HTTPException(status_code=400, detail=f"Не удалось авторизоваться в Saby: {exc}")
+        except SabyError as exc:
+            raise HTTPException(status_code=502, detail=f"Ошибка ЭДО Saby: {exc}")
+
+    rows = (await db.execute(_edo_incoming_query(current_user.id))).scalars().all()
+    return [
+        EdoIncomingDoc(
+            external_id=r.external_id,
+            number=r.number,
+            date=r.doc_date,
+            counterparty_name=r.counterparty_name,
+            counterparty_inn=r.counterparty_inn,
+            state_name=r.state_name,
         )
-    try:
-        auth = await client.authenticate()
-    except SabyAuthError as exc:
-        raise HTTPException(status_code=400, detail=f"Не удалось авторизоваться в Saby: {exc}")
+        for r in rows
+    ]
 
-    date_from = (datetime.now() - timedelta(days=max(1, min(days, 365)))).strftime(
-        "%d.%m.%Y %H.%M.%S"
-    )
-    r = aioredis.from_url(settings.REDIS_URL)
-    items: list[EdoIncomingDoc] = []
-    seen: set[str] = set()
-    event_id = doc_id = None
-    cur_from = date_from
-    try:
-        for _ in range(8):  # до 8 страниц (25/стр)
-            try:
-                result = await client.changes_page(
-                    auth, date_from=cur_from, event_id=event_id, doc_id=doc_id,
-                    with_extension=True,
-                )
-            except SabyAuthError:
-                auth = await client.authenticate()
-                result = await client.changes_page(
-                    auth, date_from=cur_from, event_id=event_id, doc_id=doc_id,
-                    with_extension=True,
-                )
-            docs = _extract_doc_list(result)
-            if not docs:
-                break
-            for d in docs:
-                p = parse_document(d)
-                ext = p.get("id")
-                if not ext or ext in seen or p.get("direction") != "Входящий":
-                    continue
-                link = incoming_upd_link(d)
-                if not link:
-                    continue
-                seen.add(ext)
-                await r.set(_edo_link_key(current_user.id, ext), link, ex=_EDO_LINK_TTL)
-                items.append(
-                    EdoIncomingDoc(
-                        external_id=ext,
-                        number=p.get("number"),
-                        date=p.get("date"),
-                        counterparty_name=p.get("counterparty_name"),
-                        counterparty_inn=p.get("counterparty_inn"),
-                        state_name=p.get("state_name"),
-                    )
-                )
-            eid, edt, did = last_event_cursor(docs)
-            nav = result.get("Навигация") if isinstance(result, dict) else {}
-            has_more = str((nav or {}).get("ЕстьЕще") or "").lower() == "да"
-            if eid:
-                event_id, doc_id, cur_from = eid, did, (edt or cur_from)
-            if not has_more:
-                break
-    except SabyError as exc:
-        raise HTTPException(status_code=502, detail=f"Ошибка ЭДО Saby: {exc}")
-    finally:
-        await r.aclose()
-    logger.info("acceptance.edo_incoming", count=len(items), user_id=str(current_user.id))
-    return items
+
+@router.get("/edo/incoming-count")
+async def edo_incoming_count(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Число новых входящих УПД (не принятых) — для бейджа на странице приёмки."""
+    n = (
+        await db.execute(
+            select(func.count()).select_from(_edo_incoming_query(current_user.id).subquery())
+        )
+    ).scalar() or 0
+    return {"count": int(n)}
 
 
 @router.post("/edo/import", response_model=EdoImportResponse)
@@ -419,7 +387,6 @@ async def import_edo_upd(
     db: AsyncSession = Depends(get_db),
 ):
     """Создать приёмку из входящего УПД ЭДО: скачать XML из Saby и импортировать коды."""
-    import redis.asyncio as aioredis
     from app.services.edo_sync import _client
     from app.services.saby import SabyError, SabyAuthError
 
@@ -434,17 +401,21 @@ async def import_edo_upd(
     if client is None:
         raise HTTPException(status_code=400, detail="ЭДО (Saby) не подключён")
 
-    r = aioredis.from_url(settings.REDIS_URL)
-    try:
-        link = await r.get(_edo_link_key(current_user.id, body.external_id))
-    finally:
-        await r.aclose()
-    if not link:
-        raise HTTPException(
-            status_code=409,
-            detail="Ссылка на УПД устарела — обновите список входящих ЭДО",
+    edo_row = (
+        await db.execute(
+            select(EdoDocument).where(
+                EdoDocument.user_id == current_user.id,
+                EdoDocument.external_id == body.external_id,
+            )
         )
-    link = link.decode() if isinstance(link, (bytes, bytearray)) else str(link)
+    ).scalar_one_or_none()
+    if edo_row is None or not edo_row.upd_link:
+        raise HTTPException(
+            status_code=409, detail="Документ ЭДО не найден — обновите список входящих"
+        )
+    if edo_row.accepted_document_id is not None:
+        raise HTTPException(status_code=409, detail="Этот УПД уже принят")
+    link = edo_row.upd_link
 
     try:
         auth = await client.authenticate()
@@ -469,7 +440,12 @@ async def import_edo_upd(
                     "acceptance.build_plan_failed", moysklad_id=moysklad_id, error=str(exc)
                 )
 
-    name = (body.name or "").strip() or "Приёмка из ЭДО"
+    default_name = "Приёмка из ЭДО"
+    if edo_row.number:
+        default_name = f"Приёмка ЭДО · УПД {edo_row.number}"
+        if edo_row.counterparty_name:
+            default_name += f" · {edo_row.counterparty_name}"
+    name = (body.name or "").strip() or default_name[:255]
     doc = Document(
         user_id=current_user.id,
         name=name,
@@ -484,6 +460,9 @@ async def import_edo_upd(
     await db.refresh(doc)
 
     import_result = await _import_upd_bytes(doc.id, doc, raw, current_user, db)
+    # Помечаем входящий УПД принятым — уходит из списка «новых» и из бейджа.
+    edo_row.accepted_document_id = doc.id
+    await db.commit()
     scan_count = (
         await db.execute(
             select(func.count()).select_from(Scan).where(Scan.document_id == doc.id)

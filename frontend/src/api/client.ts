@@ -567,11 +567,14 @@ export interface EdoImportResult {
 
 export const acceptanceApi = {
   productGroups: () => api.get<ProductGroup[]>('/acceptance/product-groups'),
-  /** Входящие УПД (Поступление) из ЭДО Saby, доступные для приёмки. */
-  edoIncoming: (days?: number) =>
+  /** Входящие УПД (Поступление) для приёмки — из БД. refresh=1 — живой скан Saby. */
+  edoIncoming: (refresh?: boolean) =>
     api.get<EdoIncomingDoc[]>('/acceptance/edo/incoming', {
-      params: days ? { days } : undefined,
+      params: refresh ? { refresh: 1 } : undefined,
     }),
+  /** Число новых входящих УПД (не принятых) — для бейджа на вкладке «Приёмка». */
+  edoIncomingCount: () =>
+    api.get<{ count: number }>('/acceptance/edo/incoming-count'),
   /** Создать приёмку из входящего УПД ЭДО (скачивает XML из Saby и импортирует). */
   edoImport: (body: {
     external_id: string

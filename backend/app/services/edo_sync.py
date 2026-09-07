@@ -22,6 +22,7 @@ from app.services.saby import (
     last_event_cursor,
     parse_document,
     primary_upd_link,
+    incoming_upd_link,
 )
 
 # Предохранитель от бесконечного цикла (25/стр → до 25000 документов за один синк).
@@ -138,6 +139,66 @@ async def _save_marks(db, doc: EdoDocument, user_id, codes: list[str]) -> int:
     return n
 
 
+async def scan_incoming_upds(db, integ: Integration, *, days: int = 60, max_pages: int = 8) -> int:
+    """Живой скан входящих УПД (Поступление) из ленты Saby → upsert в EdoDocument.
+
+    Для ручного «Обновить» на странице приёмки: проходим до max_pages страниц ленty за
+    период, сохраняем входящие документы с первичным УПД-вложением (ссылку — в upd_link),
+    марки не качаем. Возвращает число найденных входящих УПД. Best-effort (не бросает
+    наружу SabyError — вернём то, что успели)."""
+    client = _client(integ)
+    if client is None:
+        return 0
+    user_id = integ.user_id
+    header, token = await client.authenticate()
+    auth = (header, token)
+
+    from datetime import timedelta
+
+    cur_from = (datetime.now() - timedelta(days=max(1, min(days, 365)))).strftime(
+        "%d.%m.%Y %H.%M.%S"
+    )
+    event_id = doc_id = None
+    found = 0
+    seen: set[str] = set()
+    for _ in range(max_pages):
+        try:
+            result = await client.changes_page(
+                auth, date_from=cur_from, event_id=event_id, doc_id=doc_id, with_extension=True,
+            )
+        except SabyAuthError:
+            header, token = await client.authenticate()
+            auth = (header, token)
+            result = await client.changes_page(
+                auth, date_from=cur_from, event_id=event_id, doc_id=doc_id, with_extension=True,
+            )
+        docs = _extract_doc_list(result)
+        if not docs:
+            break
+        for d in docs:
+            parsed = parse_document(d)
+            ext = parsed.get("id")
+            if not ext or ext in seen or parsed.get("direction") != "Входящий":
+                continue
+            link = incoming_upd_link(d)
+            if not link:
+                continue
+            seen.add(ext)
+            row = await _upsert_document(db, user_id, parsed)
+            row.upd_link = link
+            found += 1
+        await db.commit()
+        eid, edt, did = last_event_cursor(docs)
+        nav = result.get("Навигация") if isinstance(result, dict) else {}
+        has_more = str((nav or {}).get("ЕстьЕще") or "").lower() == "да"
+        if eid:
+            event_id, doc_id, cur_from = eid, did, (edt or cur_from)
+        if not has_more:
+            break
+    logger.info("edo_sync.incoming_scanned", user_id=str(user_id), found=found)
+    return found
+
+
 async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional[str] = None,
                     use_cursor: bool = True, backfill_names: bool = False,
                     progress_cb: Optional[Callable[[dict], Awaitable[None]]] = None) -> dict:
@@ -205,6 +266,20 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             ext = parsed.get("id")
             if not ext:
                 continue
+            # Мониторинг ВХОДЯЩИХ УПД (Поступление) для приёмки из ЭДО: сохраняем
+            # документ + ссылку на первичное вложение (марки не качаем — скачаем при
+            # импорте). accepted_document_id не трогаем (проставится при создании приёмки).
+            if parsed.get("direction") == "Входящий":
+                link = incoming_upd_link(d)
+                if link:
+                    if ext not in seen_ext:
+                        seen_ext.add(ext)
+                        docs_seen += 1
+                    row = await _upsert_document(db, user_id, parsed)
+                    row.upd_link = link
+                    await db.flush()
+                continue
+
             # Храним ТОЛЬКО исходящие реализации (УПД) — контроль отгруженных марок.
             is_out_realiz = parsed.get("direction") == "Исходящий" and "реализац" in (parsed.get("type") or "").lower()
             if not is_out_realiz:

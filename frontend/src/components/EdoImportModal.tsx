@@ -22,12 +22,11 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!open) return
+  const load = (refresh: boolean) => {
     setError(null)
     setLoading(true)
     acceptanceApi
-      .edoIncoming()
+      .edoIncoming(refresh)
       .then(({ data }) => setDocs(data))
       .catch((e) => {
         const ax = e as { response?: { data?: { detail?: string } } }
@@ -35,6 +34,12 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
         setDocs([])
       })
       .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    if (!open) return
+    load(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   if (!open) return null
@@ -67,6 +72,20 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
         />
         <div className="popup__title">Приёмка из ЭДО — входящие УПД</div>
         <div className="popup__content">
+          <div className="flex-row gap-8" style={{ alignItems: 'center', marginBottom: 8 }}>
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              Обновляется автоматически каждые 30 минут.
+            </span>
+            <button
+              type="button"
+              className="button button--sm"
+              onClick={() => load(true)}
+              disabled={loading || busy}
+              style={{ marginLeft: 'auto', whiteSpace: 'nowrap' }}
+            >
+              {loading ? 'Обновляю…' : 'Обновить из Saby'}
+            </button>
+          </div>
           {!groupSelected && (
             <div className="alert alert--error" style={{ marginTop: 0, marginBottom: 10 }}>
               Сначала выберите товарную группу в панели приёмки.

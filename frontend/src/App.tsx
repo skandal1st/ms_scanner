@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { acceptanceApi } from './api/client'
 import { Icon } from './components/Icon'
 import type { IconName } from './components/Icon'
 import { ModalProvider } from './components/ModalProvider'
@@ -44,6 +45,14 @@ function Layout({ children }: { children: React.ReactNode }) {
     window.location.href = '/login'
   }
 
+  // Бейдж «новых входящих УПД» на вкладке «Приёмка» — мониторинг ЭДО (опрос раз в минуту).
+  const { data: edoCount = 0 } = useQuery({
+    queryKey: ['edo-incoming-count'],
+    queryFn: () => acceptanceApi.edoIncomingCount().then((r) => r.data.count),
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
+
   return (
     <>
       <nav className="app-nav" aria-label="Навигация">
@@ -58,6 +67,15 @@ function Layout({ children }: { children: React.ReactNode }) {
           >
             <Icon name={item.icon} size={17} className="app-nav__icon" />
             {item.label}
+            {item.to === '/acceptance' && edoCount > 0 && (
+              <span
+                className="badge badge--info"
+                style={{ marginLeft: 6, fontSize: 11, padding: '0 6px', borderRadius: 10 }}
+                title={`Новых входящих УПД: ${edoCount}`}
+              >
+                {edoCount}
+              </span>
+            )}
           </NavLink>
         ))}
         <span className="app-nav__spacer" />

@@ -294,6 +294,11 @@ class EdoDocument(Base):
     # backfill: повторный прогон не перекачивает уже обработанные документы).
     names_parsed = Column(Boolean, nullable=False, default=False, server_default="false")
     codes_total = Column(Integer, nullable=False, default=0, server_default="0")
+    # Приёмка из ЭДО (входящие Поступления): ссылка на первичное вложение УПД и id
+    # созданной по нему приёмки. accepted_document_id IS NULL → «новое, не принято»
+    # (по этому считается бейдж новых входящих на странице приёмки).
+    upd_link = Column(Text, nullable=True)
+    accepted_document_id = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
