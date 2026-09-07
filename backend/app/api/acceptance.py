@@ -36,6 +36,7 @@ from app.services.chestnyznak import (
     is_sscc,
     CZ_PRODUCT_GROUP_CATALOG,
     CZ_PRODUCT_GROUP_CODES,
+    normalize_product_groups,
 )
 from app.services.upd_parser import parse_upd_503, UpdParseError, ParsedPosition, ParsedUpd
 
@@ -197,9 +198,26 @@ async def _expand_box_via_cz(
     }
 
 
+_PG_LABELS = {g["code"]: g["label"] for g in CZ_PRODUCT_GROUP_CATALOG}
+
+
 @router.get("/product-groups", response_model=List[ProductGroup])
-async def list_product_groups(current_user: User = Depends(get_current_user)):
-    """Список товарных групп маркировки для выбора перед загрузкой УПД."""
+async def list_product_groups(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список товарных групп маркировки для выбора перед загрузкой УПД.
+
+    Ограничиваем группами, выбранными клиентом в настройках (Integration.cz_product_groups):
+    если он отметил конкретные группы — показываем только их; если ничего не выбрано —
+    весь справочник.
+    """
+    integ = (
+        await db.execute(select(Integration).where(Integration.user_id == current_user.id))
+    ).scalar_one_or_none()
+    selected = normalize_product_groups(integ.cz_product_groups if integ else None)
+    if selected:
+        return [ProductGroup(code=c, label=_PG_LABELS[c]) for c in selected]
     return PRODUCT_GROUPS
 
 

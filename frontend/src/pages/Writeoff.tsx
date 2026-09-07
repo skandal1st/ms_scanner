@@ -65,6 +65,15 @@ export function WriteoffPage() {
     queryFn: () => integrationsApi.get().then((r) => r.data),
   })
 
+  // В выпадающем списке товарных групп — только выбранные клиентом в настройках
+  // (если ничего не выбрано, показываем весь справочник).
+  const groupOptions = useMemo(() => {
+    const sel = integration?.cz_product_groups ?? []
+    return sel.length
+      ? CZ_PRODUCT_GROUPS.filter((g) => sel.includes(g.value))
+      : CZ_PRODUCT_GROUPS
+  }, [integration?.cz_product_groups])
+
   // Сертификаты для подписи документа вывода из оборота (как при входе в ЧЗ).
   useEffect(() => {
     let cancelled = false
@@ -334,7 +343,7 @@ export function WriteoffPage() {
               title="Укажите вручную, если группа определилась неверно (напр. кальянный табак как «Табачная продукция»)"
             >
               <option value="">Определять автоматически</option>
-              {CZ_PRODUCT_GROUPS.map((g) => (
+              {groupOptions.map((g) => (
                 <option key={g.value} value={g.value}>
                   {g.label}
                 </option>
