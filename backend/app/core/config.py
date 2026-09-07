@@ -71,6 +71,28 @@ class Settings(BaseSettings):
     def cz_product_groups_list(self) -> List[str]:
         return [g.strip() for g in self.CZ_PRODUCT_GROUPS.split(",") if g.strip()]
 
+    # Национальный каталог (НК ЦРПТ) — публичное чтение карточек товаров по GTIN.
+    # apikey участника только аутентифицирует вызывающего и снимает лимиты; сам доступ
+    # публичный (v3/product?gtin=… отдаёт карточку любого GTIN, не только своих). Даёт
+    # резолв GTIN→наименование/бренд без МойСклада (фолбэк каталога, имена в сверке).
+    # Ключ — только через .env, наружу из API не отдаём. NK_ENABLED гейтит вызовы.
+    NK_ENABLED: bool = False
+    NK_API_KEY: str = ""
+    NK_API_BASE: str = "https://апи.национальный-каталог.рф"
+    NK_TIMEOUT: float = 8.0
+    # Публичный метод v3/product отдаёт карточку только по одиночному gtin=… (пачка
+    # gtins=… доступна лишь для «своих» товаров). Поэтому резолвим по одному GTIN за
+    # запрос с ограниченной конкурентностью, чтобы не упереться в лимиты НК.
+    NK_CONCURRENCY: int = 5
+    # Сколько дней доверять негативному кэшу (GTIN не найден в НК), прежде чем
+    # перепроверить — карточку могли завести позже.
+    NK_NEG_TTL_DAYS: int = 14
+
+    @computed_field
+    @property
+    def nk_enabled(self) -> bool:
+        return self.NK_ENABLED and bool(self.NK_API_KEY.strip())
+
     # Мониторинг (отправка событий/таймингов в ERP Elements Platform).
     # Выключено по умолчанию; включается только заданием URL+ключа в проде.
     MONITORING_ENABLED: bool = False

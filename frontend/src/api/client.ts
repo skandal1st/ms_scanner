@@ -336,6 +336,10 @@ export const inventoryApi = {
       gtin,
       product_name,
     }),
+  enrichNames: (brand?: string) =>
+    api.post<{ checked: number; enriched: number }>('/inventory/enrich-names', undefined, {
+      params: { brand: brand || undefined },
+    }),
 }
 
 export interface InventoryUnmatchedItem {

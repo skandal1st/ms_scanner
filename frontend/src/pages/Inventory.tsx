@@ -46,6 +46,8 @@ export function InventoryPage() {
   const [relinkedHint, setRelinkedHint] = useState(false)
 
   const [err, setErr] = useState<string | null>(null)
+  const [enriching, setEnriching] = useState(false)
+  const [enrichMsg, setEnrichMsg] = useState<string | null>(null)
 
   const loadStores = async () => {
     try {
@@ -179,6 +181,25 @@ export function InventoryPage() {
       URL.revokeObjectURL(url)
     } catch (e: any) {
       setErr(e?.response?.data?.detail || 'Не удалось выгрузить XLSX')
+    }
+  }
+
+  const enrichNames = async () => {
+    setErr(null)
+    setEnrichMsg(null)
+    setEnriching(true)
+    try {
+      const r = await inventoryApi.enrichNames(brand)
+      setEnrichMsg(
+        r.data.enriched > 0
+          ? `Национальный каталог: опознано ${r.data.enriched} из ${r.data.checked}`
+          : `Национальный каталог: новых имён не нашлось (проверено ${r.data.checked})`,
+      )
+      if (r.data.enriched > 0) await loadRecon()
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || 'Не удалось дозаполнить имена из Национального каталога')
+    } finally {
+      setEnriching(false)
     }
   }
 
@@ -379,7 +400,17 @@ export function InventoryPage() {
                   {showResolve ? 'Скрыть' : `Обработать не опознанные (${nf(recon.unmatched_positions)})`}
                 </button>
               )}
+              {recon.unmatched_positions > 0 && (
+                <button className="button" style={{ marginBottom: 4 }} disabled={enriching} onClick={enrichNames}
+                  title="Автоматически подставить наименования из Национального каталога (по GTIN) для не опознанных позиций">
+                  <Icon name="link" size={15} />
+                  {enriching ? 'Опознаём…' : 'Опознать в Нац. каталоге'}
+                </button>
+              )}
             </div>
+            {enrichMsg && (
+              <div style={{ padding: '0 20px 4px', fontSize: 13, color: 'var(--muted, #666)' }}>{enrichMsg}</div>
+            )}
 
             {showMatch && (
               <div style={{ padding: '0 20px' }}>

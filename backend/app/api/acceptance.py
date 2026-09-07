@@ -641,6 +641,51 @@ async def _resolve_product(
     return _done((None, None))
 
 
+async def _enrich_unmatched_names_nk(
+    db: AsyncSession,
+    document_id: UUID,
+    unmatched: set[str],
+    results: list[ImportPositionResult],
+) -> None:
+    """Дозаполнить имя из Национального каталога для несопоставленных GTIN.
+
+    НК не даёт product_id МС (товар остаётся «нужна привязка»), но даёт наименование —
+    подставляем его в scan.product_name и строки предпросмотра, чтобы кладовщик видел,
+    что за марка, ещё до ручной привязки. Best-effort, cache-first, вне hot-path
+    резолва. Не трогает уже сопоставленные позиции."""
+    if not settings.nk_enabled or not unmatched:
+        return
+    from sqlalchemy import update
+    from app.services.nk_store import resolve_cards, display_name
+
+    cards = await resolve_cards(db, sorted(unmatched))
+    name_map: dict[str, str] = {}
+    for gtin, card in cards.items():
+        nm = display_name(card)
+        if nm:
+            name_map[gtin] = nm
+    if not name_map:
+        return
+    for gtin, nm in name_map.items():
+        await db.execute(
+            update(Scan)
+            .where(
+                Scan.document_id == document_id,
+                Scan.gtin == gtin,
+                Scan.product_name.is_(None),
+            )
+            .values(product_name=nm)
+        )
+    await db.commit()
+    # Отражаем имена в возвращаемых строках предпросмотра (без похода в БД).
+    for r in results:
+        if not r.matched and r.gtin in name_map and not r.product_name:
+            r.product_name = name_map[r.gtin]
+            if not r.name or r.name == "Без товара":
+                r.name = name_map[r.gtin]
+    logger.info("acceptance.nk_enriched", document_id=str(document_id), enriched=len(name_map))
+
+
 @router.post(
     "/documents/{document_id}/import-upd", response_model=ImportUpdResponse
 )
@@ -1028,6 +1073,7 @@ async def _import_upd_bytes(
     doc.plan = new_plan
 
     await db.commit()
+    await _enrich_unmatched_names_nk(db, document_id, unmatched, results)
     logger.info(
         "acceptance.upd_imported",
         document_id=str(document_id),
@@ -1253,6 +1299,7 @@ async def import_marks(
             )
 
     await db.commit()
+    await _enrich_unmatched_names_nk(db, document_id, unmatched, results)
     logger.info(
         "acceptance.marks_imported",
         document_id=str(document_id),

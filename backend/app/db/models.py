@@ -224,11 +224,13 @@ class GtinNameMap(Base):
     """База знаний «GTIN → наименование товара» из первичных XML УПД (ЭДО Saby).
 
     Имена из ЧЗ по кодам баланса вытащить не удалось (dispenser productName пуст,
-    cises/info не находит коды без криптохвоста), а Национальный каталог требует
-    отдельного доступа. Но каждый исходящий УПД несёт пару НаимТов↔GTIN — при синке
-    ЭДО (edo_sync) её сохраняем сюда. Инвентаризация (reconcile) берёт имя фолбэком
-    после МС и ЧЗ. Отдельно от GtinProductMap: там product_id (МС) NOT NULL, а УПД
-    его не даёт — здесь только имя. Пер-клиент (наименование поставщика/своё).
+    cises/info не находит коды без криптохвоста). Источники имён здесь: (1) каждый
+    исходящий УПД несёт пару НаимТов↔GTIN — при синке ЭДО (edo_sync) сохраняем сюда
+    (source=upd); (2) Национальный каталог (НК) — /inventory/enrich-names тянет карточку
+    по GTIN и пишет имя (source=nk); (3) ручной ввод/сопоставление (manual/match).
+    Инвентаризация (reconcile) берёт имя фолбэком после МС и ЧЗ. Отдельно от
+    GtinProductMap: там product_id (МС) NOT NULL, а УПД/НК его не дают — здесь только
+    имя. Пер-клиент (наименование поставщика/своё).
     """
     __tablename__ = "gtin_name_map"
     __table_args__ = (
@@ -262,6 +264,27 @@ class GtinCzGroup(Base):
     # Источник значения: ms (из trackingType карточки), cz (подтверждён ответом ЧЗ).
     source = Column(String(16), nullable=False, default="ms")
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class NkProduct(Base):
+    """Кэш карточек Национального каталога (НК ЦРПТ) «GTIN → наименование/бренд».
+
+    Товар в НК — свойство самого GTIN (одинаково для всех клиентов), поэтому таблица
+    ГЛОБАЛЬНАЯ (без user_id), как gtin_cz_group. Публичный метод НК v3/product отдаёт
+    карточку только по ОДНОМУ gtin за запрос, поэтому кэшируем агрессивно, включая
+    НЕГАТИВЫ (found=False — GTIN нет в каталоге): без этого несопоставленные GTIN
+    вызывали бы 404-шторм на каждой сверке/приёмке. Негативы перепроверяются по TTL
+    (карточку могли завести позже). Наполняется nk_store.resolve_cards; в инвентаризации
+    имена зеркалятся в gtin_name_map (source=nk), чтобы reconcile SQL их подхватил.
+    """
+    __tablename__ = "nk_product"
+
+    gtin = Column(String(14), primary_key=True)
+    found = Column(Boolean, nullable=False, default=False)
+    good_name = Column(String(500), nullable=True)
+    brand_name = Column(String(255), nullable=True)
+    category = Column(String(255), nullable=True)
+    fetched_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
 class EdoDocument(Base):

@@ -467,6 +467,53 @@ async def inventory_unmatched(
     }
 
 
+@router.post("/enrich-names")
+async def inventory_enrich_names(
+    brand: Optional[str] = None,
+    limit: int = 500,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Дозаполнить имена «не опознанных» позиций из Национального каталога (НК ЦРПТ).
+
+    Берём GTIN, у которых нет имени ни в МС, ни в ЧЗ, ни в базе имён, тянем карточку
+    НК по GTIN (cache-first) и пишем найденное имя в gtin_name_map (source=nk) — не
+    затирая ручные/сопоставленные имена (ON CONFLICT DO NOTHING). Следующая сверка
+    подхватит имена, и позиции перестанут быть «не сопоставленными».
+    """
+    if not settings.nk_enabled:
+        raise HTTPException(status_code=400, detail="Национальный каталог не подключён.")
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from app.db.models import GtinNameMap
+    from app.services.nk_store import resolve_cards, display_name
+
+    data = await _compute_reconcile(db, current_user.id, brand, "all", "unmatched")
+    gtins = [r["gtin"] for r in data["rows"] if r.get("gtin")]
+    gtins = gtins[: max(1, min(int(limit or 500), 2000))]
+    if not gtins:
+        return {"checked": 0, "enriched": 0}
+
+    cards = await resolve_cards(db, gtins)
+    enriched = 0
+    for gtin, card in cards.items():
+        name = display_name(card)
+        if not name:
+            continue
+        stmt = pg_insert(GtinNameMap).values(
+            user_id=current_user.id, gtin=gtin, product_name=name[:500], source="nk"
+        )
+        stmt = stmt.on_conflict_do_nothing(constraint="ix_gtin_name_map_user_gtin")
+        res = await db.execute(stmt)
+        enriched += res.rowcount or 0
+    await db.commit()
+    logger.info(
+        "inventory.enrich_names.done",
+        user_id=str(current_user.id), checked=len(gtins), enriched=enriched,
+    )
+    return {"checked": len(gtins), "enriched": enriched}
+
+
 class InventorySetNameRequest(BaseModel):
     gtin: str
     product_name: str
