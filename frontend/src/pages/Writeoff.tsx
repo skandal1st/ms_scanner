@@ -125,7 +125,8 @@ export function WriteoffPage() {
     stats.valid + stats.overflow > 0 &&
     phase !== 'signing' &&
     phase !== 'submitting' &&
-    phase !== 'processing'
+    phase !== 'processing' &&
+    phase !== 'done'
 
   const writeoffCount = stats.valid + stats.overflow
 
@@ -223,7 +224,7 @@ export function WriteoffPage() {
     signing: 'Подпишите документ…',
     submitting: 'Отправка в ЧЗ…',
     processing: 'Обрабатывается в ЧЗ…',
-    done: 'Списано',
+    done: 'Списано ✓',
     error: `Списать ${writeoffCount}`,
   }
 
@@ -247,6 +248,22 @@ export function WriteoffPage() {
         </div>
         <span className="acc-header__doc">{document?.name ?? 'Документ не выбран'}</span>
       </header>
+
+      {phase === 'done' && (
+        <div role="status" className="alert alert--ok" style={{ margin: '12px 18px 0' }}>
+          <span className="alert__spacer">
+            ✓ Списание завершено: марки выведены из оборота и подтверждены Честным Знаком.
+          </span>
+          <button
+            type="button"
+            className="button button--sm"
+            onClick={handleDetach}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            Новое списание
+          </button>
+        </div>
+      )}
 
       {czTokenExpired && (
         <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
