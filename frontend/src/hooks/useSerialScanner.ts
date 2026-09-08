@@ -12,21 +12,32 @@ const PORT_OPTIONS: SerialOptions = {
   flowControl: 'none',
 }
 
-// Распознаём типовые ошибки открытия порта и даём кладовщику понятный русский текст.
-// Chrome при занятом порте: DOMException NetworkError "Failed to open serial port."
-export function humanizeSerialOpenError(e: unknown): string {
+// Имя эксклюзивного Web Lock — гейт «одна активная вкладка Скандаты держит сканер».
+const SCANNER_LOCK = 'scandata-serial-scanner'
+// Пауза между фоновыми попытками открыть занятый порт.
+const REOPEN_DELAY_MS = 1500
+
+// Ошибка «порт занят» (эксклюзив держит другой процесс/вкладка). Chrome при занятом порте:
+// DOMException NetworkError "Failed to open serial port."
+export function isPortBusyError(e: unknown): boolean {
   const name = e instanceof DOMException ? e.name : ''
   const msg = e instanceof Error ? e.message : String(e)
   const low = msg.toLowerCase()
-  if (
+  return (
     name === 'NetworkError' ||
     low.includes('failed to open serial port') ||
     low.includes('already open') ||
     low.includes('access is denied') ||
     low.includes('access denied')
-  ) {
+  )
+}
+
+// Понятный русский текст ошибки открытия порта для кладовщика.
+export function humanizeSerialOpenError(e: unknown): string {
+  if (isPortBusyError(e)) {
     return 'COM-порт занят другой программой или вкладкой. Закройте другие окна приложения и программы, использующие сканер, затем подключитесь снова.'
   }
+  const msg = e instanceof Error ? e.message : String(e)
   return `Не удалось открыть COM-порт: ${msg}`
 }
 
@@ -55,11 +66,26 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
   // port.open() упадёт с «порт занят» (лечилось только Ctrl+Shift+R).
   const loopRef = useRef<Promise<void> | null>(null)
   const aliveRef = useRef(false)
+  // Намерение быть подключённым: фоновый авто-повтор open работает, пока true.
+  const wantRef = useRef(false)
+  // Таймер фонового повтора открытия занятого порта.
+  const retryTimerRef = useRef<number | null>(null)
+  // Release-функция Web Lock «одна вкладка»; null — лок не держим.
+  const releaseLockRef = useRef<(() => void) | null>(null)
+  // Актуальная реализация openAndRead для вызова из таймера без циклов зависимостей.
+  const openAndReadRef = useRef<(port: SerialPort) => Promise<void>>(async () => {})
   // onCode передаётся через ref, чтобы изменение callback не перезапускало reader-loop.
   const onCodeRef = useRef(onCode)
   useEffect(() => {
     onCodeRef.current = onCode
   }, [onCode])
+
+  const clearRetry = useCallback(() => {
+    if (retryTimerRef.current != null) {
+      clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = null
+    }
+  }, [])
 
   const stopReader = useCallback(async () => {
     aliveRef.current = false
@@ -85,7 +111,40 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     }
   }, [])
 
+  // Гейт «одна вкладка»: отдать эксклюзив на сканер другим вкладкам Скандаты.
+  const releaseTabLock = useCallback(() => {
+    const release = releaseLockRef.current
+    releaseLockRef.current = null
+    if (release) release()
+  }, [])
+
+  // Захватить эксклюзив на сканер среди вкладок. Если его держит другая вкладка — наш
+  // request встаёт в очередь Web Locks и получит лок автоматически, как только та вкладка
+  // отключит порт (без ручного повтора). Старый браузер без Web Locks — гейт пропускаем.
+  const acquireTabLock = useCallback((): Promise<boolean> => {
+    const nav = navigator as Navigator & { locks?: LockManager }
+    if (!nav.locks) return Promise.resolve(true)
+    if (releaseLockRef.current) return Promise.resolve(true)
+    return new Promise<boolean>((resolveAcquired) => {
+      const held = new Promise<void>((release) => {
+        releaseLockRef.current = release
+      })
+      nav.locks!
+        .request(SCANNER_LOCK, async () => {
+          resolveAcquired(true)
+          await held // держим лок, пока не вызовем releaseTabLock()
+        })
+        .catch(() => {
+          releaseLockRef.current = null
+          resolveAcquired(false)
+        })
+    })
+  }, [])
+
   const closePort = useCallback(async () => {
+    // Больше не пытаемся переоткрываться и снимаем фоновый повтор.
+    wantRef.current = false
+    clearRetry()
     // Обнуляем portRef СРАЗУ: слушатель `connect` во время закрытия не должен принять
     // закрываемый порт за «живой» и пропустить авто-переоткрытие после ре-энумерации.
     const port = portRef.current
@@ -98,8 +157,9 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         /* ignore — порт мог быть уже отключён физически */
       }
     }
+    releaseTabLock() // отдаём сканер другим вкладкам
     setConnected(false)
-  }, [stopReader])
+  }, [stopReader, clearRetry, releaseTabLock])
 
   const startReader = useCallback((port: SerialPort) => {
     if (!port.readable) {
@@ -146,25 +206,38 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
   const openAndRead = useCallback(
     async (port: SerialPort) => {
       // Если порт уже открыт (например, мы же его и держим) — port.readable не null.
-      // Повторный open даёт InvalidStateError, поэтому пропускаем.
       const alreadyOpen = port.readable !== null
       if (!alreadyOpen) {
         try {
           await port.open(PORT_OPTIONS)
         } catch (e) {
-          console.error('[useSerialScanner] port.open failed:', e)
-          // InvalidStateError — порт уже открыт другим контекстом. Если readable есть — продолжаем.
+          // readable != null → порт всё же открыт другим контекстом, продолжаем чтение.
           if (port.readable === null) {
-            // После ре-энумерации USB / недавнего close ОС может ещё держать хендл и вернуть
-            // «порт занят». Дадим ему освободиться и попробуем один раз повторно — иначе
-            // залипало до полной перезагрузки вкладки (Ctrl+Shift+R).
-            await new Promise((r) => setTimeout(r, 500))
+            // Транзиентный «занят» после close/ре-энумерации USB — ОС могла не успеть
+            // освободить хендл. Дадим паузу и попробуем ещё раз.
+            if (isPortBusyError(e)) {
+              await new Promise((r) => setTimeout(r, 500))
+            }
             try {
               await port.open(PORT_OPTIONS)
             } catch (e2) {
               if (port.readable === null) {
-                setError(humanizeSerialOpenError(e2))
                 setConnected(false)
+                if (isPortBusyError(e2) && wantRef.current) {
+                  // Порт держит внешняя программа (1С/утилита сканера). Отобрать эксклюзив
+                  // нельзя, но и сдаваться не нужно: тихо пробуем снова — подключимся сами,
+                  // как только программа освободит порт. Без Ctrl+Shift+R.
+                  setError(
+                    'COM-порт занят другой программой (например, 1С). Подключусь автоматически, как только он освободится…',
+                  )
+                  clearRetry()
+                  retryTimerRef.current = window.setTimeout(() => {
+                    if (wantRef.current) void openAndReadRef.current(port)
+                  }, REOPEN_DELAY_MS)
+                } else {
+                  console.error('[useSerialScanner] port.open failed:', e2)
+                  setError(humanizeSerialOpenError(e2))
+                }
                 return
               }
             }
@@ -172,11 +245,41 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         }
       }
       portRef.current = port
+      clearRetry()
       setConnected(true)
       setError(null)
-      void startReader(port)
+      startReader(port)
     },
-    [startReader],
+    [startReader, clearRetry],
+  )
+  useEffect(() => {
+    openAndReadRef.current = openAndRead
+  }, [openAndRead])
+
+  // Полный вход в подключение: сперва гейт одной вкладки, затем открытие физического порта.
+  const connectPort = useCallback(
+    async (port: SerialPort) => {
+      wantRef.current = true
+      const nav = navigator as Navigator & { locks?: LockManager }
+      if (nav.locks && !releaseLockRef.current) {
+        // Если сканер уже держит другая вкладка — скажем об этом; наш lock встанет в очередь.
+        try {
+          const state = await nav.locks.query()
+          const busyTab = state.held?.some((l) => l.name === SCANNER_LOCK)
+          if (busyTab) {
+            setError(
+              'Сканер занят другой вкладкой Скандаты. Подключусь автоматически, как только она освободит порт…',
+            )
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      const ok = await acquireTabLock()
+      if (!ok || !wantRef.current) return
+      await openAndRead(port)
+    },
+    [acquireTabLock, openAndRead],
   )
 
   const requestConnect = useCallback(async () => {
@@ -187,7 +290,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     try {
       const port = await navigator.serial.requestPort()
       await closePort()
-      await openAndRead(port)
+      await connectPort(port)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       // NotFoundError — пользователь закрыл диалог выбора порта, не показываем как ошибку.
@@ -195,7 +298,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         setError(humanizeSerialOpenError(e))
       }
     }
-  }, [supported, closePort, openAndRead])
+  }, [supported, closePort, connectPort])
 
   const disconnect = useCallback(async () => {
     await closePort()
@@ -219,7 +322,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
           setError('Нет авторизованного COM-порта. Откройте «Настройки» и нажмите «Подключить COM-порт».')
           return
         }
-        await openAndRead(ports[0])
+        await connectPort(ports[0])
       } catch (e) {
         if (cancelled) return
         const msg = e instanceof Error ? e.message : String(e)
@@ -240,7 +343,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     // не держим — открываем вернувшийся автоматически, без Ctrl+Shift+R.
     const onConnect = (ev: Event & { target: SerialPort }) => {
       if (cancelled || portRef.current) return
-      void openAndRead(ev.target)
+      void connectPort(ev.target)
     }
     navigator.serial.addEventListener('connect', onConnect)
 
@@ -250,7 +353,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
       navigator.serial.removeEventListener('connect', onConnect)
       void closePort()
     }
-  }, [enabled, supported, openAndRead, closePort])
+  }, [enabled, supported, connectPort, closePort])
 
   return { supported, connected, error, requestConnect, disconnect }
 }
