@@ -24,6 +24,7 @@ from app.services.chestnyznak import (
     WRITEOFF_REASONS,
     CZ_PRODUCT_GROUP_CATALOG,
     CZ_PRODUCT_GROUP_CODES,
+    cis_string_for_moysklad_api,
     normalize_product_groups,
 )
 from app.services.gtin_cz_group import set_manual_group
@@ -469,18 +470,27 @@ async def cz_writeoff_prepare(
     token = ""
     if groups:
         for pg, pg_cises in groups.items():
+            # В документ вывода из оборота уходит КОД ИДЕНТИФИКАЦИИ (01+GTIN+21+серия),
+            # без криптохвоста. Сканер в USB-режиме часто не отдаёт разделитель GS —
+            # тогда криптохвост «93…» приклеивается к серии, и ЧЗ отвечает «06: код
+            # идентификации не найден в базе данных». Нормализуем так же, как при записи
+            # в МойСклад: при наличии GS — режем по нему, без GS — по длине серии группы.
+            ki_cises = [
+                cis_string_for_moysklad_api(c, moysklad_tracking_type=pg.upper())
+                for c in pg_cises
+            ]
             document = cz.build_writeoff_document(
                 inn=integration.cz_inn,
                 action=reason["action"],
                 action_date=action_date,
-                cises=pg_cises,
+                cises=ki_cises,
                 custom_name=reason["label"],
                 basis_number=body.basis_number,
                 basis_date=body.basis_date,
             )
             b64 = cz.encode_product_document(document)
             parts.append(WriteoffPart(pg=pg, product_document_b64=b64))
-            stored_parts[pg] = {"product_document_b64": b64, "cises": pg_cises}
+            stored_parts[pg] = {"product_document_b64": b64, "cises": ki_cises}
 
         token = secrets.token_urlsafe(32)
         payload = {

@@ -1502,6 +1502,11 @@ def _gs1_check_digit_ok(gtin14: str) -> bool:
 def verify_code_local_gs1(code: str) -> VerifyResult:
     """Проверка структуры КМ без API Честного Знака (формат GS1 + контрольная сумма GTIN)."""
     gtin, serial = parse_gs1_km_gtin_serial(code)
+    # Фолбэк: сканер в режиме «человекочитаемой AI-нотации» отдаёт «(01)…(21)…».
+    # Скобки вокруг 2–4-значных AI режем (серия КМ их сохраняет — strip_ai_brackets
+    # трогает только «(\d{2,4})») и пробуем разобрать ещё раз.
+    if (not gtin or len(gtin) != 14 or not gtin.isdigit()) and code and "(" in code:
+        gtin, serial = parse_gs1_km_gtin_serial(strip_ai_brackets(code))
     if not gtin or len(gtin) != 14 or not gtin.isdigit():
         return VerifyResult(
             valid=False,

@@ -1520,6 +1520,7 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
                 "writeoff.poll.error",
                 document_id=document_id,
                 statuses={i["doc_id"]: statuses.get(i["doc_id"]) for i in items},
+                reason=error,
             )
             await _push_writeoff_status(
                 str(user_id),
