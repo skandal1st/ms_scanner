@@ -92,6 +92,9 @@ class CzDispenser:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
+        # Скачивание готового ZIP: слать Content-Type: application/json на GET-файла
+        # НЕЛЬЗЯ — шлюз ЧЗ отвечает 403 «Отсутствует доступ к ресурсу». Только токен.
+        self.file_headers = {"Authorization": f"Bearer {token}"}
 
     async def create_filtered_cis_task(
         self,
@@ -250,7 +253,7 @@ class CzDispenser:
         for attempt in range(6):
             async with httpx.AsyncClient(timeout=180) as c:
                 rf = await c.get(
-                    f"{self.base}/results/{result_id}/file", headers=self.headers
+                    f"{self.base}/results/{result_id}/file", headers=self.file_headers
                 )
             if rf.status_code == 200 and rf.content[:2] == b"PK":
                 return _parse_filtered_cis_zip(rf.content, pg_string)
