@@ -19,6 +19,7 @@ import json
 import time
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -42,6 +43,21 @@ CZ_PG_STRING_TO_CODE: dict[str, int] = {
 # Уровни упаковки для выгрузки остатков: единица + агрегаты (блок/короб/паллета).
 DEFAULT_PACKAGE_TYPES = ["UNIT", "LEVEL1", "LEVEL2", "LEVEL3", "LEVEL4"]
 
+# До какого возраста переиспользуем уже готовую выгрузку ЧЗ, не создавая новую.
+# Генерация в ЧЗ медленная (минуты, иногда десятки) — свежий готовый результат
+# отдаём сразу, чтобы не ждать и не плодить задачи.
+DEFAULT_REUSE_AGE_S = 2 * 3600
+
+
+def _parse_dispenser_ts(s: Optional[str]) -> Optional[datetime]:
+    """createDate задачи ЧЗ ('2026-09-08T12:32:36.947') → naive UTC datetime."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(str(s).replace("Z", "").split("+")[0])
+    except ValueError:
+        return None
+
 
 @dataclass
 class OwnerCis:
@@ -57,6 +73,14 @@ class OwnerCis:
 
 class CzDispenserError(Exception):
     pass
+
+
+class CzDispenserPending(CzDispenserError):
+    """Выгрузка ещё формируется на стороне ЧЗ (не готова за отведённое время).
+
+    Отличается от CzDispenserError: не ошибка токена/договора, а «зайдите позже» —
+    задача продолжает генерироваться в ЧЗ и будет переиспользована следующим прогоном.
+    """
 
 
 class CzDispenser:
@@ -110,30 +134,32 @@ class CzDispenser:
         logger.info("dispenser.task_created", pg=pg_string, task_id=task_id)
         return task_id
 
-    async def _task_status(self, task_id: str, pg_code: int) -> Optional[str]:
+    async def _tasks(self, pg_code: int) -> list[dict]:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(
                 f"{self.base}/tasks",
                 headers=self.headers,
                 params={"page": 0, "size": 100, "pg": pg_code},
             )
-        if r.status_code != 200:
-            return None
-        for t in r.json().get("list", []):
-            if t.get("id") == task_id:
-                return t.get("currentStatus")
-        return None
+        return r.json().get("list", []) if r.status_code == 200 else []
 
-    async def _result_id(self, task_id: str, pg_code: int) -> Optional[str]:
+    async def _results(self, pg_code: int) -> list[dict]:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(
                 f"{self.base}/results",
                 headers=self.headers,
                 params={"page": 0, "size": 100, "pg": pg_code},
             )
-        if r.status_code != 200:
-            return None
-        for x in r.json().get("list", []):
+        return r.json().get("list", []) if r.status_code == 200 else []
+
+    async def _task_status(self, task_id: str, pg_code: int) -> Optional[str]:
+        for t in await self._tasks(pg_code):
+            if t.get("id") == task_id:
+                return t.get("currentStatus")
+        return None
+
+    async def _result_id(self, task_id: str, pg_code: int) -> Optional[str]:
+        for x in await self._results(pg_code):
             if (
                 x.get("taskId") == task_id
                 and x.get("downloadStatus") == "SUCCESS"
@@ -141,6 +167,100 @@ class CzDispenser:
             ):
                 return x.get("id")
         return None
+
+    def _own_fresh_tasks(
+        self, tasks: list[dict], pg_code: int, inn: str, max_age_s: int
+    ) -> list[dict]:
+        """Наши задачи FILTERED_CIS_REPORT по группе/ИНН не старше max_age_s.
+
+        Строгий фильтр обязателен: среди результатов ЧЗ бывают чужие отчёты (напр.
+        VIOLATIONS) — их нельзя парсить как выгрузку остатка.
+        """
+        cutoff = datetime.utcnow() - timedelta(seconds=max_age_s)
+        out: list[dict] = []
+        for t in tasks:
+            if t.get("name") != "FILTERED_CIS_REPORT":
+                continue
+            if inn and str(t.get("orgInn") or "") != inn:
+                continue
+            if str(t.get("productGroupCode") or "") != str(pg_code):
+                continue
+            ts = _parse_dispenser_ts(t.get("createDate"))
+            if ts is None or ts < cutoff:
+                continue
+            out.append(t)
+        return out
+
+    async def find_reusable_result(
+        self, pg_string: str, inn: str, *, max_age_s: int = DEFAULT_REUSE_AGE_S
+    ) -> Optional[str]:
+        """result_id недавней ГОТОВОЙ (SUCCESS+AVAILABLE) выгрузки нашей группы/ИНН.
+
+        Позволяет отдать остаток сразу, не создавая новую задачу и не ожидая
+        медленную генерацию ЧЗ.
+        """
+        code = CZ_PG_STRING_TO_CODE.get(pg_string)
+        if code is None:
+            return None
+        fresh_ids = {
+            t.get("id")
+            for t in self._own_fresh_tasks(await self._tasks(code), code, inn, max_age_s)
+        }
+        if not fresh_ids:
+            return None
+        for x in await self._results(code):
+            if (
+                x.get("taskId") in fresh_ids
+                and x.get("downloadStatus") == "SUCCESS"
+                and x.get("available") == "AVAILABLE"
+            ):
+                logger.info(
+                    "dispenser.reuse_result", pg=pg_string, task_id=x.get("taskId")
+                )
+                return x.get("id")
+        return None
+
+    async def find_inflight_task(
+        self, pg_string: str, inn: str, *, max_age_s: int = DEFAULT_REUSE_AGE_S
+    ) -> Optional[str]:
+        """task_id недавней ещё живой задачи (PREPARATION/COMPLETED) нашей группы/ИНН.
+
+        Чтобы повторный «обновить» ждал уже идущую генерацию, а не плодил дубли.
+        """
+        code = CZ_PG_STRING_TO_CODE.get(pg_string)
+        if code is None:
+            return None
+        best_id: Optional[str] = None
+        best_ts: Optional[datetime] = None
+        for t in self._own_fresh_tasks(await self._tasks(code), code, inn, max_age_s):
+            if t.get("currentStatus") not in ("PREPARATION", "COMPLETED"):
+                continue
+            ts = _parse_dispenser_ts(t.get("createDate"))
+            if best_ts is None or (ts is not None and ts > best_ts):
+                best_ts, best_id = ts, t.get("id")
+        return best_id
+
+    async def download_result(self, pg_string: str, result_id: str) -> list[OwnerCis]:
+        """Скачать и распарсить готовый результат по его id.
+
+        Файл может кратко отдавать 403 сразу после SUCCESS (финализация на стороне
+        ЧЗ) — несколько ретраев с паузой.
+        """
+        rf = None
+        for attempt in range(6):
+            async with httpx.AsyncClient(timeout=180) as c:
+                rf = await c.get(
+                    f"{self.base}/results/{result_id}/file", headers=self.headers
+                )
+            if rf.status_code == 200 and rf.content[:2] == b"PK":
+                return _parse_filtered_cis_zip(rf.content, pg_string)
+            logger.warning(
+                "dispenser.download_retry", pg=pg_string, attempt=attempt, status=rf.status_code
+            )
+            await asyncio.sleep(15)
+        raise CzDispenserError(
+            f"export {pg_string}: скачивание не ZIP (HTTP {rf.status_code if rf else '?'})"
+        )
 
     async def wait_and_download(
         self,
@@ -150,37 +270,25 @@ class CzDispenser:
         timeout_s: int = 1800,
         poll_s: int = 10,
     ) -> list[OwnerCis]:
-        """Дождаться готовности задачи и скачать/распарсить CSV. Пусто, если не готово/ошибка."""
+        """Дождаться готового результата задачи и скачать/распарсить CSV.
+
+        Опрашиваем именно ``/results`` (SUCCESS+AVAILABLE), а не статус ``COMPLETED``
+        в ``/tasks``: готовая задача быстро уходит в ARCHIVE (результат → NOT_AVAILABLE),
+        и ожидание строго по COMPLETED промахивалось мимо короткого окна скачивания.
+        Если за timeout_s результат не готов — CzDispenserPending («ещё формируется»).
+        """
         pg_code = CZ_PG_STRING_TO_CODE[pg_string]
         deadline = time.time() + timeout_s
         while time.time() < deadline:
+            result_id = await self._result_id(task_id, pg_code)
+            if result_id:
+                return await self.download_result(pg_string, result_id)
             st = await self._task_status(task_id, pg_code)
-            if st == "COMPLETED":
-                break
             if st in ("FAILED", "CANCELED"):
                 raise CzDispenserError(f"export {pg_string} task {task_id}: статус {st}")
             await asyncio.sleep(poll_s)
-        else:
-            raise CzDispenserError(f"export {pg_string}: не дождались COMPLETED за {timeout_s}с")
-
-        result_id = await self._result_id(task_id, pg_code)
-        if not result_id:
-            raise CzDispenserError(f"export {pg_string}: нет готового результата (resultId)")
-
-        # Файл может кратко отдавать 403 сразу после SUCCESS (финализация на стороне ЧЗ) —
-        # несколько ретраев с паузой.
-        rf = None
-        for attempt in range(6):
-            async with httpx.AsyncClient(timeout=180) as c:
-                rf = await c.get(f"{self.base}/results/{result_id}/file", headers=self.headers)
-            if rf.status_code == 200 and rf.content[:2] == b"PK":
-                return _parse_filtered_cis_zip(rf.content, pg_string)
-            logger.warning(
-                "dispenser.download_retry", pg=pg_string, attempt=attempt, status=rf.status_code
-            )
-            await asyncio.sleep(15)
-        raise CzDispenserError(
-            f"export {pg_string}: скачивание не ZIP (HTTP {rf.status_code if rf else '?'})"
+        raise CzDispenserPending(
+            f"export {pg_string}: ЧЗ не сформировал выгрузку за {timeout_s}с"
         )
 
 
