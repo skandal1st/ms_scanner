@@ -50,6 +50,10 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
 
   const portRef = useRef<SerialPort | null>(null)
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null)
+  // Промис цикла чтения: закрытие порта ДОЛЖНО дождаться его завершения, иначе lock
+  // на port.readable останется висеть и port.close() либо повиснет, либо следующий
+  // port.open() упадёт с «порт занят» (лечилось только Ctrl+Shift+R).
+  const loopRef = useRef<Promise<void> | null>(null)
   const aliveRef = useRef(false)
   // onCode передаётся через ref, чтобы изменение callback не перезапускало reader-loop.
   const onCodeRef = useRef(onCode)
@@ -62,13 +66,19 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     const reader = readerRef.current
     readerRef.current = null
     if (reader) {
+      // cancel() разбудит зависший read() → цикл выйдет и сам снимет lock в finally.
       try {
         await reader.cancel()
       } catch {
         /* ignore */
       }
+    }
+    // Ждём завершения цикла — только после этого lock на readable гарантированно снят.
+    const loop = loopRef.current
+    loopRef.current = null
+    if (loop) {
       try {
-        reader.releaseLock()
+        await loop
       } catch {
         /* ignore */
       }
@@ -76,9 +86,11 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
   }, [])
 
   const closePort = useCallback(async () => {
-    await stopReader()
+    // Обнуляем portRef СРАЗУ: слушатель `connect` во время закрытия не должен принять
+    // закрываемый порт за «живой» и пропустить авто-переоткрытие после ре-энумерации.
     const port = portRef.current
     portRef.current = null
+    await stopReader()
     if (port) {
       try {
         await port.close()
@@ -89,7 +101,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     setConnected(false)
   }, [stopReader])
 
-  const startReader = useCallback(async (port: SerialPort) => {
+  const startReader = useCallback((port: SerialPort) => {
     if (!port.readable) {
       setError('COM-порт не доступен для чтения')
       return
@@ -97,35 +109,38 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     const reader = port.readable.getReader()
     readerRef.current = reader
     aliveRef.current = true
-    const buffer = new SerialLineBuffer()
-    // latin1, НЕ utf-8: сканер шлёт байты GS1 DataMatrix как есть (включая GS-подмену
-    // 0xF8). UTF-8 ломал бы невалидные байты на U+FFFD; latin1 маппит байт↔кодпоинт 1:1.
-    const decoder = new TextDecoder('latin1')
-
-    try {
-      while (aliveRef.current) {
-        const { value, done } = await reader.read()
-        if (done) break
-        if (!value) continue
-        const text = decoder.decode(value, { stream: true })
-        const lines = buffer.feed(text)
-        for (const line of lines) {
-          // normalizeGs: подменный GS-байт сканера (0xF8) → каноничный 0x1D.
-          const code = normalizeGs(line).trim()
-          if (code) onCodeRef.current(code)
+    // Цикл чтения живёт в отдельном промисе (loopRef): закрытие порта его дожидается,
+    // а lock на readable снимается ровно один раз — в finally этого цикла.
+    loopRef.current = (async () => {
+      const buffer = new SerialLineBuffer()
+      // latin1, НЕ utf-8: сканер шлёт байты GS1 DataMatrix как есть (включая GS-подмену
+      // 0xF8). UTF-8 ломал бы невалидные байты на U+FFFD; latin1 маппит байт↔кодпоинт 1:1.
+      const decoder = new TextDecoder('latin1')
+      try {
+        while (aliveRef.current) {
+          const { value, done } = await reader.read()
+          if (done) break
+          if (!value) continue
+          const text = decoder.decode(value, { stream: true })
+          const lines = buffer.feed(text)
+          for (const line of lines) {
+            // normalizeGs: подменный GS-байт сканера (0xF8) → каноничный 0x1D.
+            const code = normalizeGs(line).trim()
+            if (code) onCodeRef.current(code)
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error('[useSerialScanner] reader loop error:', e)
+        setError(`Ошибка чтения COM-порта: ${msg}`)
+      } finally {
+        try {
+          reader.releaseLock()
+        } catch {
+          /* ignore */
         }
       }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e)
-      console.error('[useSerialScanner] reader loop error:', e)
-      setError(`Ошибка чтения COM-порта: ${msg}`)
-    } finally {
-      try {
-        reader.releaseLock()
-      } catch {
-        /* ignore */
-      }
-    }
+    })()
   }, [])
 
   const openAndRead = useCallback(
@@ -140,9 +155,19 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
           console.error('[useSerialScanner] port.open failed:', e)
           // InvalidStateError — порт уже открыт другим контекстом. Если readable есть — продолжаем.
           if (port.readable === null) {
-            setError(humanizeSerialOpenError(e))
-            setConnected(false)
-            return
+            // После ре-энумерации USB / недавнего close ОС может ещё держать хендл и вернуть
+            // «порт занят». Дадим ему освободиться и попробуем один раз повторно — иначе
+            // залипало до полной перезагрузки вкладки (Ctrl+Shift+R).
+            await new Promise((r) => setTimeout(r, 500))
+            try {
+              await port.open(PORT_OPTIONS)
+            } catch (e2) {
+              if (port.readable === null) {
+                setError(humanizeSerialOpenError(e2))
+                setConnected(false)
+                return
+              }
+            }
           }
         }
       }
@@ -206,14 +231,23 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     const onDisconnect = (ev: Event & { target: SerialPort }) => {
       if (ev.target === portRef.current) {
         void closePort()
-        setError('COM-порт отключён')
+        setError('COM-порт отключён. Ожидаю переподключения сканера…')
       }
     }
     navigator.serial.addEventListener('disconnect', onDisconnect)
 
+    // USB-сканеры при ре-энумерации порта шлют `connect` заново. Если своего порта уже
+    // не держим — открываем вернувшийся автоматически, без Ctrl+Shift+R.
+    const onConnect = (ev: Event & { target: SerialPort }) => {
+      if (cancelled || portRef.current) return
+      void openAndRead(ev.target)
+    }
+    navigator.serial.addEventListener('connect', onConnect)
+
     return () => {
       cancelled = true
       navigator.serial.removeEventListener('disconnect', onDisconnect)
+      navigator.serial.removeEventListener('connect', onConnect)
       void closePort()
     }
   }, [enabled, supported, openAndRead, closePort])
