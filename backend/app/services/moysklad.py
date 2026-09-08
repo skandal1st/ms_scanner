@@ -309,6 +309,39 @@ class MoySkladService:
             "type": "trackingcode",
         }
 
+    def _tracking_batch(
+        self,
+        scans: List[Dict[str, Any]],
+        ms_tracking_type: Optional[str],
+        seen_cis: set,
+        doc_id: str,
+    ) -> List[Dict[str, str]]:
+        """trackingCodes для позиции с отбросом повторяющихся cis.
+
+        МойСклад отклоняет ВЕСЬ документ, если один и тот же cis встречается дважды
+        («в документе несколько одинаковых кодов …»). Разные сырые сканы одной физической
+        марки после нормализации (обрезка криптохвоста, срез не-ASCII) дают одинаковый
+        cis — схлопываем их в один. ``seen_cis`` общий на весь документ: уникальность у
+        МС проверяется по всему документу, а не по отдельной позиции.
+        """
+        out: List[Dict[str, str]] = []
+        for s in scans:
+            if not s.get("code") or s.get("is_barcode"):
+                continue
+            entry = self._tracking_code_entry(s, ms_tracking_type)
+            cis = (entry.get("cis") or "").strip()
+            if not cis or cis in seen_cis:
+                if cis:
+                    logger.info(
+                        "moysklad.update_document.dup_cis_skipped",
+                        doc_id=doc_id,
+                        cis=cis[:60],
+                    )
+                continue
+            seen_cis.add(cis)
+            out.append(entry)
+        return out
+
     def _position_put_payload(self, ms_row: Dict[str, Any]) -> Dict[str, Any]:
         """
         Тело позиции для PUT документа: без «тяжёлого» expand assortment,
@@ -382,6 +415,9 @@ class MoySkladService:
         """
         self._validate_kind(kind)
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
+        # Уникальность cis у МС — по всему документу. Копим отправленные cis, чтобы
+        # один и тот же код не ушёл в две позиции/дважды (иначе МС отклонит документ).
+        seen_cis: set = set()
 
         # Группировка по product_id
         groups: Dict[str, List[Dict]] = {}
@@ -448,11 +484,8 @@ class MoySkladService:
                             ms_tt = self._moysklad_tracking_type_from_position(row)
                             # Штрихкод немаркированного товара (is_barcode) даёт только
                             # quantity позиции — trackingCode для него не пишем.
-                            tc_batch = [
-                                self._tracking_code_entry(s, ms_tt)
-                                for s in take
-                                if s.get("code") and not s.get("is_barcode")
-                            ]
+                            # Повторяющиеся cis отбрасываем (МС не примет дубль в документе).
+                            tc_batch = self._tracking_batch(take, ms_tt, seen_cis, doc_id)
                             pos_row_id = row.get("id")
                             if pos_row_id and tc_batch:
                                 post_tracking_batches.append(
@@ -506,11 +539,8 @@ class MoySkladService:
                         pass
                 if write_codes:
                     # Штрихкод немаркированного товара (is_barcode) не даёт trackingCode.
-                    tcs = [
-                        self._tracking_code_entry(s, None)
-                        for s in group
-                        if s.get("code") and not s.get("is_barcode")
-                    ]
+                    # Повторяющиеся cis отбрасываем (МС не примет дубль в документе).
+                    tcs = self._tracking_batch(group, None, seen_cis, doc_id)
                     if tcs:
                         position["trackingCodes"] = tcs
                 positions.append(position)
