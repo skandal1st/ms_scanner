@@ -18,6 +18,13 @@ interface Options<T extends PollableDoc> {
   maxAttempts?: number
   /** Задержка перед window.close() после успеха, если вкладка открыта из МС. */
   closeTabDelayMs?: number
+  /**
+   * Закрывать вкладку после успеха (если открыта из МС). По умолчанию true.
+   * В COM-режиме сканера ставим false: авто-закрытие вкладки закрывало бы и
+   * COM-порт — на каждую отгрузку новый цикл open/close виртуального порта
+   * (частая причина «залипания» COM). Держим порт открытым на всю смену.
+   */
+  autoCloseTab?: boolean
 }
 
 /**
@@ -38,6 +45,7 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
     pollIntervalMs = 1500,
     maxAttempts = 20,
     closeTabDelayMs = 1200,
+    autoCloseTab = true,
   } = opts
 
   const [sending, setSending] = useState(false)
@@ -77,7 +85,7 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
           setError(failReason)
         } else if (finalStatus === 'accepted') {
           setDone(true)
-          if (window.opener && !window.opener.closed) {
+          if (autoCloseTab && window.opener && !window.opener.closed) {
             setClosingTab(true)
             setTimeout(() => window.close(), closeTabDelayMs)
           }
@@ -95,7 +103,7 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
         setSending(false)
       }
     },
-    [fetchDoc, onPoll, extractError, pollIntervalMs, maxAttempts, closeTabDelayMs],
+    [fetchDoc, onPoll, extractError, pollIntervalMs, maxAttempts, closeTabDelayMs, autoCloseTab],
   )
 
   return { send, sending, error, done, closingTab, setError, reset }
