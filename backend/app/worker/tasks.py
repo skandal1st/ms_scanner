@@ -1316,6 +1316,49 @@ async def _process_document_async(document_id: str, user_id: str):
                 )
                 if isinstance(result, dict) and result.get("__moysklad_412__") is True:
                     body = result.get("body") or ""
+                    # 412 «несколько одинаковых кодов X» — код уже записан в позицию МС
+                    # (повторная отгрузка того же документа). Это не битый КМ: убираем его
+                    # из отправки и повторяем — остальные коды запишутся, документ
+                    # финализируется. Идемпотентность на случай, если засев seen_cis из
+                    # существующих trackingCodes не сработал (МС не отдал их в списке).
+                    dup_m = re.search(
+                        r"несколько одинаковых кодов\s+([^\s\",}]+)",
+                        body,
+                        flags=re.IGNORECASE,
+                    )
+                    if dup_m:
+                        dup_code = dup_m.group(1)
+                        dup_scan = next(
+                            (
+                                s
+                                for s in remaining_scans
+                                if _cis_matches_ms_error_message(s.code, dup_code)
+                                or any(
+                                    _cis_matches_ms_error_message(cc, dup_code)
+                                    for cc in (s.child_codes or [])
+                                )
+                            ),
+                            None,
+                        )
+                        if dup_scan:
+                            logger.warning(
+                                "process_document.dup_code_in_ms",
+                                document_id=document_id,
+                                code=dup_code,
+                            )
+                            remaining_scans = [
+                                s for s in remaining_scans if s.id != dup_scan.id
+                            ]
+                            continue
+                        logger.error(
+                            "process_document.dup_code_unmatched",
+                            document_id=document_id,
+                            dup_code=dup_code,
+                            scan_codes=[
+                                (str(s.id), (s.code or "")[:120]) for s in remaining_scans
+                            ],
+                        )
+                        break
                     m = re.search(
                         r"неверный формат кода маркировки\s+([^\s\",}]+)",
                         body,

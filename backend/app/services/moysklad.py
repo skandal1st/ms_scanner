@@ -3,7 +3,11 @@ import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import logger
-from app.services.chestnyznak import cis_string_for_moysklad_api, normalize_gtin_key
+from app.services.chestnyznak import (
+    cis_string_for_moysklad_api,
+    normalize_gtin_key,
+    parse_gs1_km_gtin_serial,
+)
 
 # Сущность КМ в Remap 1.2: см. Markirovka.md (cis при создании, cis_1162 только в ответе, codetype при GET).
 
@@ -309,6 +313,19 @@ class MoySkladService:
             "type": "trackingcode",
         }
 
+    @staticmethod
+    def _cis_dedup_key(cis: Optional[str]) -> str:
+        """Канонический ключ КМ для дедупа: GTIN|серия, независимо от формы записи.
+
+        Один и тот же код МС может хранить «голым» (``<GTIN><серия>``) и отдавать на
+        чтении в gs1-форме (``01<GTIN>21<серия>``) — сравнение по сырой строке их не
+        свяжет. Приводим к (GTIN, серия) через тот же парсер, что и остальной поток.
+        """
+        g, s = parse_gs1_km_gtin_serial((cis or "").strip())
+        if g and s:
+            return f"{g}|{s.strip()}"
+        return (cis or "").strip()
+
     def _tracking_batch(
         self,
         scans: List[Dict[str, Any]],
@@ -316,13 +333,13 @@ class MoySkladService:
         seen_cis: set,
         doc_id: str,
     ) -> List[Dict[str, str]]:
-        """trackingCodes для позиции с отбросом повторяющихся cis.
+        """trackingCodes для позиции с отбросом повторяющихся кодов.
 
-        МойСклад отклоняет ВЕСЬ документ, если один и тот же cis встречается дважды
-        («в документе несколько одинаковых кодов …»). Разные сырые сканы одной физической
-        марки после нормализации (обрезка криптохвоста, срез не-ASCII) дают одинаковый
-        cis — схлопываем их в один. ``seen_cis`` общий на весь документ: уникальность у
-        МС проверяется по всему документу, а не по отдельной позиции.
+        МойСклад отклоняет ВЕСЬ документ, если один и тот же КМ встречается дважды
+        («в документе несколько одинаковых кодов …») — как внутри нашей отправки, так и
+        относительно уже записанных в позицию кодов (повторная отгрузка). Сравниваем по
+        каноническому ключу GTIN|серия; ``seen_cis`` общий на весь документ и заранее
+        засеян кодами, которые уже лежат в позициях МС.
         """
         out: List[Dict[str, str]] = []
         for s in scans:
@@ -330,15 +347,16 @@ class MoySkladService:
                 continue
             entry = self._tracking_code_entry(s, ms_tracking_type)
             cis = (entry.get("cis") or "").strip()
-            if not cis or cis in seen_cis:
-                if cis:
+            key = self._cis_dedup_key(cis)
+            if not key or key in seen_cis:
+                if key:
                     logger.info(
                         "moysklad.update_document.dup_cis_skipped",
                         doc_id=doc_id,
                         cis=cis[:60],
                     )
                 continue
-            seen_cis.add(cis)
+            seen_cis.add(key)
             out.append(entry)
         return out
 
@@ -450,6 +468,27 @@ class MoySkladService:
                 error=str(exc),
             )
             ms_rows = []
+
+        # Идемпотентность повторной отгрузки: коды, уже записанные в позиции МС прошлой
+        # попыткой, повторно НЕ отправляем — иначе МС «в документе несколько одинаковых
+        # кодов». Засеваем seen_cis каноническими ключами существующих trackingCodes.
+        if write_codes and ms_rows:
+            existing = 0
+            for row in ms_rows:
+                for tc in row.get("trackingCodes") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    key = self._cis_dedup_key(tc.get("cis") or tc.get("cis_1162"))
+                    if key and key not in seen_cis:
+                        seen_cis.add(key)
+                        existing += 1
+            if existing:
+                logger.info(
+                    "moysklad.update_document.existing_codes_seeded",
+                    kind=kind,
+                    doc_id=doc_id,
+                    count=existing,
+                )
 
         positions: List[Dict[str, Any]]
 
