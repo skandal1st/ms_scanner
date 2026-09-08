@@ -28,9 +28,11 @@ export function ShipmentPage() {
   const {
     send: sendToMs,
     sending,
-    error: sendError,
+    done,
     closingTab,
+    error: sendError,
     setError: setSendError,
+    reset: resetSend,
   } = useSendToMoysklad<Document>({
     fetchDoc: (id) => documentsApi.get(id),
     onPoll: (fresh) => setDocument(fresh),
@@ -331,14 +333,31 @@ export function ShipmentPage() {
         busy={bulkBusy}
       />
 
-      {closingTab && (
+      {done && (
         <div className="done-overlay">
           <div className="done-overlay__card">
             <div className="done-overlay__check">
               <Icon name="check" size={32} />
             </div>
             <div className="done-overlay__title">Отгружено</div>
-            <div className="done-overlay__sub">Возвращаемся в МойСклад…</div>
+            {/* Вкладка из МС закроется сама; в обычной вкладке автозакрытия нет —
+                даём явное подтверждение и кнопку, иначе кладовщик не видит успех
+                и жмёт «Отгрузить» снова (марки уже записаны, идёт бесконечный повтор). */}
+            <div className="done-overlay__sub">
+              {closingTab
+                ? 'Возвращаемся в МойСклад…'
+                : 'Марки записаны в МойСклад.'}
+            </div>
+            {!closingTab && (
+              <button
+                type="button"
+                className="button button--success"
+                style={{ marginTop: 16 }}
+                onClick={resetSend}
+              >
+                Готово
+              </button>
+            )}
           </div>
         </div>
       )}
