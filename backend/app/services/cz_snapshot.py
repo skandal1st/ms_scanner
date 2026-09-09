@@ -58,6 +58,10 @@ async def refresh_snapshot(db, integ: Integration) -> dict:
     """Полностью обновить cz_owner_marks пользователя из свежей выгрузки ЧЗ."""
     if not integ.cz_token:
         return {"error": "Нет токена ЧЗ"}
+    # Истёкший токен даёт вырожденную выгрузку — не трогаем снимок, иначе полная
+    # замена ниже затрёт остаток «в ноль». Обновление токена — только из браузера (УКЭП).
+    if integ.cz_token_expires_at is not None and integ.cz_token_expires_at <= datetime.now(timezone.utc):
+        return {"error": "Токен ЧЗ истёк — войдите в ЧЗ заново, снимок не изменён"}
     try:
         token = decrypt_token(integ.cz_token)
     except Exception:

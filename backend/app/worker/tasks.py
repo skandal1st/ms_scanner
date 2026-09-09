@@ -1855,13 +1855,25 @@ def cz_snapshot_refresh_all_task():
 
 
 async def _cz_snapshot_refresh_all_async():
-    from sqlalchemy import select
+    from sqlalchemy import and_, or_, select
     from app.db.session import AsyncSessionLocal
     from app.db.models import Integration
 
+    now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
+        # Только валидные токены: истёкший токен дал бы вырожденную выгрузку, а
+        # refresh_snapshot полностью заменяет снимок — можно затереть остаток «в ноль».
+        # Воркер токен ЧЗ сам не обновляет (нужна свежая подпись из браузера) — просто пропускаем.
         q = await db.execute(
-            select(Integration.user_id).where(Integration.cz_token.isnot(None))
+            select(Integration.user_id).where(
+                and_(
+                    Integration.cz_token.isnot(None),
+                    or_(
+                        Integration.cz_token_expires_at.is_(None),
+                        Integration.cz_token_expires_at > now,
+                    ),
+                )
+            )
         )
         user_ids = [str(u) for (u,) in q.all()]
     for uid in user_ids:
