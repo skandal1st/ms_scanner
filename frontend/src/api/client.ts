@@ -257,6 +257,8 @@ export interface ReconcileRow {
   unmatched?: boolean
   /** Есть явная привязка GTIN→товар МС (gtin_product_map), даже если товара нет в снимке остатка. */
   has_link?: boolean
+  /** Позиция отложена в архив (несопоставимая) — не попадает в подбор/«не сопоставлено». */
+  archived?: boolean
   name_via_nk?: boolean
 }
 
@@ -290,13 +292,14 @@ export interface ReconcileResult {
   search_total: number
   unmatched_positions: number
   unmatched_marks: number
+  archived_positions: number
   brands: ReconcileBrand[]
   rows: ReconcileRow[]
   totals: { positions: number; qty_cz: number; qty_upd: number; qty_ms: number; diff: number; to_search: number }
 }
 
 export type ReconcileDiff = 'all' | 'to_search' | 'cz_gt_ms' | 'ms_gt_cz' | 'mismatch'
-export type ReconcileMatch = 'all' | 'unmatched' | 'matched'
+export type ReconcileMatch = 'all' | 'unmatched' | 'matched' | 'archived'
 
 export interface StoresResponse {
   stores: InventoryStore[]
@@ -356,6 +359,28 @@ export const inventoryApi = {
       params: { brand: brand || undefined },
     }),
   enrichStatus: () => api.get<NkEnrichStatus>('/inventory/enrich-names/status'),
+  /** Отправить GTIN «в архив» (несопоставимая позиция — убрать из подбора/не сопоставленных). */
+  archive: (gtin: string, product_name?: string | null) =>
+    api.post<{ status: string; gtin: string }>('/inventory/archive', {
+      gtin,
+      product_name: product_name ?? null,
+    }),
+  /** Вернуть GTIN из архива. */
+  unarchive: (gtin: string) =>
+    api.post<{ status: string; gtin: string }>('/inventory/unarchive', { gtin }),
+  archived: () => api.get<InventoryArchivedResult>('/inventory/archived'),
+}
+
+export interface InventoryArchivedItem {
+  gtin: string | null
+  product_name: string | null
+  qty_cz: number
+  folder_name: string
+}
+
+export interface InventoryArchivedResult {
+  items: InventoryArchivedItem[]
+  total: number
 }
 
 export interface InventoryUnmatchedItem {

@@ -246,6 +246,28 @@ class GtinNameMap(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class GtinArchive(Base):
+    """«Архив» несопоставимых GTIN в инвентаризации (пер-клиент).
+
+    Часть позиций ЧЗ невозможно привязать к товару МС (карточка в МС удалена/архивна,
+    товар снят с продажи), но при каждом снимке они снова всплывают в панели «Подбор
+    товара МС по имени» и в списке «не сопоставлено», зашумляя работу. Кладовщик
+    отправляет такой GTIN «в архив» — он перестаёт попадать в подбор/не сопоставленные,
+    но остаётся виден в отдельной панели «Архивные» с возможностью вернуть обратно.
+    product_name — снимок имени на момент архивации (для отображения в списке архива).
+    """
+    __tablename__ = "gtin_archive"
+    __table_args__ = (
+        UniqueConstraint("user_id", "gtin", name="ix_gtin_archive_user_gtin"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    gtin = Column(String(14), nullable=False)
+    product_name = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
 class GtinCzGroup(Base):
     """Кэш «GTIN → товарная группа ЧЗ (pg)» — засевается из trackingType карточки МС.
 

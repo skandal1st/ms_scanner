@@ -24,6 +24,7 @@ type IconName =
   | 'warning'
   | 'help'
   | 'support'
+  | 'archive'
 
 const PATHS: Record<IconName, JSX.Element> = {
   // Отгрузка — коробка со стрелкой вверх/наружу
@@ -127,6 +128,14 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H8l-4 3V6a1 1 0 0 1 1-1Z" />
       <path d="M8 10h8M8 13h5" />
+    </>
+  ),
+  // Архив — ящик с крышкой
+  archive: (
+    <>
+      <path d="M3 4.5h18v4H3v-4Z" />
+      <path d="M4.5 8.5v10a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-10" />
+      <path d="M9.5 12h5" />
     </>
   ),
 }

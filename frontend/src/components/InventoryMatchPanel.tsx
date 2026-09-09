@@ -14,7 +14,9 @@ interface RowState {
   query: string
   searching: boolean
   linking: boolean
+  archiving: boolean
   done: boolean
+  archived: boolean
   error?: string
 }
 
@@ -38,10 +40,12 @@ export function InventoryMatchPanel({
   brand,
   onClose,
   onLinked,
+  onArchived,
 }: {
   brand: string
   onClose: () => void
   onLinked: () => void
+  onArchived?: () => void
 }) {
   const [items, setItems] = useState<InventoryMatchItem[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,7 +70,9 @@ export function InventoryMatchPanel({
             query: '',
             searching: false,
             linking: false,
+            archiving: false,
             done: false,
+            archived: false,
           }
         }
         setRs(init)
@@ -110,6 +116,20 @@ export function InventoryMatchPanel({
       onLinked()
     } catch (e: any) {
       patch(key, { linking: false, error: e?.response?.data?.detail || 'Не удалось привязать' })
+    }
+  }
+
+  const archive = async (it: InventoryMatchItem) => {
+    const key = it.gtin || ''
+    const st = rs[key]
+    if (!st) return
+    patch(key, { archiving: true, error: undefined })
+    try {
+      await inventoryApi.archive(it.gtin || '', it.name)
+      patch(key, { archiving: false, archived: true, done: true })
+      onArchived?.()
+    } catch (e: any) {
+      patch(key, { archiving: false, error: e?.response?.data?.detail || 'Не удалось отправить в архив' })
     }
   }
 
@@ -176,7 +196,7 @@ export function InventoryMatchPanel({
                       <td style={{ color: conf.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{conf.label}</td>
                       <td style={{ minWidth: 320 }}>
                         {st.done ? (
-                          <span className="text-muted">Привязано ✓</span>
+                          <span className="text-muted">{st.archived ? 'В архиве ✓' : 'Привязано ✓'}</span>
                         ) : (
                           <>
                             <select
@@ -210,13 +230,23 @@ export function InventoryMatchPanel({
                       </td>
                       <td>
                         {!st.done && (
-                          <button
-                            className="button button--primary button--sm"
-                            disabled={!st.selectedId || st.linking}
-                            onClick={() => link(it)}
-                          >
-                            {st.linking ? 'Привязка…' : 'Привязать'}
-                          </button>
+                          <div className="flex-row gap-8" style={{ flexWrap: 'wrap' }}>
+                            <button
+                              className="button button--primary button--sm"
+                              disabled={!st.selectedId || st.linking || st.archiving}
+                              onClick={() => link(it)}
+                            >
+                              {st.linking ? 'Привязка…' : 'Привязать'}
+                            </button>
+                            <button
+                              className="button button--sm"
+                              disabled={st.linking || st.archiving}
+                              onClick={() => archive(it)}
+                              title="Товар в МС удалён/архивен — убрать позицию из подбора в архив"
+                            >
+                              {st.archiving ? '…' : 'В архив'}
+                            </button>
+                          </div>
                         )}
                       </td>
                     </tr>

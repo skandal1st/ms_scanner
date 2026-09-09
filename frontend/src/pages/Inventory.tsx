@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
+import { InventoryArchivePanel } from '../components/InventoryArchivePanel'
 import { RelinkGtinModal } from '../components/RelinkGtinModal'
 import {
   inventoryApi,
@@ -48,6 +49,7 @@ export function InventoryPage() {
   const [match, setMatch] = useState<ReconcileMatch>('all')
   const [showMatch, setShowMatch] = useState(false)
   const [showResolve, setShowResolve] = useState(false)
+  const [showArchive, setShowArchive] = useState(false)
   // Строка для смены привязки GTIN + подсказка «обновите остаток МС» после успеха.
   const [relinkRow, setRelinkRow] = useState<ReconcileRow | null>(null)
   const [relinkedHint, setRelinkedHint] = useState(false)
@@ -436,6 +438,13 @@ export function InventoryPage() {
                   {enrichBusy ? 'Опознаём…' : 'Опознать в Нац. каталоге'}
                 </button>
               )}
+              {(recon.archived_positions > 0 || showArchive) && (
+                <button className="button" style={{ marginBottom: 4 }} onClick={() => setShowArchive((v) => !v)}
+                  title="Позиции, отложенные из подбора (товар в МС удалён/архивен)">
+                  <Icon name="archive" size={15} />
+                  {showArchive ? 'Скрыть архив' : `Архивные (${nf(recon.archived_positions)})`}
+                </button>
+              )}
             </div>
             {enrich && (enrich.running || enrich.done) && (
               <div style={{ padding: '0 20px 8px' }}>
@@ -485,6 +494,16 @@ export function InventoryPage() {
                   brand={brand}
                   onClose={() => setShowMatch(false)}
                   onLinked={() => { /* остаток МС пересоберётся по кнопке «Обновить остаток МС» */ }}
+                  onArchived={() => loadRecon()}
+                />
+              </div>
+            )}
+
+            {showArchive && (
+              <div style={{ padding: '0 20px' }}>
+                <InventoryArchivePanel
+                  onClose={() => setShowArchive(false)}
+                  onRestored={() => loadRecon()}
                 />
               </div>
             )}
@@ -544,6 +563,18 @@ export function InventoryPage() {
                             }}
                           >
                             привязано
+                          </span>
+                        )}
+                        {r.archived && (
+                          <span
+                            title="Позиция отложена в архив — не попадает в подбор и «не сопоставлено»"
+                            style={{
+                              marginLeft: 6, fontSize: 10, fontWeight: 700, letterSpacing: .3,
+                              padding: '1px 5px', borderRadius: 4, verticalAlign: 'middle',
+                              background: 'rgba(0,0,0,.08)', color: 'var(--ms-text-subtle, #777)',
+                            }}
+                          >
+                            в архиве
                           </span>
                         )}
                       </td>

@@ -21,7 +21,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token
-from app.db.models import CzOwnerMark, Integration, MsStockSnapshot, User
+from app.db.models import CzOwnerMark, GtinArchive, Integration, MsStockSnapshot, User
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
 
@@ -252,6 +252,13 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         await db.execute(select(func.count()).select_from(CzOwnerMark).where(CzOwnerMark.user_id == user_id))
     ).scalar_one()
 
+    # GTIN'ы, отправленные «в архив» (несопоставимые) — не идут в подбор/не сопоставленные.
+    archived_gtins = set(
+        (
+            await db.execute(select(GtinArchive.gtin).where(GtinArchive.user_id == user_id))
+        ).scalars().all()
+    )
+
     res = await db.execute(_RECONCILE_SQL, {"uid": str(user_id)})
     all_rows = []
     for r in res:
@@ -263,7 +270,12 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         # «Не сопоставлен» — нет в остатках МС, нет явной привязки GTIN→товар и нет имени.
         # Явная привязка (gtin_product_map) опознаёт позицию даже при нулевом остатке в МС,
         # когда товара нет в снимке ms_stock_snapshot, — поэтому учитываем её отдельно.
-        unmatched = not_in_ms and not has_link and not (r.product_name and str(r.product_name).strip())
+        archived = bool(r.gtin) and r.gtin in archived_gtins
+        # Архивные не считаем «не сопоставленными» — их сознательно отложили.
+        unmatched = (
+            not_in_ms and not has_link and not archived
+            and not (r.product_name and str(r.product_name).strip())
+        )
         all_rows.append({
             "gtin": r.gtin,
             "product_name": r.product_name,
@@ -278,6 +290,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
             "not_in_ms": not_in_ms,
             "unmatched": unmatched,
             "has_link": has_link,
+            "archived": archived,
             "name_via_nk": bool(r.name_via_nk),
         })
 
@@ -306,10 +319,14 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
     # «Не сопоставлено» — позиций и марок ЧЗ, ничем не опознанных (для заголовка и кнопки).
     unmatched_positions = sum(1 for x in rows if x["unmatched"])
     unmatched_marks = sum(x["qty_cz"] for x in rows if x["unmatched"])
+    # «Архивные» — отложенные несопоставимые позиции (для счётчика и панели архива).
+    archived_positions = sum(1 for x in rows if x["archived"])
     if match == "unmatched":
         rows = [x for x in rows if x["unmatched"]]
     elif match == "matched":
-        rows = [x for x in rows if not x["unmatched"]]
+        rows = [x for x in rows if not x["unmatched"] and not x["archived"]]
+    elif match == "archived":
+        rows = [x for x in rows if x["archived"]]
     if diff == "to_search":
         rows = [x for x in rows if x["to_search"] > 0]
     elif diff == "cz_gt_ms":
@@ -328,6 +345,7 @@ async def _compute_reconcile(db: AsyncSession, user_id, brand: Optional[str], di
         "search_total": int(search_total),
         "unmatched_positions": int(unmatched_positions),
         "unmatched_marks": int(unmatched_marks),
+        "archived_positions": int(archived_positions),
         "brands": brand_list,
         "rows": rows,
         "totals": {
@@ -429,7 +447,8 @@ async def inventory_match_suggestions(
     # висят в списке даже после сопоставления (товар без остатка в снимок не попал).
     cands = [
         r for r in data["rows"]
-        if r["not_in_ms"] and not r.get("has_link") and (r["product_name"] or "").strip()
+        if r["not_in_ms"] and not r.get("has_link") and not r.get("archived")
+        and (r["product_name"] or "").strip()
     ]
     cands.sort(key=lambda r: -r["qty_cz"])
     cands = cands[: max(1, min(int(limit or 40), 100))]
@@ -728,3 +747,98 @@ async def inventory_relink_gtin(
         "barcode_written": barcode_written,
         "removed_from": removed_from,
     }
+
+
+# ── Архив несопоставимых позиций ──────────────────────────────────────────────
+
+class InventoryArchiveRequest(BaseModel):
+    gtin: str
+    product_name: Optional[str] = None
+
+
+@router.post("/archive")
+async def inventory_archive(
+    body: InventoryArchiveRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Отправить GTIN «в архив»: он перестаёт попадать в подбор и «не сопоставлено».
+    product_name — снимок имени для отображения в списке архива."""
+    from app.services.chestnyznak import normalize_gtin_key
+
+    key = normalize_gtin_key(body.gtin)
+    if not key:
+        raise HTTPException(status_code=400, detail="Некорректный GTIN")
+    name = (body.product_name or "").strip() or None
+    row = (
+        await db.execute(
+            select(GtinArchive).where(
+                GtinArchive.user_id == current_user.id, GtinArchive.gtin == key
+            )
+        )
+    ).scalar_one_or_none()
+    if row:
+        if name:
+            row.product_name = name[:500]
+    else:
+        db.add(GtinArchive(user_id=current_user.id, gtin=key, product_name=name[:500] if name else None))
+    await db.commit()
+    logger.info("inventory.archive.done", gtin=key)
+    return {"status": "ok", "gtin": key}
+
+
+@router.post("/unarchive")
+async def inventory_unarchive(
+    body: InventoryArchiveRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Вернуть GTIN из архива обратно в подбор/не сопоставленные."""
+    from app.services.chestnyznak import normalize_gtin_key
+
+    key = normalize_gtin_key(body.gtin)
+    if not key:
+        raise HTTPException(status_code=400, detail="Некорректный GTIN")
+    row = (
+        await db.execute(
+            select(GtinArchive).where(
+                GtinArchive.user_id == current_user.id, GtinArchive.gtin == key
+            )
+        )
+    ).scalar_one_or_none()
+    if row:
+        await db.delete(row)
+        await db.commit()
+    logger.info("inventory.unarchive.done", gtin=key)
+    return {"status": "ok", "gtin": key}
+
+
+@router.get("/archived")
+async def inventory_archived(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Список архивных позиций: имя (снимок при архивации, фолбэк — из сверки) + остаток ЧЗ."""
+    rows = (
+        await db.execute(
+            select(GtinArchive)
+            .where(GtinArchive.user_id == current_user.id)
+            .order_by(GtinArchive.created_at.desc())
+        )
+    ).scalars().all()
+    if not rows:
+        return {"items": [], "total": 0}
+
+    # Данные из сверки (имя/остаток/группа) по архивным GTIN — фолбэк, если снимок имени пуст.
+    data = await _compute_reconcile(db, current_user.id, None, "all", "archived")
+    by_gtin = {r["gtin"]: r for r in data["rows"]}
+    items = []
+    for row in rows:
+        rec = by_gtin.get(row.gtin) or {}
+        items.append({
+            "gtin": row.gtin,
+            "product_name": row.product_name or rec.get("product_name"),
+            "qty_cz": int(rec.get("qty_cz") or 0),
+            "folder_name": rec.get("folder_name") or "—",
+        })
+    return {"items": items, "total": len(items)}
