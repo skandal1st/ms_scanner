@@ -473,7 +473,7 @@ export interface Scan {
   duplicate?: boolean
 }
 
-/** Документ, в котором найдена искомая марка (ответ /scans/search). */
+/** Документ приложения, в котором найдена искомая марка (ответ /scans/search). */
 export interface CodeSearchHit {
   document_id: string
   document_name: string
@@ -483,6 +483,25 @@ export interface CodeSearchHit {
   status: ScanStatus
   product_name: string | null
   scanned_at: string
+}
+
+/** УПД из ЭДО (Saby), где числится марка. direction — «Входящий»/«Исходящий». */
+export interface UpdSearchHit {
+  edo_document_id: string
+  direction: string | null
+  doc_type: string | null
+  number: string | null
+  doc_date: string | null
+  counterparty_name: string | null
+  counterparty_inn: string | null
+  cis_raw: string
+  gtin: string | null
+}
+
+/** Ответ /scans/search: марка в документах приложения + в УПД ЭДО. */
+export interface CodeSearchResponse {
+  scans: CodeSearchHit[]
+  upds: UpdSearchHit[]
 }
 
 export const scansApi = {
@@ -507,9 +526,9 @@ export const scansApi = {
     api.post<{ deleted: number }>('/scans/delete-bulk', { document_id, scan_ids }),
   /** Удалить все марки документа из БД. */
   clearDocument: (document_id: string) => api.delete(`/scans/by-document/${document_id}`),
-  /** Найти документы пользователя, где уже есть указанный код маркировки. */
+  /** Найти документы пользователя + УПД ЭДО, где уже есть указанный код маркировки. */
   searchByCode: (code: string) =>
-    api.get<CodeSearchHit[]>('/scans/search', { params: { code } }),
+    api.get<CodeSearchResponse>('/scans/search', { params: { code } }),
 }
 
 export interface ProductSearchItem {

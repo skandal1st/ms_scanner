@@ -8,7 +8,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, GtinNameMap
+from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, GtinNameMap, EdoDocument, EdoMark
 from app.api.deps import get_current_user
 from app.services.gtin_product_store import get_gtin_product
 from cryptography.fernet import InvalidToken
@@ -22,6 +22,7 @@ from app.services.chestnyznak import (
     extract_gtin,
     is_sscc,
     normalize_gtin_key,
+    strip_ai_brackets,
     verify_code_local_gs1,
 )
 
@@ -67,6 +68,25 @@ class CodeSearchHit(BaseModel):
     status: ScanStatus
     product_name: Optional[str] = None
     scanned_at: datetime
+
+
+class UpdSearchHit(BaseModel):
+    """УПД из ЭДО (Saby), в котором числится искомая марка. direction — Входящий/Исходящий."""
+    edo_document_id: UUID
+    direction: Optional[str] = None       # «Входящий» / «Исходящий»
+    doc_type: Optional[str] = None        # «Реализация», «Поступление», …
+    number: Optional[str] = None
+    doc_date: Optional[str] = None        # «ДД.ММ.ГГГГ» как в Saby
+    counterparty_name: Optional[str] = None
+    counterparty_inn: Optional[str] = None
+    cis_raw: str
+    gtin: Optional[str] = None
+
+
+class CodeSearchResponse(BaseModel):
+    """Ответ /scans/search: марка в документах приложения + в УПД ЭДО (вход./исход.)."""
+    scans: List[CodeSearchHit]
+    upds: List[UpdSearchHit]
 
 
 class CreateScanRequest(BaseModel):
@@ -707,18 +727,28 @@ async def patch_scan_product(
     return ScanResponse.model_validate(scan)
 
 
-@router.get("/search", response_model=List[CodeSearchHit])
+def _canon_cis(code: str) -> str:
+    """Канонический CIS для матча со снимками ЭДО/ЧЗ (как в edo_sync/_save_marks)."""
+    s = strip_ai_brackets(code or "").strip()
+    s = s.split("\x1d", 1)[0]
+    import re as _re
+    return _re.sub(r"(?i)%c1", "", s).strip()
+
+
+@router.get("/search", response_model=CodeSearchResponse)
 async def search_scans_by_code(
     code: str = Query(..., min_length=1, description="Код маркировки (KM или SSCC)"),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Найти все документы пользователя, в которых уже есть указанный код маркировки.
+    Найти все места, где встречается указанный код маркировки:
+    - ``scans`` — документы приложения (приёмка/отгрузка/списание), совпадение по
+      точному коду скана либо по вхождению в состав короба (``child_codes``);
+    - ``upds`` — УПД из ЭДО (Saby), где числится эта марка, с пометкой
+      входящий/исходящий (матч по каноническому CIS).
 
-    Совпадение по точному коду скана либо по вхождению кода в состав короба
-    (``child_codes``). Объявлен ВЫШЕ ``/{document_id}``, иначе FastAPI распарсит
-    «search» как UUID документа.
+    Объявлен ВЫШЕ ``/{document_id}``, иначе FastAPI распарсит «search» как UUID.
     """
     code = code.strip()
     result = await db.execute(
@@ -730,7 +760,7 @@ async def search_scans_by_code(
         )
         .order_by(Scan.scanned_at.desc())
     )
-    return [
+    scans = [
         CodeSearchHit(
             document_id=doc.id,
             document_name=doc.name,
@@ -743,6 +773,36 @@ async def search_scans_by_code(
         )
         for scan, doc in result.all()
     ]
+
+    # УПД из ЭДО: матч по каноническому CIS (edo_marks.cis_canonical).
+    canon = _canon_cis(code)
+    upds: List[UpdSearchHit] = []
+    if canon:
+        upd_rows = await db.execute(
+            select(EdoMark, EdoDocument)
+            .join(EdoDocument, EdoMark.document_id == EdoDocument.id)
+            .where(
+                EdoMark.user_id == current_user.id,
+                EdoMark.cis_canonical == canon,
+            )
+            .order_by(EdoDocument.created_at.desc())
+        )
+        upds = [
+            UpdSearchHit(
+                edo_document_id=ed.id,
+                direction=ed.direction,
+                doc_type=ed.doc_type,
+                number=ed.number,
+                doc_date=ed.doc_date,
+                counterparty_name=ed.counterparty_name,
+                counterparty_inn=ed.counterparty_inn,
+                cis_raw=mark.cis_raw,
+                gtin=mark.gtin,
+            )
+            for mark, ed in upd_rows.all()
+        ]
+
+    return CodeSearchResponse(scans=scans, upds=upds)
 
 
 @router.get("/{document_id}", response_model=List[ScanResponse])
