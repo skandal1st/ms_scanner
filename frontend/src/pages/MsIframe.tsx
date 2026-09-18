@@ -128,11 +128,12 @@ export function MsIframePage() {
 
 const styles: Record<string, CSSProperties> = {
   page: {
-    minHeight: '100vh',
+    height: '100vh',
     display: 'flex',
     flexDirection: 'column',
     fontFamily: 'var(--ms-font)',
     background: 'var(--ms-bg-alt)',
+    overflow: 'hidden',
   },
   header: {
     display: 'flex',
@@ -185,6 +186,8 @@ const styles: Record<string, CSSProperties> = {
   },
   main: {
     flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
     padding: '16px 20px',
   },
   footer: {
