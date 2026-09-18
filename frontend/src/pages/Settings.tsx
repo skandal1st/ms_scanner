@@ -330,6 +330,7 @@ function ChestnyZnakSection({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integration'] }),
   })
   const [groupsDraft, setGroupsDraft] = useState<string[]>([])
+  const [groupsOpen, setGroupsOpen] = useState(false)
   useEffect(() => {
     setGroupsDraft(integration?.cz_product_groups ?? [])
   }, [integration?.cz_product_groups])
@@ -454,39 +455,78 @@ function ChestnyZnakSection({
       </p>
 
       <div className="mt-12">
-        <label className="field-label">Какие товары вы маркируете</label>
-        <div className="hint" style={{ marginBottom: 6 }}>
-          Отметьте только свои товарные группы — сканер будет проверять коды в ЧЗ
-          быстрее (меньше лишних запросов). Если ничего не выбрано, проверяются все
-          настроенные на сервере группы.
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {(productGroups ?? []).map((g) => (
-            <label
-              key={g.code}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+        <button
+          type="button"
+          onClick={() => setGroupsOpen((v) => !v)}
+          aria-expanded={groupsOpen}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            width: '100%',
+            padding: 0,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            font: 'inherit',
+            textAlign: 'left',
+          }}
+        >
+          <span className="field-label" style={{ margin: 0 }}>Какие товары вы маркируете</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="hint" style={{ margin: 0 }}>
+              {groupsDraft.length > 0 ? `Выбрано: ${groupsDraft.length}` : 'Все группы'}
+            </span>
+            <span
+              style={{
+                display: 'inline-block',
+                transition: 'transform 0.15s',
+                transform: groupsOpen ? 'rotate(90deg)' : 'none',
+                color: 'var(--ms-text-muted)',
+              }}
             >
-              <input
-                type="checkbox"
-                checked={groupsDraft.includes(g.code)}
-                onChange={() => toggleGroup(g.code)}
-              />
-              <span>{g.label}</span>
-            </label>
-          ))}
-        </div>
-        <div className="field-row mt-8">
-          <button
-            type="button"
-            className="button"
-            disabled={groupsMutation.isPending || !groupsDirty}
-            onClick={() => groupsMutation.mutate(groupsDraft)}
-          >
-            {groupsMutation.isPending ? 'Сохраняю…' : 'Сохранить группы'}
-          </button>
-        </div>
-        {groupsMutation.isError && (
-          <div className="alert alert--error mt-8">Не удалось сохранить группы</div>
+              ▶
+            </span>
+          </span>
+        </button>
+
+        {groupsOpen && (
+          <>
+            <div className="hint" style={{ margin: '6px 0' }}>
+              Отметьте только свои товарные группы — сканер будет проверять коды в ЧЗ
+              быстрее (меньше лишних запросов). Если ничего не выбрано, проверяются все
+              настроенные на сервере группы.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {(productGroups ?? []).map((g) => (
+                <label
+                  key={g.code}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={groupsDraft.includes(g.code)}
+                    onChange={() => toggleGroup(g.code)}
+                  />
+                  <span>{g.label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="field-row mt-8">
+              <button
+                type="button"
+                className="button"
+                disabled={groupsMutation.isPending || !groupsDirty}
+                onClick={() => groupsMutation.mutate(groupsDraft)}
+              >
+                {groupsMutation.isPending ? 'Сохраняю…' : 'Сохранить группы'}
+              </button>
+            </div>
+            {groupsMutation.isError && (
+              <div className="alert alert--error mt-8">Не удалось сохранить группы</div>
+            )}
+          </>
         )}
       </div>
 
