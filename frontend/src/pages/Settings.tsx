@@ -289,8 +289,8 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
           )}
         </section>
 
-        {!embedded && <ChestnyZnakSection integration={integration} />}
-        {!embedded && <ScannerSection />}
+        <ChestnyZnakSection integration={integration} />
+        <ScannerSection />
       </div>
     </div>
   )
