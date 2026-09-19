@@ -199,6 +199,75 @@ async def create_document(
     return _doc_to_response(doc, scan_count=0)
 
 
+class ResolveDocRequest(BaseModel):
+    moysklad_id: str
+    kind: DocumentKind = DocumentKind.demand
+
+
+@router.post("/resolve", response_model=DocumentResponse)
+async def resolve_document(
+    body: ResolveDocRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Найти-или-создать наш Document по документу МС (kind + moysklad_id).
+
+    Для попапа, открытого из кнопки МС: повторное открытие той же отгрузки не
+    должно плодить дубли. Берём самый свежий незавершённый документ с этим
+    moysklad_id; если нет — создаём с именем и планом из МС."""
+    _ensure_supported_kind(body.kind.value)
+
+    existing = (
+        (
+            await db.execute(
+                select(Document)
+                .where(
+                    Document.user_id == current_user.id,
+                    Document.moysklad_id == body.moysklad_id,
+                    Document.kind == body.kind,
+                    Document.status != DocumentStatus.accepted,
+                )
+                .order_by(Document.created_at.desc())
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return _doc_to_response(existing, await _scan_count(db, existing.id))
+
+    ms = await _get_ms_service(current_user, db)
+    name: Optional[str] = None
+    try:
+        ms_doc = await ms.get_document(body.kind.value, body.moysklad_id)
+        name = ms_doc.get("name")
+    except Exception:
+        pass  # имя не критично — подставим дефолт
+    plan: list = []
+    try:
+        plan = await ms.build_plan(_plan_source_kind(body.kind.value), body.moysklad_id)
+    except Exception as exc:
+        from app.core.logging import logger as _lg
+        _lg.warning(
+            "resolve_document.build_plan_failed",
+            kind=body.kind.value,
+            moysklad_id=body.moysklad_id,
+            error=str(exc),
+        )
+
+    doc = Document(
+        user_id=current_user.id,
+        name=name or f"Документ {body.moysklad_id[:8]}",
+        kind=body.kind,
+        moysklad_id=body.moysklad_id,
+        plan=plan,
+    )
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return _doc_to_response(doc, scan_count=0)
+
+
 @router.post("/{document_id}/refresh-plan", response_model=DocumentResponse)
 async def refresh_plan(
     document_id: UUID,

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
@@ -17,7 +17,19 @@ import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 
-export function ShipmentPage() {
+interface ShipmentPageProps {
+  /** Встроенный режим (попап МС): документ задан заранее, без выбора; после
+   *  успешной отправки вызывается onSent (попап закрывает окно МС). */
+  embedded?: boolean
+  presetDocument?: Document | null
+  onSent?: () => void
+}
+
+export function ShipmentPage({
+  embedded = false,
+  presetDocument = null,
+  onSent,
+}: ShipmentPageProps = {}) {
   const modal = useModal()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
@@ -41,7 +53,8 @@ export function ShipmentPage() {
   } = useSendToMoysklad<Document>({
     fetchDoc: (id) => documentsApi.get(id),
     onPoll: (fresh) => setDocument(fresh),
-    autoCloseTab: !isComMode,
+    // В попапе окно закрывает не window.close, а ClosePopup через onSent.
+    autoCloseTab: !isComMode && !embedded,
   })
 
   const handleBulkMarks = async (codes: string[]) => {
@@ -103,6 +116,24 @@ export function ShipmentPage() {
 
   useLoadDocument(pendingDoc?.id ?? null)
 
+  // Попап МС: документ приходит извне — выбираем его сразу, без DocumentSelector.
+  useEffect(() => {
+    if (embedded && presetDocument) {
+      setPendingDoc(presetDocument)
+      setDocument(presetDocument)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, presetDocument?.id])
+
+  // Попап: после успешной отправки — короткая пауза на оверлей «Отгружено», затем
+  // отдаём управление попапу (он шлёт ClosePopup хост-окну МС).
+  useEffect(() => {
+    if (done && embedded && onSent) {
+      const t = setTimeout(onSent, 1400)
+      return () => clearTimeout(t)
+    }
+  }, [done, embedded, onSent])
+
   const handleSelectDoc = (doc: Document) => {
     setPendingDoc(doc)
     setDocument(doc)
@@ -161,7 +192,7 @@ export function ShipmentPage() {
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
           {document && <span className={docStatusCls}>{docStatusText}</span>}
-          {document && (
+          {document && !embedded && (
             <button
               type="button"
               className="button button--sm"
@@ -213,7 +244,9 @@ export function ShipmentPage() {
 
       <div className="acc-body">
         <div className="acc-left" style={{ width: leftWidth }}>
-          <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+          {!embedded && (
+            <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+          )}
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <button
@@ -360,13 +393,13 @@ export function ShipmentPage() {
                 даём явное подтверждение и кнопку, иначе кладовщик не видит успех
                 и жмёт «Отгрузить» снова (марки уже записаны, идёт бесконечный повтор). */}
             <div className="done-overlay__sub">
-              {closingTab
+              {closingTab || embedded
                 ? 'Возвращаемся в МойСклад…'
                 : isComMode
                   ? 'Марки записаны. Можно сканировать следующую отгрузку.'
                   : 'Марки записаны в МойСклад.'}
             </div>
-            {!closingTab && (
+            {!closingTab && !embedded && (
               <div className="flex-row gap-8" style={{ marginTop: 16, justifyContent: 'center' }}>
                 <button
                   type="button"

@@ -418,6 +418,9 @@ export const documentsApi = {
     api.get<Document[]>('/documents/', { params: kind ? { kind } : {} }),
   create: (name: string, kind: DocumentKind, moysklad_id?: string) =>
     api.post<Document>('/documents/', { name, kind, moysklad_id }),
+  /** Найти-или-создать наш документ по документу МС (для попапа из кнопки МС). */
+  resolve: (moysklad_id: string, kind: DocumentKind) =>
+    api.post<Document>('/documents/resolve', { moysklad_id, kind }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   verify: (id: string) =>

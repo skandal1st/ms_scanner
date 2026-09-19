@@ -15,6 +15,7 @@ import { HelpPage } from './pages/Help'
 import { LoginPage } from './pages/Login'
 import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
+import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
 
 const queryClient = new QueryClient({
@@ -113,6 +114,8 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/ms" element={<MsIframePage />} />
           <Route path="/launch" element={<LaunchPage />} />
+          {/* Кастомное модальное окно МС (кнопка на документе): авторизуется по contextKey. */}
+          <Route path="/popup" element={<PopupPage />} />
           <Route path="/" element={<Navigate to="/shipment" replace />} />
           <Route
             path="/shipment"

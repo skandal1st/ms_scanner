@@ -269,3 +269,86 @@ async def get_status(
     if integration and integration.moysklad_token:
         return {"status": "Activated"}
     return {"status": "Activating"}
+
+
+# Кастомная кнопка на странице документа МС → открыть попап Скандаты с этим документом.
+# extensionPoint (страница) → наш kind. Приёмку/списание добавим, когда попап научится
+# их вести (им нужны доп. шаги: товарная группа / УПД).
+BUTTON_KIND_BY_EXTENSION = {
+    "document.demand.edit": "demand",
+}
+
+
+class ButtonUser(BaseModel):
+    employeeId: Optional[str] = None
+    role: Optional[str] = None
+
+
+class ButtonRequest(BaseModel):
+    buttonName: Optional[str] = None
+    extensionPoint: str
+    objectId: Optional[str] = None
+    selected: Optional[List[dict]] = None
+    user: Optional[ButtonUser] = None
+
+
+@router.post("/{app_id}/{account_id}/button")
+async def handle_button(
+    app_id: str,
+    account_id: str,
+    body: ButtonRequest,
+    authorization: Optional[str] = Header(default=None),
+    x_lognex_request_id: Optional[str] = Header(
+        default=None, alias="X-Lognex-RequestId"
+    ),
+    db: AsyncSession = Depends(get_db),
+):
+    """Обработчик нажатия кастомной кнопки (Vendor API). Отвечает МС действием
+    showPopup — МС открывает наш попап `scanPopup` и передаёт ему id документа МС
+    и kind через popupParameters (сообщение OpenPopup). Таймаут МС — 10 сек, поэтому
+    тут только лёгкий ответ, без обращений к МС/ЧЗ."""
+    await _verify_vendor_jwt(authorization)
+
+    cached = await _idempotent_response(x_lognex_request_id, f"button:{account_id}")
+    if cached is not None:
+        return cached
+
+    kind = BUTTON_KIND_BY_EXTENSION.get(body.extensionPoint)
+    if kind is None or not body.objectId:
+        logger.warning(
+            "vendor.button.unsupported",
+            extension=body.extensionPoint,
+            button=body.buttonName,
+        )
+        return {
+            "action": "showNotification",
+            "params": {"text": "Действие недоступно для этого документа."},
+        }
+
+    integration = (
+        await db.execute(
+            select(Integration).where(Integration.moysklad_account_id == account_id)
+        )
+    ).scalar_one_or_none()
+    if integration is None:
+        logger.warning("vendor.button.no_integration", account_id=account_id)
+        return {
+            "action": "showNotification",
+            "params": {"text": "Решение не активировано на аккаунте."},
+        }
+
+    logger.info(
+        "vendor.button.show_popup",
+        account_id=account_id,
+        kind=kind,
+        object_id=body.objectId,
+    )
+    payload = {
+        "action": "showPopup",
+        "params": {
+            "popupName": "scanPopup",
+            "popupParameters": {"msObjectId": body.objectId, "kind": kind},
+        },
+    }
+    await _save_idempotent(x_lognex_request_id, f"button:{account_id}", payload)
+    return payload

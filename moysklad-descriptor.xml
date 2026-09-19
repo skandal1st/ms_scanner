@@ -6,6 +6,22 @@
     <iframes>
         <iframe type="main" sourceUrl="https://skandata.ru/ms"/>
     </iframes>
+    <!-- Кастомная кнопка на документе Отгрузка: открывает окно сборки Скандаты.
+         Обработчик нажатия — POST /api/moysklad/vendor/1.0/apps/{appId}/{accountId}/button. -->
+    <buttons>
+        <button name="startShipment" title="Собрать в Скандата">
+            <locations>
+                <document.demand.edit/>
+            </locations>
+        </button>
+    </buttons>
+    <!-- Кастомное модальное окно (открывается из кнопки через action=showPopup). -->
+    <popups>
+        <popup>
+            <name>scanPopup</name>
+            <sourceUrl>https://skandata.ru/popup</sourceUrl>
+        </popup>
+    </popups>
     <vendorApi>
         <endpointBase>https://skandata.ru</endpointBase>
     </vendorApi>
