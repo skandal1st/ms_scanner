@@ -276,7 +276,7 @@ async def get_status(
 # их вести (им нужны доп. шаги: товарная группа / УПД).
 BUTTON_KIND_BY_EXTENSION = {
     "document.demand.edit": "demand",
-    "document.supply.edit": "supply",
+    "document.supply.list": "supply",  # у поступления кнопка только в списке (XSD)
     "document.loss.edit": "loss",
 }
 
@@ -316,15 +316,25 @@ async def handle_button(
         return cached
 
     kind = BUTTON_KIND_BY_EXTENSION.get(body.extensionPoint)
-    if kind is None or not body.objectId:
+    # На карточке (*.edit) документ приходит в objectId; в списке (*.list) — в selected[].
+    object_id = body.objectId
+    if not object_id and body.selected:
+        first = body.selected[0]
+        object_id = first.get("id") if isinstance(first, dict) else None
+    if kind is None or not object_id:
         logger.warning(
             "vendor.button.unsupported",
             extension=body.extensionPoint,
             button=body.buttonName,
+            selected_count=len(body.selected) if body.selected else 0,
         )
         return {
             "action": "showNotification",
-            "params": {"text": "Действие недоступно для этого документа."},
+            "params": {
+                "text": "Выберите один документ и повторите."
+                if kind is not None
+                else "Действие недоступно для этого документа.",
+            },
         }
 
     integration = (
@@ -343,13 +353,13 @@ async def handle_button(
         "vendor.button.show_popup",
         account_id=account_id,
         kind=kind,
-        object_id=body.objectId,
+        object_id=object_id,
     )
     payload = {
         "action": "showPopup",
         "params": {
             "popupName": "scanPopup",
-            "popupParameters": {"msObjectId": body.objectId, "kind": kind},
+            "popupParameters": {"msObjectId": object_id, "kind": kind},
         },
     }
     await _save_idempotent(x_lognex_request_id, f"button:{account_id}", payload)

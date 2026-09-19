@@ -14,9 +14,11 @@
                 <document.demand.edit/>
             </locations>
         </button>
+        <!-- У поступления XSD разрешает кнопку только на СПИСКЕ (document.supply.list),
+             не на карточке. Кнопка получает выбранное поступление в selected[]. -->
         <button name="startAcceptance" title="Принять в Скандата">
             <locations>
-                <document.supply.edit/>
+                <document.supply.list/>
             </locations>
         </button>
         <button name="startWriteoff" title="Списать в Скандата">
