@@ -74,6 +74,7 @@ def _cz_token_expiry_from_jwt(token: str) -> Optional[datetime]:
 
 
 class IntegrationResponse(BaseModel):
+    edition: str = "full"
     has_moysklad: bool
     moysklad_account_name: Optional[str]
     has_cz: bool
@@ -115,9 +116,12 @@ class CzLoginResponse(BaseModel):
     cz_cert_subject: Optional[str]
 
 
-def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
+def _to_response(
+    integration: Optional[Integration], edition: str = "full"
+) -> IntegrationResponse:
     if not integration:
         return IntegrationResponse(
+            edition=edition,
             has_moysklad=False,
             moysklad_account_name=None,
             has_cz=False,
@@ -130,6 +134,7 @@ def _to_response(integration: Optional[Integration]) -> IntegrationResponse:
         or integration.cz_token_expires_at > datetime.now(timezone.utc)
     )
     return IntegrationResponse(
+        edition=edition,
         has_moysklad=bool(integration.moysklad_token),
         moysklad_account_name=integration.moysklad_account_name,
         has_cz=has_cz,
@@ -159,7 +164,7 @@ async def get_integration(
     result = await db.execute(
         select(Integration).where(Integration.user_id == current_user.id)
     )
-    return _to_response(result.scalar_one_or_none())
+    return _to_response(result.scalar_one_or_none(), current_user.edition)
 
 
 @router.put("/", response_model=IntegrationResponse)
@@ -184,7 +189,7 @@ async def update_integration(
 
     await db.commit()
     await db.refresh(integration)
-    return _to_response(integration)
+    return _to_response(integration, current_user.edition)
 
 
 @router.get("/cz/product-groups", response_model=list[ProductGroupItem])
@@ -301,7 +306,7 @@ async def cz_logout(
         integration.cz_cert_subject = None
         await db.commit()
         await db.refresh(integration)
-    return _to_response(integration)
+    return _to_response(integration, current_user.edition)
 
 
 # ── Списание: вывод из оборота через ЧЗ (УКЭП round-trip) ───────────────────────

@@ -689,6 +689,7 @@ export const acceptanceApi = {
 }
 
 export interface Integration {
+  edition: 'ms_lite' | 'full'
   has_moysklad: boolean
   moysklad_account_name: string | null
   has_cz: boolean

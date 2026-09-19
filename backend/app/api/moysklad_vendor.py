@@ -193,7 +193,8 @@ async def activate(
     integration = result.scalar_one_or_none()
 
     if integration is None:
-        user = User(email=f"ms_{account_id}@moysklad.ru", password_hash="")
+        # Аккаунт из каталога МойСклад → урезанное издание (см. require_full_edition).
+        user = User(email=f"ms_{account_id}@moysklad.ru", password_hash="", edition="ms_lite")
         db.add(user)
         await db.flush()
         integration = Integration(

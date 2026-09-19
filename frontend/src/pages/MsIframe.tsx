@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
 import { Icon } from '../components/Icon'
+import { SerialIframeDiag } from '../components/SerialIframeDiag'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 interface LaunchPayload {
@@ -118,6 +119,8 @@ export function MsIframePage() {
       <main style={styles.main}>
         <SettingsPage embedded />
       </main>
+
+      <SerialIframeDiag />
 
       <footer style={styles.footer}>
         Приёмка и отгрузка откроются в новой вкладке, чтобы USB-сканер оставался в фокусе.

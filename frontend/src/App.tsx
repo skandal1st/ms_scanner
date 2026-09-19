@@ -15,6 +15,7 @@ import { HelpPage } from './pages/Help'
 import { LoginPage } from './pages/Login'
 import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
+import { useEdition } from './hooks/useEdition'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -26,18 +27,30 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children
 }
 
-const NAV_ITEMS: { to: string; label: string; icon: IconName }[] = [
+/** Гейт full-only разделов: ms_lite → редирект на отгрузку (плюс серверный 403). */
+function RequireFull({ children }: { children: JSX.Element }) {
+  const { isFull, isLoading } = useEdition()
+  if (isLoading) return null
+  if (!isFull) return <Navigate to="/shipment" replace />
+  return children
+}
+
+// fullOnly: раздел только для полной версии (в ms_lite скрыт из навигации).
+const NAV_ITEMS: { to: string; label: string; icon: IconName; fullOnly?: boolean }[] = [
   { to: '/shipment', label: 'Отгрузка', icon: 'shipment' },
   { to: '/acceptance', label: 'Приёмка', icon: 'acceptance' },
   { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
   { to: '/check', label: 'Проверка', icon: 'check' },
-  { to: '/mark-control', label: 'Контроль марок', icon: 'check' },
-  { to: '/inventory', label: 'Инвентаризация', icon: 'check' },
+  { to: '/mark-control', label: 'Контроль марок', icon: 'check', fullOnly: true },
+  { to: '/inventory', label: 'Инвентаризация', icon: 'check', fullOnly: true },
   { to: '/settings', label: 'Настройки', icon: 'settings' },
   { to: '/help', label: 'Помощь', icon: 'help' },
 ]
 
 function Layout({ children }: { children: React.ReactNode }) {
+  const { isFull } = useEdition()
+  const navItems = NAV_ITEMS.filter((item) => isFull || !item.fullOnly)
+
   const handleLogout = () => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
@@ -46,11 +59,13 @@ function Layout({ children }: { children: React.ReactNode }) {
   }
 
   // Бейдж «новых входящих УПД» на вкладке «Приёмка» — мониторинг ЭДО (опрос раз в минуту).
+  // ЭДО — только полная версия, в ms_lite эндпоинт отдаёт 403, поэтому не опрашиваем.
   const { data: edoCount = 0 } = useQuery({
     queryKey: ['edo-incoming-count'],
     queryFn: () => acceptanceApi.edoIncomingCount().then((r) => r.data.count),
     refetchInterval: 60_000,
     staleTime: 30_000,
+    enabled: isFull,
   })
 
   return (
@@ -59,7 +74,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <span className="app-nav__brand">
           <img src="/logo-light.svg" alt="Скандата" className="app-nav__logo-img" />
         </span>
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -143,9 +158,11 @@ export default function App() {
             path="/mark-control"
             element={
               <RequireAuth>
-                <Layout>
-                  <MarkControlPage />
-                </Layout>
+                <RequireFull>
+                  <Layout>
+                    <MarkControlPage />
+                  </Layout>
+                </RequireFull>
               </RequireAuth>
             }
           />
@@ -153,9 +170,11 @@ export default function App() {
             path="/inventory"
             element={
               <RequireAuth>
-                <Layout>
-                  <InventoryPage />
-                </Layout>
+                <RequireFull>
+                  <Layout>
+                    <InventoryPage />
+                  </Layout>
+                </RequireFull>
               </RequireAuth>
             }
           />

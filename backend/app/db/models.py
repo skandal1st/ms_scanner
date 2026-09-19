@@ -58,6 +58,10 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
+    # Издание аккаунта: "ms_lite" — версия из каталога МойСклад (попап, урезанный набор
+    # модулей), "full" — полная SaaS с входом через сайт. Гейтит доступ к инвентаризации,
+    # контролю марок и ЭДО (см. require_full_edition). Существующие аккаунты — full.
+    edition = Column(String(16), nullable=False, default="full", server_default="full")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     integration = relationship("Integration", back_populates="user", uselist=False)

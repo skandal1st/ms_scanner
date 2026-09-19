@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, require_full_edition
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token
@@ -327,7 +327,7 @@ def _edo_incoming_query(user_id):
 @router.get("/edo/incoming", response_model=List[EdoIncomingDoc])
 async def list_edo_incoming(
     refresh: bool = False,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_full_edition),
     db: AsyncSession = Depends(get_db),
 ):
     """Входящие УПД (Поступление) для приёмки — из БД (наполняется периодическим синком).
@@ -368,7 +368,7 @@ async def list_edo_incoming(
 
 @router.get("/edo/incoming-count")
 async def edo_incoming_count(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_full_edition),
     db: AsyncSession = Depends(get_db),
 ):
     """Число новых входящих УПД (не принятых) — для бейджа на странице приёмки."""
@@ -383,7 +383,7 @@ async def edo_incoming_count(
 @router.post("/edo/import", response_model=EdoImportResponse)
 async def import_edo_upd(
     body: EdoImportRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_full_edition),
     db: AsyncSession = Depends(get_db),
 ):
     """Создать приёмку из входящего УПД ЭДО: скачать XML из Saby и импортировать коды."""

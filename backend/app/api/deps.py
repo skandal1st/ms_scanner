@@ -33,3 +33,17 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+async def require_full_edition(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Гейт для модулей, доступных только в полной версии (Инвентаризация,
+    Контроль марок, приёмка из ЭДО). Версия из каталога МойСклад (`ms_lite`)
+    их не получает. Проверка на сервере — не полагаемся только на скрытие в UI."""
+    if current_user.edition != "full":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Этот раздел доступен только в полной версии Скандаты.",
+        )
+    return current_user

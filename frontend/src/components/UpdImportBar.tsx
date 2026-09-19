@@ -5,6 +5,7 @@ import { useMsDocuments } from '../hooks/useDocuments'
 import { BulkMarksModal } from './BulkMarksModal'
 import { EdoImportModal } from './EdoImportModal'
 import { Icon } from './Icon'
+import { useEdition } from '../hooks/useEdition'
 
 interface UpdImportBarProps {
   busy: boolean
@@ -36,6 +37,8 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: Upd
   const [marksOpen, setMarksOpen] = useState(false)
   const [edoOpen, setEdoOpen] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  // ЭДО (Saby) — только полная версия; в ms_lite приёмка идёт ручным импортом УПД-XML.
+  const { isFull } = useEdition()
 
   useEffect(() => {
     acceptanceApi
@@ -154,19 +157,21 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: Upd
         <Icon name="upload" size={15} /> Список марок
       </button>
 
-      <button
-        type="button"
-        className="button"
-        onClick={() => setEdoOpen(true)}
-        disabled={!group || busy}
-        title={
-          group
-            ? 'Принять входящий УПД из ЭДО (Saby)'
-            : 'Сначала выберите товарную группу'
-        }
-      >
-        <Icon name="acceptance" size={15} /> Из ЭДО
-      </button>
+      {isFull && (
+        <button
+          type="button"
+          className="button"
+          onClick={() => setEdoOpen(true)}
+          disabled={!group || busy}
+          title={
+            group
+              ? 'Принять входящий УПД из ЭДО (Saby)'
+              : 'Сначала выберите товарную группу'
+          }
+        >
+          <Icon name="acceptance" size={15} /> Из ЭДО
+        </button>
+      )}
 
       <BulkMarksModal
         open={marksOpen}
@@ -175,13 +180,15 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: Upd
         onSubmit={(codes) => onSubmitMarks(codes, group, moyskladId)}
       />
 
-      <EdoImportModal
-        open={edoOpen}
-        onClose={() => setEdoOpen(false)}
-        groupSelected={!!group}
-        busy={busy}
-        onPick={(externalId) => onSubmitEdo(externalId, group, moyskladId)}
-      />
+      {isFull && (
+        <EdoImportModal
+          open={edoOpen}
+          onClose={() => setEdoOpen(false)}
+          groupSelected={!!group}
+          busy={busy}
+          onPick={(externalId) => onSubmitEdo(externalId, group, moyskladId)}
+        />
+      )}
     </div>
   )
 }
