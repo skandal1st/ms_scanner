@@ -358,7 +358,7 @@ async def handle_button(
     payload = {
         "action": "showPopup",
         "params": {
-            "popupName": "scanPopup",
+            "popupName": "scan-popup",
             "popupParameters": {"msObjectId": object_id, "kind": kind},
         },
     }

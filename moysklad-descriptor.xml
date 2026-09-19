@@ -9,19 +9,19 @@
     <!-- Кастомная кнопка на документе Отгрузка: открывает окно сборки Скандаты.
          Обработчик нажатия — POST /api/moysklad/vendor/1.0/apps/{appId}/{accountId}/button. -->
     <buttons>
-        <button name="startShipment" title="Собрать в Скандата">
+        <button name="start-shipment" title="Собрать в Скандата">
             <locations>
                 <document.demand.edit/>
             </locations>
         </button>
         <!-- У поступления XSD разрешает кнопку только на СПИСКЕ (document.supply.list),
              не на карточке. Кнопка получает выбранное поступление в selected[]. -->
-        <button name="startAcceptance" title="Принять в Скандата">
+        <button name="start-acceptance" title="Принять в Скандата">
             <locations>
                 <document.supply.list/>
             </locations>
         </button>
-        <button name="startWriteoff" title="Списать в Скандата">
+        <button name="start-writeoff" title="Списать в Скандата">
             <locations>
                 <document.loss.edit/>
             </locations>
@@ -30,7 +30,7 @@
     <!-- Кастомное модальное окно (открывается из кнопки через action=showPopup). -->
     <popups>
         <popup>
-            <name>scanPopup</name>
+            <name>scan-popup</name>
             <sourceUrl>https://skandata.ru/popup</sourceUrl>
         </popup>
     </popups>
