@@ -24,7 +24,19 @@ function errorDetail(e: unknown): string | null {
 const rub = (v: number) =>
   v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
-export function AcceptancePage() {
+interface AcceptancePageProps {
+  /** Попап МС: поступление задано заранее (кнопка на документе Поступление);
+   *  после успешной отправки в МС вызывается onSent (попап закрывает окно). */
+  embedded?: boolean
+  presetMoyskladId?: string
+  onSent?: () => void
+}
+
+export function AcceptancePage({
+  embedded = false,
+  presetMoyskladId,
+  onSent,
+}: AcceptancePageProps = {}) {
   const [doc, setDoc] = useState<AcceptanceDoc | null>(null)
   const [result, setResult] = useState<ImportUpdResult | null>(null)
   const [scans, setScans] = useState<Scan[]>([])
@@ -227,6 +239,14 @@ export function AcceptancePage() {
     await sendToMs(docId)
   }
 
+  // Попап: после успешной отправки — пауза на оверлей, затем закрываем окно МС.
+  useEffect(() => {
+    if (sendDone && embedded && onSent) {
+      const t = setTimeout(onSent, 1600)
+      return () => clearTimeout(t)
+    }
+  }, [sendDone, embedded, onSent])
+
   const columns: ColumnDef<ImportPositionResult>[] = useMemo(
     () => [
       {
@@ -357,6 +377,7 @@ export function AcceptancePage() {
           onSubmit={handleSubmit}
           onSubmitMarks={handleSubmitMarks}
           onSubmitEdo={handleEdoImport}
+          presetMoyskladId={embedded ? presetMoyskladId : undefined}
         />
 
         {error && (

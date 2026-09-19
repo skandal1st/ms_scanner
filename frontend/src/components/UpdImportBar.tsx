@@ -14,6 +14,8 @@ interface UpdImportBarProps {
   onSubmitMarks: (codes: string[], productGroup: string, moyskladId: string) => Promise<void>
   /** Принять входящий УПД из ЭДО (Saby) с выбранной группой/поступлением. */
   onSubmitEdo: (externalId: string, productGroup: string, moyskladId: string) => Promise<void>
+  /** Попап из кнопки МС: поступление задано заранее — прячем поиск/выбор поступления. */
+  presetMoyskladId?: string
 }
 
 /** Отображаемое имя поступления МС: "00123 — ООО Поставщик". */
@@ -27,10 +29,10 @@ function msSupplyLabel(m: MsDocument): string {
  * куда писать КМ) + XML-файл + кнопка «Загрузить». Сам импорт выполняет родитель
  * через onSubmit.
  */
-export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: UpdImportBarProps) {
+export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, presetMoyskladId }: UpdImportBarProps) {
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [group, setGroup] = useState('')
-  const [moyskladId, setMoyskladId] = useState('')
+  const [moyskladId, setMoyskladId] = useState(presetMoyskladId ?? '')
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -88,37 +90,47 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo }: Upd
         </select>
       </div>
 
-      <div className="upd-bar__field">
-        <label className="field-label" htmlFor="upd-supply">
-          Поступление в МойСклад (куда записать КМ)
-        </label>
-        <input
-          className="ui-input ui-input--block"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Поиск по номеру или поставщику…"
-          disabled={busy}
-          style={{ marginBottom: 6 }}
-        />
-        <select
-          id="upd-supply"
-          className="ui-select"
-          value={moyskladId}
-          onChange={(e) => setMoyskladId(e.target.value)}
-          disabled={busy}
-        >
-          <option value="">
-            {suppliesLoading
-              ? 'Загружаю поступления…'
-              : '— без записи в МС (только проверка) —'}
-          </option>
-          {(supplies ?? []).map((m) => (
-            <option key={m.id} value={m.id}>
-              {msSupplyLabel(m)}
+      {presetMoyskladId ? (
+        // Попап из кнопки МС: поступление уже выбрано (документ, из которого открыли окно).
+        <div className="upd-bar__field">
+          <label className="field-label">Поступление в МойСклад</label>
+          <div className="badge badge--ok" style={{ alignSelf: 'flex-start' }}>
+            Запись в текущее поступление
+          </div>
+        </div>
+      ) : (
+        <div className="upd-bar__field">
+          <label className="field-label" htmlFor="upd-supply">
+            Поступление в МойСклад (куда записать КМ)
+          </label>
+          <input
+            className="ui-input ui-input--block"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск по номеру или поставщику…"
+            disabled={busy}
+            style={{ marginBottom: 6 }}
+          />
+          <select
+            id="upd-supply"
+            className="ui-select"
+            value={moyskladId}
+            onChange={(e) => setMoyskladId(e.target.value)}
+            disabled={busy}
+          >
+            <option value="">
+              {suppliesLoading
+                ? 'Загружаю поступления…'
+                : '— без записи в МС (только проверка) —'}
             </option>
-          ))}
-        </select>
-      </div>
+            {(supplies ?? []).map((m) => (
+              <option key={m.id} value={m.id}>
+                {msSupplyLabel(m)}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       <div className="upd-bar__field">
         <label className="field-label" htmlFor="upd-file">

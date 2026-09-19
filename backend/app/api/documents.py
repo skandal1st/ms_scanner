@@ -245,7 +245,9 @@ async def resolve_document(
         pass  # имя не критично — подставим дефолт
     plan: list = []
     try:
-        plan = await ms.build_plan(_plan_source_kind(body.kind.value), body.moysklad_id)
+        # objectId из кнопки МС — документ самого этого типа, поэтому план строим
+        # напрямую по kind (в отличие от create_document, где loss сеется из demand).
+        plan = await ms.build_plan(body.kind.value, body.moysklad_id)
     except Exception as exc:
         from app.core.logging import logger as _lg
         _lg.warning(

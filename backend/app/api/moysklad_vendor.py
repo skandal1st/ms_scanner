@@ -276,6 +276,8 @@ async def get_status(
 # их вести (им нужны доп. шаги: товарная группа / УПД).
 BUTTON_KIND_BY_EXTENSION = {
     "document.demand.edit": "demand",
+    "document.supply.edit": "supply",
+    "document.loss.edit": "loss",
 }
 
 

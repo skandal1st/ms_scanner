@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ShipmentPage } from './Shipment'
+import { AcceptancePage } from './Acceptance'
+import { WriteoffPage } from './Writeoff'
 import { documentsApi, type Document, type DocumentKind } from '../api/client'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 
@@ -25,7 +27,9 @@ interface OpenParams {
 
 type State =
   | { kind: 'loading'; note: string }
-  | { kind: 'ready'; doc: Document; mode: DocumentKind }
+  | { kind: 'shipment'; doc: Document }
+  | { kind: 'acceptance'; msObjectId: string }
+  | { kind: 'writeoff'; doc: Document }
   | { kind: 'error'; message: string }
 
 const PARAMS_TIMEOUT_MS = 15000
@@ -63,14 +67,21 @@ export function PopupPage() {
     if (!authedRef.current || !paramsRef.current) return
     resolvedRef.current = true
     const { msObjectId, kind } = paramsRef.current
-    if (kind !== 'demand') {
-      setState({ kind: 'error', message: 'Этот тип документа пока не поддерживается в окне сборки.' })
+
+    // Приёмка (supply) не резолвит документ заранее — он создаётся при импорте УПД;
+    // передаём поступление МС как preset прямо в страницу приёмки.
+    if (kind === 'supply') {
+      setState({ kind: 'acceptance', msObjectId })
+      return
+    }
+    if (kind !== 'demand' && kind !== 'loss') {
+      setState({ kind: 'error', message: 'Этот тип документа не поддерживается в окне Скандаты.' })
       return
     }
     setState({ kind: 'loading', note: 'Загружаем документ…' })
     try {
       const { data: doc } = await documentsApi.resolve(msObjectId, kind)
-      setState({ kind: 'ready', doc, mode: kind })
+      setState(kind === 'demand' ? { kind: 'shipment', doc } : { kind: 'writeoff', doc })
     } catch (e) {
       const ax = e as { response?: { data?: { detail?: string } } }
       setState({
@@ -152,8 +163,15 @@ export function PopupPage() {
     )
   }
 
-  // Скан-сессия отгрузки во встроенном режиме. После отправки — закрываем окно МС.
-  return <ShipmentPage embedded presetDocument={state.doc} onSent={closePopup} />
+  // Встроенный режим: нужная страница с преднастроенным документом.
+  // После завершения (отправка в МС / списание) окно МС закрывается через onSent.
+  if (state.kind === 'shipment') {
+    return <ShipmentPage embedded presetDocument={state.doc} onSent={closePopup} />
+  }
+  if (state.kind === 'acceptance') {
+    return <AcceptancePage embedded presetMoyskladId={state.msObjectId} onSent={closePopup} />
+  }
+  return <WriteoffPage embedded presetDocument={state.doc} onSent={closePopup} />
 }
 
 const styles: Record<string, CSSProperties> = {

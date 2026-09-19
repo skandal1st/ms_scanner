@@ -14,6 +14,16 @@
                 <document.demand.edit/>
             </locations>
         </button>
+        <button name="startAcceptance" title="Принять в Скандата">
+            <locations>
+                <document.supply.edit/>
+            </locations>
+        </button>
+        <button name="startWriteoff" title="Списать в Скандата">
+            <locations>
+                <document.loss.edit/>
+            </locations>
+        </button>
     </buttons>
     <!-- Кастомное модальное окно (открывается из кнопки через action=showPopup). -->
     <popups>

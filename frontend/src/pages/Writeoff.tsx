@@ -22,7 +22,19 @@ import {
 
 type Phase = 'idle' | 'signing' | 'submitting' | 'processing' | 'done' | 'error'
 
-export function WriteoffPage() {
+interface WriteoffPageProps {
+  /** Попап МС (кнопка на документе Списание): документ задан заранее; после
+   *  успешного списания вызывается onSent (попап закрывает окно). */
+  embedded?: boolean
+  presetDocument?: Document | null
+  onSent?: () => void
+}
+
+export function WriteoffPage({
+  embedded = false,
+  presetDocument = null,
+  onSent,
+}: WriteoffPageProps = {}) {
   const {
     document,
     setDocument,
@@ -59,6 +71,23 @@ export function WriteoffPage() {
     setWriteoffResult(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Попап МС: документ задан заранее — выбираем его сразу, без DocumentSelector.
+  useEffect(() => {
+    if (embedded && presetDocument) {
+      setPendingDoc(presetDocument)
+      setDocument(presetDocument)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedded, presetDocument?.id])
+
+  // Попап: после успешного списания отдаём управление попапу (он закрывает окно МС).
+  useEffect(() => {
+    if (phase === 'done' && embedded && onSent) {
+      const t = setTimeout(onSent, 1600)
+      return () => clearTimeout(t)
+    }
+  }, [phase, embedded, onSent])
 
   const { data: integration } = useQuery({
     queryKey: ['integration'],
@@ -244,7 +273,7 @@ export function WriteoffPage() {
           <h1 className="acc-header__title">Списание маркировки</h1>
           {phase === 'done' && <span className="badge badge--ok">Завершено</span>}
           {phase === 'processing' && <span className="badge badge--info">Обрабатывается</span>}
-          {document && (
+          {document && !embedded && (
             <button
               type="button"
               className="button button--sm"
@@ -295,12 +324,14 @@ export function WriteoffPage() {
 
       <div className="acc-body">
         <div className="acc-left">
-          <DocumentSelector
-            kind="loss"
-            msKind="demand"
-            onSelect={handleSelectDoc}
-            selected={document}
-          />
+          {!embedded && (
+            <DocumentSelector
+              kind="loss"
+              msKind="demand"
+              onSelect={handleSelectDoc}
+              selected={document}
+            />
+          )}
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
