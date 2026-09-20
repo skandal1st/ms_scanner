@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   documentsApi,
@@ -61,22 +62,42 @@ export function useCreateDocument() {
 }
 
 export function useLoadDocument(documentId: string | null) {
-  const { setDocument, setScans } = useScanStore()
+  const setDocument = useScanStore((s) => s.setDocument)
+  const setScans = useScanStore((s) => s.setScans)
 
-  return useQuery({
+  const query = useQuery({
     queryKey: ['document', documentId],
     queryFn: async () => {
-      if (!documentId) return null
       const [{ data: doc }, { data: scans }] = await Promise.all([
-        documentsApi.get(documentId),
-        scansApi.list(documentId),
+        documentsApi.get(documentId as string),
+        scansApi.list(documentId as string),
       ])
-      setDocument(doc)
-      setScans(scans)
-      return doc
+      return { doc, scans }
     },
     enabled: !!documentId,
   })
+
+  // Переключились на другой документ → сразу чистим сессию, чтобы план/сканы
+  // предыдущей отгрузки не «висели», пока грузится новый документ.
+  useEffect(() => {
+    if (!documentId) return
+    setScans([])
+  }, [documentId, setScans])
+
+  // Пишем в стор ТОЛЬКО из useEffect и ТОЛЬКО для текущего documentId. Раньше
+  // запись шла внутри queryFn — запоздалый ответ (или фоновый refetch) старого
+  // документа перезаписывал стор уже после переключения/«Отвязаться», из-за чего
+  // старый заказ возвращался и не сбрасывался. React Query отдаёт этому хуку
+  // data только по активному ключу, а guard по id — доп. страховка.
+  const data = query.data
+  useEffect(() => {
+    if (!documentId || !data) return
+    if (data.doc.id !== documentId) return
+    setDocument(data.doc)
+    setScans(data.scans)
+  }, [documentId, data, setDocument, setScans])
+
+  return query
 }
 
 export function useClearDocumentScans() {
