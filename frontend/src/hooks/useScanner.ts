@@ -151,6 +151,10 @@ export function useScanner(documentId: string | null) {
       try {
         const { data } = await scansApi.list(docId)
         const store = useScanStore.getState()
+        // Документ мог смениться, пока запрос был в полёте: не перетираем сессию
+        // новой отгрузки сканами предыдущей (иначе старые коды «возвращаются» после
+        // переключения и держатся до F5).
+        if (store.document?.id !== docId) return
         store.setScans(data)
         // Подстраховка на случай потерянного WS-события verify_done: если проверка
         // шла и непроверенных марок больше не осталось — снимаем флаг.
