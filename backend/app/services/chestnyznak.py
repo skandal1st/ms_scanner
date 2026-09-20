@@ -464,6 +464,27 @@ def cis_string_for_moysklad_api(
     return s
 
 
+def _printable_with_gs(raw: str) -> str:
+    """Печатные ASCII + разделитель GS (0x1D) — как в cis_string_for_moysklad_api."""
+    return "".join(
+        ch for ch in (raw or "").strip() if ord(ch) == 0x1D or 0x20 <= ord(ch) <= 0x7E
+    )
+
+
+def _cis_confidence(s: str, serial_len: Optional[int]) -> str:
+    """Уверенность реконструкции для очищенной строки ``s``. См. normalize_cis."""
+    if _FNC1 in s:
+        return "exact"  # был разделитель — граница точная
+    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
+        tail = re.sub(r"(?i)%c1", "", s[18:])
+    elif len(s) >= 15 and s[:14].isdigit():
+        tail = re.sub(r"(?i)%c1", "", s[14:])
+    else:
+        return "exact"  # не наш формат — не реконструируем
+    _serial, conf = _gate_gsless_serial(tail, serial_len)
+    return conf
+
+
 def normalize_cis(
     raw: str, moysklad_tracking_type: Optional[str] = None
 ) -> tuple[str, str]:
@@ -484,21 +505,35 @@ def normalize_cis(
     cis = cis_string_for_moysklad_api(raw, moysklad_tracking_type)
     if not raw:
         return cis, "exact"
-    s = "".join(
-        ch for ch in raw.strip() if ord(ch) == 0x1D or 0x20 <= ord(ch) <= 0x7E
-    )
-    if _FNC1 in s:
-        return cis, "exact"  # был разделитель — граница точная
     tt = (moysklad_tracking_type or "").strip().upper()
     serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
-    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
-        tail = re.sub(r"(?i)%c1", "", s[18:])
-    elif len(s) >= 15 and s[:14].isdigit():
-        tail = re.sub(r"(?i)%c1", "", s[14:])
-    else:
-        return cis, "exact"  # не наш формат — не реконструируем
-    _serial, conf = _gate_gsless_serial(tail, serial_len)
-    return cis, conf
+    return cis, _cis_confidence(_printable_with_gs(raw), serial_len)
+
+
+# Длина серии (AI 21) по товарной группе (pg) — зеркало
+# MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE, но по pg (как в gtin_cz_group).
+# Нужна для проверки уверенности на скане, где известна pg (cache-first), а не tt.
+CZ_PG_SERIAL_LEN: dict[str, int] = {
+    "tobacco": 7, "otp": 7, "ncp": 7,
+    "milk": 6, "water": 6, "softdrinks": 6, "bio": 6, "antiseptic": 6,
+}
+
+
+def serial_len_for_pg(pg: Optional[str]) -> Optional[int]:
+    """Длина серии по товарной группе (pg). None — длина для группы не задана."""
+    return CZ_PG_SERIAL_LEN.get((pg or "").strip().lower())
+
+
+def cis_confidence_for_pg(raw: str, pg: Optional[str]) -> str:
+    """Уверенность реконструкции по товарной группе (pg) — для проверки на скане.
+
+    exact|reconstructed|ambiguous. pg берётся cache-first из gtin_cz_group (без
+    синхронного похода в МС на скане). Неизвестная pg → длины нет → ambiguous для
+    GS-less кода с хвостом.
+    """
+    if not raw:
+        return "exact"
+    return _cis_confidence(_printable_with_gs(raw), serial_len_for_pg(pg))
 
 
 class ChestnyZnakService:

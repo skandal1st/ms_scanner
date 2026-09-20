@@ -19,6 +19,19 @@ from app.services.chestnyznak import cz_pg_from_ms_tracking_type, normalize_gtin
 from app.services.cz_pg_cache import set_cached_pg
 
 
+async def get_cached_pg(db, gtin: Optional[str]) -> Optional[str]:
+    """Товарная группа (pg) для одного GTIN ТОЛЬКО из своей БД (без похода в МС).
+
+    Для использования на скане: инвариант «на скане не ходим в МС/ЧЗ синхронно».
+    Промах кэша → None (группа доберётся позже пакетной проверкой / resolve_pgs).
+    """
+    key = normalize_gtin_key(gtin)
+    if not key:
+        return None
+    row = await _get_cached_from_db(db, [key])
+    return row.get(key)
+
+
 async def _get_cached_from_db(db, gtins: list[str]) -> dict[str, str]:
     """GTIN → pg из своей таблицы для переданного набора GTIN."""
     if not gtins:

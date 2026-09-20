@@ -12,6 +12,8 @@ from app.services.chestnyznak import (
     verify_code_local_gs1,
     cis_string_for_moysklad_api,
     normalize_cis,
+    cis_confidence_for_pg,
+    serial_len_for_pg,
 )
 
 GS = "\x1d"
@@ -181,3 +183,38 @@ def test_normalize_gsless_bare_ki_no_tail_is_exact():
     cis, conf = normalize_cis(raw, "OTP")
     assert conf == "exact"
     assert cis == f"01{gtin}21ABCDEFG"
+
+
+# ── cis_confidence_for_pg / serial_len_for_pg (ingest-time gate по pg) ───────────
+
+def test_serial_len_for_pg():
+    assert serial_len_for_pg("otp") == 7
+    assert serial_len_for_pg("OTP") == 7  # регистр не важен
+    assert serial_len_for_pg("water") == 6
+    assert serial_len_for_pg("shoes") is None   # длина не задана
+    assert serial_len_for_pg(None) is None
+
+
+def test_confidence_for_pg_live_serial6_ambiguous():
+    # Живой otp-код серия-6 без GS: по группе otp (длина 7) — ambiguous, не режем.
+    raw = f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}{_LIVE_OTP_TAIL}"
+    assert cis_confidence_for_pg(raw, "otp") == "ambiguous"
+
+
+def test_confidence_for_pg_serial7_reconstructed():
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFG93ABCD"
+    assert cis_confidence_for_pg(raw, "otp") == "reconstructed"
+
+
+def test_confidence_for_pg_unknown_group_ambiguous():
+    # Группа не в кэше (None) → длины нет → GS-less код с хвостом = ambiguous.
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFG93ABCD"
+    assert cis_confidence_for_pg(raw, None) == "ambiguous"
+
+
+def test_confidence_for_pg_com_with_gs_is_exact():
+    # Настоящий GS → граница точная независимо от группы.
+    raw = f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}{GS}{_LIVE_OTP_TAIL}"
+    assert cis_confidence_for_pg(raw, "otp") == "exact"

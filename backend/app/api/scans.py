@@ -19,12 +19,14 @@ from app.core.security import decrypt_token
 from app.services.chestnyznak import (
     ChestnyZnakService,
     CZApiError,
+    cis_confidence_for_pg,
     extract_gtin,
     is_sscc,
     normalize_gtin_key,
     strip_ai_brackets,
     verify_code_local_gs1,
 )
+from app.services.gtin_cz_group import get_cached_pg
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -230,6 +232,23 @@ async def _create_scan_record(
             gtin = (normalize_gtin_key(vr.gtin) if vr.gtin else None) or gtin
     else:
         local_status = ScanStatus.pending  # короб «целиком» → verify_box_task
+
+    # GS-less ambiguity gate. Keyboard/HID-ввод теряет разделитель GS, серия (AI 21)
+    # и крипто-хвост склеиваются. Если товарная группа известна (cache-first из
+    # gtin_cz_group — БЕЗ синхронного похода в МС, инвариант скана соблюдён) и серию
+    # нельзя достоверно отделить (ambiguous — напр. серия нестандартной длины), сразу
+    # помечаем скан невалидным с понятным сообщением, а не отдаём в МС заведомо неверный
+    # КИ. reconstructed/exact и коды с настоящим GS проходят как обычно. Группа неизвестна
+    # (промах кэша) → не судим, оставляем scanned (доберётся пакетной проверкой).
+    # См. project_hid_datamatrix_gs_spike.
+    if local_status == ScanStatus.scanned and gtin and "\x1d" not in code:
+        pg = await get_cached_pg(db, gtin)
+        if pg and cis_confidence_for_pg(code, pg) == "ambiguous":
+            local_status = ScanStatus.invalid
+            local_error = (
+                "Код без разделителя GS: не удаётся надёжно распознать серию. "
+                "Включите передачу GS-разделителя на сканере или режим COM-порт."
+            )
 
     # Опознание товара по базе знаний GTIN→товар (наполняется при отгрузках/приёмках):
     # подставляем запомненные товар МС и наименование СРАЗУ при скане, локально, без ЧЗ/МС —
