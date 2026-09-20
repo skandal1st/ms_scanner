@@ -366,6 +366,34 @@ def cis_compare_forms_for_ms(raw: str) -> list[str]:
     return uniq
 
 
+# AI, которые в РФ-КМ легитимно следуют за серией (AI 21): крипто-хвост 91/92/93 и
+# цена табака 8005. Используются gate'ом реконструкции при ОТСУТСТВИИ разделителя GS:
+# если после реза серии по длине группы остаток начинается с одного из них — рез
+# достоверен; иначе резать нельзя (можно отрезать часть настоящей серии → тихо
+# неверный КИ). Подтверждено дампом прода: живой otp-код с серией 6, а не 7 — naive
+# рез по длине дал бы неверный КИ, gate его ловит. См. project_hid_datamatrix_gs_spike.
+KNOWN_AI_AFTER_SERIAL: tuple[str, ...] = ("91", "92", "93", "8005")
+
+
+def _gate_gsless_serial(serial_and_tail: str, serial_len: Optional[int]) -> tuple[str, str]:
+    """Отделить серию от прилипшего без GS крипто-хвоста через gate.
+
+    Возвращает (serial, confidence):
+    - ``exact`` — резать нечего (хвост в пределах длины группы, т.е. голый КИ);
+    - ``reconstructed`` — отрезали крипто-хвост, остаток начинается с известного AI;
+    - ``ambiguous`` — длина группы неизвестна ИЛИ остаток не похож на крипто-хвост;
+      серию НЕ режем (возвращаем как есть), чтобы не испортить КИ молча.
+    """
+    if serial_len is None:
+        return serial_and_tail, "ambiguous"
+    if len(serial_and_tail) <= serial_len:
+        return serial_and_tail, "exact"
+    rest = serial_and_tail[serial_len:]
+    if any(rest.startswith(ai) for ai in KNOWN_AI_AFTER_SERIAL):
+        return serial_and_tail[:serial_len], "reconstructed"
+    return serial_and_tail, "ambiguous"
+
+
 def cis_string_for_moysklad_api(
     stored: str, moysklad_tracking_type: Optional[str] = None
 ) -> str:
@@ -402,11 +430,16 @@ def cis_string_for_moysklad_api(
 
     def _trim_serial(serial: str, had_gs: bool) -> str:
         serial = re.sub(r"(?i)%c1", "", serial)
-        # Серия отделена GS → точная граница, длину не трогаем. Иначе (голый код,
-        # криптохвост прилип без разделителя) — режем по длине типа маркировки.
-        if not had_gs and serial_len is not None and len(serial) > serial_len:
-            serial = serial[:serial_len]
-        return serial
+        # Серия отделена GS → точная граница, длину не трогаем.
+        if had_gs:
+            return serial
+        # Голый код (крипто-хвост прилип без разделителя): режем по длине группы
+        # ТОЛЬКО через gate — если отрезаемый остаток начинается с известного AI
+        # крипто-хвоста. Иначе рез небезопасен (можно отрезать часть настоящей
+        # серии → тихо неверный КИ) — оставляем серию как есть (МС отклонит
+        # заведомо-битый код громко). См. project_hid_datamatrix_gs_spike.
+        cut_serial, _conf = _gate_gsless_serial(serial, serial_len)
+        return cut_serial
 
     # КЛЮЧЕВОЕ: сохраняем форму кода как он зарегистрирован в ЧЗ = как отсканирован.
     # Структурный GS1 (01<GTIN>21<serial>) → cis С AI 01/21. «Голый» (<GTIN><serial>
@@ -429,6 +462,43 @@ def cis_string_for_moysklad_api(
         return gtin + serial
 
     return s
+
+
+def normalize_cis(
+    raw: str, moysklad_tracking_type: Optional[str] = None
+) -> tuple[str, str]:
+    """Единая нормализация КМ для записи в МС + уверенность реконструкции.
+
+    Возвращает ``(cis, confidence)``:
+    - ``exact`` — граница серии достоверна (в коде БЫЛ разделитель GS, либо резать
+      нечего — голый КИ, либо строка не наш GS1-формат);
+    - ``reconstructed`` — GS отсутствовал (keyboard/HID-ввод), серию отрезали по длине
+      группы и остаток начинается с известного AI крипто-хвоста;
+    - ``ambiguous`` — GS отсутствовал и достоверно отделить серию нельзя (длина группы
+      неизвестна или остаток не похож на крипто-хвост).
+
+    ``reconstructed``/``ambiguous`` от HID-ввода следует подтверждать в ЧЗ (cises/check)
+    до записи в МС. ``cis`` для ambiguous возвращается НЕ обрезанным — тихо неверный КИ
+    в МС не уходит. См. project_hid_datamatrix_gs_spike.
+    """
+    cis = cis_string_for_moysklad_api(raw, moysklad_tracking_type)
+    if not raw:
+        return cis, "exact"
+    s = "".join(
+        ch for ch in raw.strip() if ord(ch) == 0x1D or 0x20 <= ord(ch) <= 0x7E
+    )
+    if _FNC1 in s:
+        return cis, "exact"  # был разделитель — граница точная
+    tt = (moysklad_tracking_type or "").strip().upper()
+    serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
+    if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
+        tail = re.sub(r"(?i)%c1", "", s[18:])
+    elif len(s) >= 15 and s[:14].isdigit():
+        tail = re.sub(r"(?i)%c1", "", s[14:])
+    else:
+        return cis, "exact"  # не наш формат — не реконструируем
+    _serial, conf = _gate_gsless_serial(tail, serial_len)
+    return cis, conf
 
 
 class ChestnyZnakService:

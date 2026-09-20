@@ -10,7 +10,11 @@ from app.services.chestnyznak import (
     is_sscc,
     normalize_gtin_key,
     verify_code_local_gs1,
+    cis_string_for_moysklad_api,
+    normalize_cis,
 )
+
+GS = "\x1d"
 
 
 def _gtin14_check_digit(first13: str) -> str:
@@ -116,3 +120,64 @@ def test_verify_local_missing_serial():
     res = verify_code_local_gs1(f"01{gtin}")
     assert res.valid is False
     assert res.status == "NO_SERIAL"
+
+
+# ── normalize_cis / cis_string_for_moysklad_api: gate реконструкции GS-less ──────
+#
+# Ключевая инвариант-защита: без разделителя GS (keyboard/HID-ввод) серию режем по
+# длине группы ТОЛЬКО если остаток начинается с известного AI крипто-хвоста. Иначе —
+# ambiguous, серию НЕ режем (тихо неверный КИ в МС не уходит).
+# См. project_hid_datamatrix_gs_spike.
+
+# Живой otp-код из дампа прода: серия 6 символов ("5&uZVZ"), а не 7.
+_LIVE_OTP_GTIN = "04610196840012"
+_LIVE_OTP_SERIAL = "5&uZVZ"
+_LIVE_OTP_TAIL = "931vgC"  # AI 93 + контрольный код
+
+
+def test_normalize_com_with_gs_is_exact():
+    # COM-путь: настоящий GS даёт точную границу серии — режем крипто-хвост точно.
+    raw = f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}{GS}{_LIVE_OTP_TAIL}"
+    cis, conf = normalize_cis(raw, "OTP")
+    assert conf == "exact"
+    assert cis == f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}"
+
+
+def test_normalize_gsless_serial6_is_ambiguous_not_silently_cut():
+    # Тот же код, отсканированный БЕЗ GS (HID). Правило «otp=7» отрезало бы "5&uZVZ9"
+    # → тихо неверный КИ. Gate обязан вернуть ambiguous и НЕ произвести кривой рез.
+    raw = f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}{_LIVE_OTP_TAIL}"  # GS снят
+    cis, conf = normalize_cis(raw, "OTP")
+    assert conf == "ambiguous"
+    # наивный (неверный) КИ НЕ должен быть получен
+    assert cis != f"01{_LIVE_OTP_GTIN}215&uZVZ9"
+    # и через строковую обёртку — та же защита (регрессия naive-cut)
+    assert cis_string_for_moysklad_api(raw, "OTP") != f"01{_LIVE_OTP_GTIN}215&uZVZ9"
+
+
+def test_normalize_gsless_serial7_reconstructs():
+    # Штатный табачный код без GS: серия 7 + хвост 93… → остаток начинается с 93 →
+    # рез достоверен (reconstructed), крипто-хвост отброшен.
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFG93ABCD"  # серия ABCDEFG (7), хвост 93ABCD
+    cis, conf = normalize_cis(raw, "OTP")
+    assert conf == "reconstructed"
+    assert cis == f"01{gtin}21ABCDEFG"
+
+
+def test_normalize_gsless_unknown_group_is_ambiguous():
+    # Группа не известна (нет trackingType) → длины серии нет → резать нельзя.
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFG93ABCD"
+    cis, conf = normalize_cis(raw, None)
+    assert conf == "ambiguous"
+    assert cis == f"01{gtin}21ABCDEFG93ABCD"  # не обрезано
+
+
+def test_normalize_gsless_bare_ki_no_tail_is_exact():
+    # Голый КИ без крипто-хвоста (серия в пределах длины группы) — резать нечего.
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFG"  # ровно 7 символов серии, хвоста нет
+    cis, conf = normalize_cis(raw, "OTP")
+    assert conf == "exact"
+    assert cis == f"01{gtin}21ABCDEFG"
