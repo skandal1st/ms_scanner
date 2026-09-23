@@ -116,6 +116,40 @@ export default function App() {
           <Route path="/launch" element={<LaunchPage />} />
           {/* Кастомное модальное окно МС (кнопка на документе): авторизуется по contextKey. */}
           <Route path="/popup" element={<PopupPage />} />
+          {/* Киоск-окна сканирования — внешняя вкладка, открытая из МС (/launch → сюда).
+              Без Layout-навигации: кладовщик заперт на своей задаче и не уходит в
+              приёмку/инвентаризацию/настройки. Функции самой задачи (выбор документа,
+              «Следующая отгрузка») остаются. */}
+          <Route
+            path="/scan/shipment"
+            element={
+              <RequireAuth>
+                <div className="scan-kiosk">
+                  <ShipmentPage />
+                </div>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/scan/writeoff"
+            element={
+              <RequireAuth>
+                <div className="scan-kiosk">
+                  <WriteoffPage />
+                </div>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/scan/acceptance"
+            element={
+              <RequireAuth>
+                <div className="scan-kiosk">
+                  <AcceptancePage />
+                </div>
+              </RequireAuth>
+            }
+          />
           <Route path="/" element={<Navigate to="/shipment" replace />} />
           <Route
             path="/shipment"

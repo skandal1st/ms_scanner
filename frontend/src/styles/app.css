@@ -188,6 +188,9 @@ html, body, #root { height: 100%; }
   height: calc(100vh - 52px);
   background-color: var(--ms-bg-alt);
 }
+/* Киоск-окно сканирования (внешняя вкладка из МС): без верхней навигации —
+   страница занимает всю высоту, кладовщик не уходит в другие разделы. */
+.scan-kiosk .acc-page { height: 100vh; }
 .acc-header {
   display: flex;
   align-items: center;

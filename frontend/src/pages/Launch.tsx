@@ -13,8 +13,13 @@ export function LaunchPage() {
     const mode = params.get('mode')
     // doc — наш внутренний id документа (из кнопки МС): страница сразу его выберет.
     const docId = params.get('doc')
+    // Внешняя вкладка = киоск-окно сканирования без навигации по разделам.
     const base =
-      mode === 'acceptance' ? '/acceptance' : mode === 'writeoff' ? '/writeoff' : '/shipment'
+      mode === 'acceptance'
+        ? '/scan/acceptance'
+        : mode === 'writeoff'
+          ? '/scan/writeoff'
+          : '/scan/shipment'
     const target = docId ? `${base}?doc=${encodeURIComponent(docId)}` : base
 
     if (localStorage.getItem('access_token')) {
