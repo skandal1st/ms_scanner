@@ -31,14 +31,19 @@ function describePort(port: SerialPort): string {
   return 'Системный COM-порт'
 }
 
-function ScannerSection() {
+function ScannerSection({ embedded = false }: { embedded?: boolean }) {
   const mode = useScannerMode()
+  // В окне МС (iframe) Web Serial заблокирован Permissions-Policy: navigator.serial
+  // существует, но getPorts()/requestPort() бросают «disallowed by permissions policy».
+  // Поэтому в embedded-режиме порт НЕ трогаем — его подключают в окне сканирования
+  // (top-level вкладка). Здесь только выбор режима (флаг в localStorage).
+  const canManagePorts = isWebSerialSupported() && !embedded
   const supported = isWebSerialSupported()
   const [ports, setPorts] = useState<SerialPort[]>([])
   const [error, setError] = useState<string | null>(null)
 
   const refreshPorts = async () => {
-    if (!supported) return
+    if (!canManagePorts) return
     try {
       const list = await navigator.serial.getPorts()
       setPorts(list)
@@ -48,8 +53,8 @@ function ScannerSection() {
   }
 
   useEffect(() => {
+    if (!canManagePorts) return
     void refreshPorts()
-    if (!supported) return
     const onChange = () => void refreshPorts()
     navigator.serial.addEventListener('connect', onChange)
     navigator.serial.addEventListener('disconnect', onChange)
@@ -58,7 +63,7 @@ function ScannerSection() {
       navigator.serial.removeEventListener('disconnect', onChange)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supported])
+  }, [canManagePorts])
 
   const handleRequest = async () => {
     setError(null)
@@ -141,7 +146,16 @@ function ScannerSection() {
         </div>
       )}
 
-      {supported && mode === 'com' && (
+      {supported && mode === 'com' && embedded && (
+        <div className="alert alert--info mt-12">
+          Подключение COM-порта выполняется в <b>окне сканирования</b> — оно откроется
+          отдельной вкладкой при нажатии «Начать приёмку/отгрузку» или кнопки на документе
+          МойСклад. В самом окне МойСклад браузер не даёт доступ к COM-порту. Там нажмите
+          «Подключить COM-порт» и выберите сканер.
+        </div>
+      )}
+
+      {canManagePorts && mode === 'com' && (
         <>
           <div className="mt-12">
             {ports.length > 0 ? (
@@ -290,7 +304,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         </section>
 
         <ChestnyZnakSection integration={integration} />
-        <ScannerSection />
+        <ScannerSection embedded={embedded} />
       </div>
     </div>
   )

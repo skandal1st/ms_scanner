@@ -121,12 +121,41 @@ export function ScanInput({ documentId }: Props) {
               ...(deleteMode ? { border: '2px solid #dc2626', background: 'var(--st-err-bg)', padding: 6, borderRadius: 6 } : {}),
             }}
           >
-            {serial.connected ? (
-              <span className="badge badge--ok"><span className="badge__dot" /> COM-порт подключён</span>
-            ) : (
-              <span className="badge badge--warn">
-                <span className="badge__dot" /> COM-порт не подключён — настройте в разделе «Настройки»
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              {serial.connected ? (
+                <span className="badge badge--ok"><span className="badge__dot" /> COM-порт подключён</span>
+              ) : (
+                <span className="badge badge--warn">
+                  <span className="badge__dot" /> COM-порт не подключён
+                </span>
+              )}
+              {/* Выбор/выдача порта делается ЗДЕСЬ — в отдельной top-level вкладке
+                  сканирования, где Web Serial разрешён. В окне МС (iframe) доступ к
+                  serial заблокирован Permissions-Policy, поэтому кнопки нет в Настройках. */}
+              {serial.connected ? (
+                <button
+                  type="button"
+                  className="button button--sm"
+                  onClick={() => void serial.disconnect()}
+                >
+                  Отключить
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="button button--sm button--success"
+                  onClick={() => void serial.requestConnect()}
+                  disabled={!serial.supported}
+                >
+                  <Icon name="box" size={14} /> Подключить COM-порт
+                </button>
+              )}
+            </div>
+            {!serial.supported && (
+              <div className="alert alert--warn" style={{ width: '100%', margin: 0 }}>
+                Браузер не поддерживает Web Serial API. Откройте окно сканирования в
+                Chrome или Edge по HTTPS.
+              </div>
             )}
             {serial.error && (
               <div className="alert alert--error" style={{ width: '100%', margin: 0 }}>

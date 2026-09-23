@@ -319,7 +319,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
         const ports = await navigator.serial.getPorts()
         if (cancelled) return
         if (ports.length === 0) {
-          setError('Нет авторизованного COM-порта. Откройте «Настройки» и нажмите «Подключить COM-порт».')
+          setError('Нет авторизованного COM-порта. Нажмите «Подключить COM-порт» и выберите сканер в диалоге браузера.')
           return
         }
         await connectPort(ports[0])
