@@ -9,9 +9,13 @@ export function LaunchPage() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
-    // mode задаёт, какой раздел открыть в новой вкладке: приёмка или отгрузка.
+    // mode задаёт, какой раздел открыть в новой вкладке: приёмка/отгрузка/списание.
     const mode = params.get('mode')
-    const target = mode === 'acceptance' ? '/acceptance' : '/shipment'
+    // doc — наш внутренний id документа (из кнопки МС): страница сразу его выберет.
+    const docId = params.get('doc')
+    const base =
+      mode === 'acceptance' ? '/acceptance' : mode === 'writeoff' ? '/writeoff' : '/shipment'
+    const target = docId ? `${base}?doc=${encodeURIComponent(docId)}` : base
 
     if (localStorage.getItem('access_token')) {
       navigate(target, { replace: true })
@@ -79,9 +83,12 @@ export function LaunchPage() {
         </div>
       ) : (
         <div style={{ color: 'var(--ms-text-muted)' }}>
-          {new URLSearchParams(window.location.search).get('mode') === 'acceptance'
-            ? 'Открываем приёмку...'
-            : 'Открываем отгрузку...'}
+          {(() => {
+            const m = new URLSearchParams(window.location.search).get('mode')
+            if (m === 'acceptance') return 'Открываем приёмку...'
+            if (m === 'writeoff') return 'Открываем списание...'
+            return 'Открываем отгрузку...'
+          })()}
         </div>
       )}
     </div>

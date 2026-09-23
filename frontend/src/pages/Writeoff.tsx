@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
@@ -80,6 +81,27 @@ export function WriteoffPage({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [embedded, presetDocument?.id])
+
+  // Внешняя вкладка COM-сканирования из кнопки МС: ?doc=<id> — сразу выбираем документ.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    if (embedded) return
+    const docId = searchParams.get('doc')
+    if (!docId) return
+    let cancelled = false
+    documentsApi
+      .get(docId)
+      .then(({ data }) => {
+        if (cancelled) return
+        setPendingDoc(data)
+        setDocument(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Попап: после успешного списания отдаём управление попапу (он закрывает окно МС).
   useEffect(() => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
@@ -124,6 +125,29 @@ export function ShipmentPage({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [embedded, presetDocument?.id])
+
+  // Внешняя вкладка COM-сканирования, открытая из кнопки МС: ?doc=<id> — сразу
+  // выбираем этот документ (DocumentSelector остаётся для перехода к следующему,
+  // не переоткрывая вкладку/порт). Один раз на монтировании.
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    if (embedded) return
+    const docId = searchParams.get('doc')
+    if (!docId) return
+    let cancelled = false
+    documentsApi
+      .get(docId)
+      .then(({ data }) => {
+        if (cancelled) return
+        setPendingDoc(data)
+        setDocument(data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Попап: после успешной отправки — короткая пауза на оверлей «Отгружено», затем
   // отдаём управление попапу (он шлёт ClosePopup хост-окну МС).

@@ -2,7 +2,13 @@ import { useEffect, useRef, useCallback } from 'react'
 import { scansApi, isSscc } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { useModal } from '../components/ModalProvider'
+import { getScannerMode } from '../lib/scannerMode'
 import { decodeJwtSub } from '../lib/jwt'
+
+// Простой штучный штрихкод немаркированного товара: EAN-8/UPC-A/EAN-13/GTIN-14 —
+// только цифры. Всё остальное (DataMatrix-марка, SSCC-короб) несёт служебный
+// разделитель GS (0x1D), который клавиатурный сканер физически не передаёт.
+const PLAIN_BARCODE_RE = /^\d{8,14}$/
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
 
@@ -198,6 +204,22 @@ export function useScanner(documentId: string | null) {
           playBeep('error')
           console.error('Delete scan error:', err)
         }
+        return
+      }
+
+      // Клавиатурный режим физически не переносит разделитель GS (0x1D) марки
+      // DataMatrix и коверкает код раскладкой — на проде 100% invalid-сканов были
+      // без GS. Пропускаем только штучный штрихкод немаркированного товара; марку
+      // или короб просим считать COM-сканером в отдельном окне.
+      if (getScannerMode() === 'keyboard' && !PLAIN_BARCODE_RE.test(trimmed)) {
+        playBeep('error')
+        void modal.alert(
+          'Марку (DataMatrix) и короб нельзя считать клавиатурным сканером — теряется ' +
+            'служебный разделитель кода, ЧЗ и МойСклад его не примут. Подключите ' +
+            'COM-сканер (Настройки → сканер) и откройте окно сканирования из МойСклад. ' +
+            'Клавиатурой можно вводить только штрихкод немаркированного товара.',
+          { variant: 'error' },
+        )
         return
       }
 

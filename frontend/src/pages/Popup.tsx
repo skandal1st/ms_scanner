@@ -3,6 +3,7 @@ import { ShipmentPage } from './Shipment'
 import { AcceptancePage } from './Acceptance'
 import { WriteoffPage } from './Writeoff'
 import { documentsApi, type Document, type DocumentKind } from '../api/client'
+import { getScannerMode } from '../lib/scannerMode'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 
 /**
@@ -16,8 +17,12 @@ import { persistUserIdFromAccessToken } from '../lib/jwt'
  *  3. Резолвим наш Document по (kind, msObjectId) и показываем скан-сессию.
  *  4. После «Отгрузить» окно закрываем сообщением `ClosePopup` хост-окну МС.
  *
- * Web Serial (COM-сканер) внутри окна МС заблокирован Permissions-Policy — тут
- * работает keyboard-режим; COM остаётся во внешней вкладке (гибрид).
+ * Web Serial (COM-сканер) внутри окна МС заблокирован Permissions-Policy. А
+ * keyboard-режим для марок нерабочий: клавиатурный поток теряет разделитель GS
+ * (0x1D) — на проде 100% invalid-сканов были без GS. Поэтому при COM-режиме
+ * маркированное сканирование (отгрузка/списание) не встраивается в это окно, а
+ * открывается в отдельной top-level вкладке (`/launch`), где Web Serial разрешён
+ * и GS сохраняется. Вкладка/порт живут всю смену (autoCloseTab=false в COM).
  */
 
 interface OpenParams {
@@ -48,6 +53,10 @@ export function PopupPage() {
   const paramsRef = useRef<OpenParams | null>(null)
   const resolvedRef = useRef(false)
   const msgIdRef = useRef(1)
+  // COM-режим: марочное сканирование уходит во внешнюю вкладку. Признак «окно уже
+  // открыли» и текст ошибки открытия — для экрана-лаунчера ниже.
+  const [extScanOpened, setExtScanOpened] = useState(false)
+  const [extScanError, setExtScanError] = useState<string | null>(null)
 
   // Закрыть окно: сообщаем хост-окну МС. Для попапа из кнопки ответ не нужен.
   const closePopup = () => {
@@ -58,6 +67,38 @@ export function PopupPage() {
       )
     } catch {
       /* ignore */
+    }
+  }
+
+  // Открыть марочное сканирование в отдельной top-level вкладке (COM-режим).
+  // Окно открываем СРАЗУ (иначе popup-блокер), затем берём свежий одноразовый
+  // launch_token (наш access_token из этого окна МС не виден внешней вкладке —
+  // это другой storage-partition) и подставляем адрес. Имя вкладки фиксированное:
+  // повторные открытия переиспользуют одну вкладку, порт не плодится.
+  const openExternalScan = async (kind: DocumentKind, docId: string) => {
+    const mode = kind === 'demand' ? 'shipment' : 'writeoff'
+    const win = window.open('', 'skandata-scan')
+    try {
+      const access = localStorage.getItem('access_token')
+      const resp = await fetch('/api/auth/relaunch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${access ?? ''}` },
+      })
+      const data = await resp.json().catch(() => ({}))
+      if (!resp.ok || !data.launch_token) throw new Error('relaunch failed')
+      const t = encodeURIComponent(data.launch_token)
+      const d = encodeURIComponent(docId)
+      if (!win) {
+        setExtScanError('Браузер заблокировал новое окно. Разрешите всплывающие окна для сайта и повторите.')
+        return
+      }
+      win.location.href = `/launch?t=${t}&mode=${mode}&doc=${d}`
+      win.focus()
+      setExtScanError(null)
+      setExtScanOpened(true)
+    } catch {
+      win?.close()
+      setExtScanError('Не удалось открыть окно сканирования. Повторите.')
     }
   }
 
@@ -163,6 +204,48 @@ export function PopupPage() {
     )
   }
 
+  // COM-режим: марочное сканирование (отгрузка/списание) нельзя вести в этом окне
+  // МС (Web Serial заблокирован Permissions-Policy). Показываем лаунчер, который
+  // открывает сканирование в отдельной вкладке. Keyboard-режим оставляем встроенным
+  // (там марки блокируются с подсказкой, но штрихкоды немаркированного товара идут).
+  if ((state.kind === 'shipment' || state.kind === 'writeoff') && getScannerMode() === 'com') {
+    const doc = state.doc
+    const label = state.kind === 'shipment' ? 'отгрузку' : 'списание'
+    return (
+      <div style={styles.centered}>
+        <div style={styles.launcher}>
+          <div style={styles.launcherTitle}>COM-сканер: сканирование в отдельном окне</div>
+          <div style={styles.muted}>
+            Документ: <b>{doc.name}</b>
+          </div>
+          <p style={styles.launcherHint}>
+            USB-сканеру нужно отдельное окно — в окне МойСклад браузер не даёт доступ к
+            COM-порту. Марки читаются только так; клавиатурный режим их теряет.
+          </p>
+          <button
+            type="button"
+            style={styles.launcherBtn}
+            onClick={() => void openExternalScan(state.kind === 'shipment' ? 'demand' : 'loss', doc.id)}
+          >
+            {extScanOpened ? `Открыть окно ещё раз` : `Открыть окно и начать ${label}`}
+          </button>
+          {extScanOpened && (
+            <>
+              <div style={styles.okNote}>
+                Окно сканирования открыто в отдельной вкладке. Собирайте там; по «Отгрузить»
+                марки уйдут в МойСклад. Это окно можно закрыть.
+              </div>
+              <button type="button" style={styles.launcherBtnGhost} onClick={closePopup}>
+                Закрыть это окно
+              </button>
+            </>
+          )}
+          {extScanError && <div style={styles.errorBox}>{extScanError}</div>}
+        </div>
+      </div>
+    )
+  }
+
   // Встроенный режим: нужная страница с преднастроенным документом.
   // После завершения (отправка в МС / списание) окно МС закрывается через onSent.
   if (state.kind === 'shipment') {
@@ -184,6 +267,47 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'var(--ms-font)',
   },
   muted: { fontSize: 13, color: 'var(--ms-text-muted)' },
+  launcher: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+    maxWidth: 460,
+    width: '100%',
+    textAlign: 'center',
+    alignItems: 'center',
+  },
+  launcherTitle: { fontSize: 17, fontWeight: 700, color: 'var(--ms-text)' },
+  launcherHint: { fontSize: 13, color: 'var(--ms-text-muted)', margin: 0, lineHeight: 1.5 },
+  launcherBtn: {
+    background: 'var(--brand)',
+    color: '#fff',
+    border: 'none',
+    borderRadius: 'var(--r-md)',
+    padding: '12px 22px',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    boxShadow: 'var(--shadow-1)',
+  },
+  launcherBtnGhost: {
+    background: 'transparent',
+    color: 'var(--ms-text-muted)',
+    border: '1px solid var(--ms-border-light)',
+    borderRadius: 'var(--r-md)',
+    padding: '9px 18px',
+    fontSize: 13,
+    fontWeight: 500,
+    cursor: 'pointer',
+  },
+  okNote: {
+    fontSize: 12,
+    color: 'var(--st-ok-fg, #15803d)',
+    background: 'var(--st-ok-bg, #f0fdf4)',
+    border: '1px solid var(--st-ok-bd, #bbf7d0)',
+    borderRadius: 'var(--r-md)',
+    padding: 10,
+    lineHeight: 1.45,
+  },
   errorBox: {
     color: 'var(--st-err-fg)',
     background: 'var(--st-err-bg)',
