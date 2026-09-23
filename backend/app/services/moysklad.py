@@ -500,6 +500,24 @@ class MoySkladService:
                 if write_codes:
                     payload.pop("trackingCodes", None)
                     payload.pop("trackingCodes_1162", None)
+                # Цена/НДС из УПД перекрывают то, что стоит в существующей позиции
+                # поступления (обычно 0 у только что созданного/пустого поступления).
+                # Без этого закупочная цена из XML в МС не проставляется — приёмка
+                # связана с уже имеющими позиции поступлениями (ветка ms_rows), а не
+                # с пустым документом (ветка ниже). МС хранит цену в копейках.
+                pp = (position_prices or {}).get(pid) if pid else None
+                if pp:
+                    if pp.get("price") is not None:
+                        try:
+                            payload["price"] = int(round(float(pp["price"]) * 100))
+                        except (TypeError, ValueError):
+                            pass
+                    if pp.get("vat") is not None:
+                        try:
+                            payload["vat"] = int(pp["vat"])
+                            payload["vatEnabled"] = True
+                        except (TypeError, ValueError):
+                            pass
                 remaining = pending.get(pid) if pid else None
                 if remaining:
                     row_cap_raw = row.get("quantity")
