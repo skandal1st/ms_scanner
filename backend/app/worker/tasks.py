@@ -8,7 +8,30 @@ from typing import Optional
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
-from app.services.chestnyznak import cis_compare_forms_for_ms, normalize_gtin_key, extract_gtin
+from app.services.chestnyznak import (
+    cis_compare_forms_for_ms,
+    extract_gtin,
+    is_sscc,
+    normalize_gtin_key,
+)
+
+
+async def _expand_aggregate_for_processing(cz, code: str) -> tuple[list[str], Optional[str]]:
+    """Раскрыть упаковку перед записью приёмки в МС.
+
+    SSCC нельзя пропускать через ``get_code_info``: нормализатор обычного КИ
+    воспринимает 20 цифр как ``GTIN + serial`` и превращает ``00…`` в ``01…21…``.
+    True API закономерно отвечает 404 на изменённый код. Для SSCC сразу используем
+    ``aggregated/list`` через ``unpack_box``; AI-02/прочие агрегаты по-прежнему
+    раскрываем через ``cises/info`` с последующим ``aggregated/list``.
+    """
+    if is_sscc(code):
+        return list(await cz.unpack_box(code)), None
+
+    info = await cz.get_code_info(code)
+    if not (info and info.is_aggregate and info.children):
+        return [], None
+    return list(info.children), info.product_name
 
 
 def _extract_moysklad_error(body: str) -> Optional[str]:
@@ -1086,6 +1109,7 @@ async def _process_document_async(document_id: str, user_id: str):
                         "Токен Честного Знака истёк. Войдите в ЧЗ заново и повторите "
                         "приёмку — коды упаковок не удалось развернуть в марки маркировки."
                     )
+                    doc.status = DocumentStatus.draft
                     logger.warning(
                         "process_document.cz_token_missing",
                         document_id=document_id,
@@ -1111,7 +1135,9 @@ async def _process_document_async(document_id: str, user_id: str):
                 )
                 for s in boxes_to_expand:
                     try:
-                        info = await cz.get_code_info(s.code)
+                        children, product_name = await _expand_aggregate_for_processing(
+                            cz, s.code
+                        )
                     except Exception as exc:
                         logger.warning(
                             "process_document.expand_box_failed",
@@ -1119,18 +1145,18 @@ async def _process_document_async(document_id: str, user_id: str):
                             error=str(exc),
                         )
                         continue
-                    if info and info.is_aggregate and info.children:
-                        s.child_codes = info.children
-                        s.box_quantity = len(info.children)
+                    if children:
+                        s.child_codes = children
+                        s.box_quantity = len(children)
                         # GTIN агрегата ≠ GTIN пачки — берём GTIN вложенной пачки,
                         # чтобы скан матчился с планом и считался как N единиц.
-                        child_gtin = extract_gtin(info.children[0])
+                        child_gtin = extract_gtin(children[0])
                         if child_gtin:
                             gk = normalize_gtin_key(child_gtin)
                             if gk:
                                 s.gtin = gk
-                        if info.product_name:
-                            s.product_name = info.product_name
+                        if product_name:
+                            s.product_name = product_name
                         logger.info(
                             "process_document.box_expanded",
                             scan_id=str(s.id),
@@ -1151,6 +1177,7 @@ async def _process_document_async(document_id: str, user_id: str):
                     "Честный Знак не нашёл эти коды ни в одной из включённых товарных групп. "
                     "Проверьте, что нужная товарная группа включена в Настройках, и повторите приёмку."
                 )
+                doc.status = DocumentStatus.draft
                 logger.warning(
                     "process_document.boxes_unexpanded",
                     document_id=document_id,

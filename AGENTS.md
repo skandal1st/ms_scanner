@@ -26,7 +26,7 @@ docker compose run --rm frontend npm run build            # TS-чек + Vite б�
 
 Прод-деплой (`docker-compose.prod.yml` + Caddy + LE):
 ```bash
-ssh root@185.197.75.195 'cd /root/ms_scanner && git pull --ff-only origin main \
+ssh root@92.118.113.252 'cd /root/ms_scanner && git pull --ff-only origin main \
   && docker compose -f docker-compose.prod.yml build backend worker frontend \
   && docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head \
   && docker compose -f docker-compose.prod.yml up -d --force-recreate backend worker frontend'
