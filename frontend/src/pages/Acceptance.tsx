@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { acceptanceApi, scansApi, productsApi } from '../api/client'
 import type {
   AcceptanceDoc,
@@ -50,6 +50,7 @@ export function AcceptancePage({
     sending,
     error: sendError,
     done: sendDone,
+    closingTab,
     setError: setSendError,
     reset: resetSend,
   } = useSendToMoysklad<AcceptanceDoc>({
@@ -239,6 +240,14 @@ export function AcceptancePage({
     await sendToMs(docId)
   }
 
+  const handleNextAcceptance = useCallback(() => {
+    resetSend()
+    setDoc(null)
+    setResult(null)
+    setScans([])
+    setError(null)
+  }, [resetSend])
+
   // Попап: после успешной отправки — пауза на оверлей, затем закрываем окно МС.
   useEffect(() => {
     if (sendDone && embedded && onSent) {
@@ -246,6 +255,16 @@ export function AcceptancePage({
       return () => clearTimeout(t)
     }
   }, [sendDone, embedded, onSent])
+
+  // В обычной странице после успеха React-state `sendDone` раньше оставался true
+  // навсегда. Если браузер блокировал window.close() (или вкладка была открыта без
+  // opener), полноэкранный оверлей исчезал только после hard refresh. Показываем
+  // подтверждение несколько секунд и всегда возвращаем интерфейс к новой приёмке.
+  useEffect(() => {
+    if (!sendDone || embedded) return
+    const t = window.setTimeout(handleNextAcceptance, closingTab ? 2600 : 2200)
+    return () => window.clearTimeout(t)
+  }, [sendDone, embedded, closingTab, handleNextAcceptance])
 
   const columns: ColumnDef<ImportPositionResult>[] = useMemo(
     () => [
@@ -561,8 +580,18 @@ export function AcceptancePage({
             </div>
             <div className="done-overlay__title">Приёмка отправлена в МойСклад</div>
             <div className="done-overlay__sub">
-              Коды маркировки записаны в позиции поступления.
+              {closingTab
+                ? 'Коды записаны. Возвращаемся в МойСклад…'
+                : 'Коды записаны. Новая приёмка откроется автоматически.'}
             </div>
+            <button
+              type="button"
+              className="button button--success"
+              style={{ marginTop: 16 }}
+              onClick={handleNextAcceptance}
+            >
+              Новая приёмка
+            </button>
           </div>
         </div>
       )}

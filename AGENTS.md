@@ -67,7 +67,7 @@ JSONB-массив `[{gtin, product_id, product_name, expected_qty}]` в `Docume
 2. `MsIframePage` шлёт `POST /auth/ms-launch {contextKey}`. Бэк через Vendor JWT (`_build_vendor_jwt`) идёт за контекстом в МС, находит `Integration` по `accountId`, кладёт `launch_token` (`secrets.token_urlsafe(32)`) в Redis под ключом `ms_launch:<token>` с TTL 60 сек, в ответе отдаёт ещё и обычный JWT для работы Settings внутри iframe.
 3. iframe рендерит `<SettingsPage embedded />` (без ручного ввода МС-токена) + две CTA: «📥 Начать приёмку» и «📤 Начать отгрузку». По клику — `window.open('/launch?t=…&mode=…','_blank')` без `noopener` (чтобы потом сработал `window.close()`).
 4. `LaunchPage` в новой вкладке шлёт `POST /auth/launch {launch_token}` → атомарный `GETDEL` в Redis → JWT-пара → localStorage → `navigate('/')` или `'/shipment'` по `?mode=`.
-5. После «Принять/Отгрузить товары» в новой вкладке: если `window.opener` есть — оверлей «Готово» и `window.close()` через 1.2с.
+5. После «Принять/Отгрузить товары» в новой вкладке: если `window.opener` есть — оверлей «Готово» и `window.close()` через 1.2с. Закрытие вкладки браузер может заблокировать, поэтому success-оверлей не должен быть терминальным состоянием: в обычной странице после короткой паузы обязательно сбрасывать локальный документ/сканы и возвращать чистую форму следующей операции; также оставлять явную кнопку «Новая приёмка»/«Следующая отгрузка».
 
 Vendor API endpoints (`backend/app/api/moysklad_vendor.py`, `/moysklad/vendor/1.0/apps/{app_id}/{account_id}`):
 - `PUT` — активация (`vendor.activate`): создаёт `User + Integration` или обновляет токен.
