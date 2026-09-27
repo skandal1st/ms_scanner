@@ -5,6 +5,8 @@ import { WriteoffPage } from './Writeoff'
 import { documentsApi, type Document, type DocumentKind } from '../api/client'
 import { getScannerMode } from '../lib/scannerMode'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
+import { useScanStore } from '../store/scanStore'
+import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 /**
  * Кастомное модальное окно МойСклад (кнопка «Собрать в Скандата» на документе).
@@ -28,14 +30,15 @@ import { persistUserIdFromAccessToken } from '../lib/jwt'
 interface OpenParams {
   msObjectId: string
   kind: DocumentKind
+  sessionId: number
 }
 
 type State =
-  | { kind: 'loading'; note: string }
-  | { kind: 'shipment'; doc: Document }
-  | { kind: 'acceptance'; msObjectId: string }
-  | { kind: 'writeoff'; doc: Document }
-  | { kind: 'error'; message: string }
+  | { kind: 'loading'; note: string; sessionId: number }
+  | { kind: 'shipment'; doc: Document; sessionId: number }
+  | { kind: 'acceptance'; msObjectId: string; sessionId: number }
+  | { kind: 'writeoff'; doc: Document; sessionId: number }
+  | { kind: 'error'; message: string; sessionId: number }
 
 const PARAMS_TIMEOUT_MS = 15000
 
@@ -48,10 +51,15 @@ function isMoyskladOrigin(origin: string): boolean {
 }
 
 export function PopupPage() {
-  const [state, setState] = useState<State>({ kind: 'loading', note: 'Подключаемся к МойСклад…' })
+  const [state, setState] = useState<State>({
+    kind: 'loading',
+    note: 'Подключаемся к МойСклад…',
+    sessionId: 0,
+  })
   const authedRef = useRef(false)
   const paramsRef = useRef<OpenParams | null>(null)
-  const resolvedRef = useRef(false)
+  const resolvedSessionRef = useRef<number | null>(null)
+  const sessionIdRef = useRef(0)
   const msgIdRef = useRef(1)
   // COM-режим: марочное сканирование уходит во внешнюю вкладку. Признак «окно уже
   // открыли» и текст ошибки открытия — для экрана-лаунчера ниже.
@@ -60,6 +68,10 @@ export function PopupPage() {
 
   // Закрыть окно: сообщаем хост-окну МС. Для попапа из кнопки ответ не нужен.
   const closePopup = () => {
+    // МойСклад может не уничтожить iframe, а только скрыть его. Убираем данные
+    // текущей операции до ClosePopup, чтобы они не мигнули при следующем открытии.
+    useScanStore.getState().reset()
+    setState({ kind: 'loading', note: 'Окно закрыто.', sessionId: sessionIdRef.current })
     try {
       window.parent?.postMessage(
         { name: 'ClosePopup', messageId: msgIdRef.current++, popupResponse: 'done' },
@@ -75,7 +87,11 @@ export function PopupPage() {
   // launch_token (наш access_token из этого окна МС не виден внешней вкладке —
   // это другой storage-partition) и подставляем адрес. Имя вкладки фиксированное:
   // повторные открытия переиспользуют одну вкладку, порт не плодится.
-  const openExternalScan = async (kind: DocumentKind, docId: string) => {
+  const openExternalScan = async (
+    kind: DocumentKind,
+    docId: string,
+    organizationProfileId?: string | null,
+  ) => {
     const mode = kind === 'demand' ? 'shipment' : 'writeoff'
     const win = window.open('', 'skandata-scan')
     try {
@@ -88,11 +104,14 @@ export function PopupPage() {
       if (!resp.ok || !data.launch_token) throw new Error('relaunch failed')
       const t = encodeURIComponent(data.launch_token)
       const d = encodeURIComponent(docId)
+      const profileParam = organizationProfileId
+        ? `&profile=${encodeURIComponent(organizationProfileId)}`
+        : ''
       if (!win) {
         setExtScanError('Браузер заблокировал новое окно. Разрешите всплывающие окна для сайта и повторите.')
         return
       }
-      win.location.href = `/launch?t=${t}&mode=${mode}&doc=${d}`
+      win.location.href = `/launch?t=${t}&mode=${mode}&doc=${d}${profileParam}`
       win.focus()
       setExtScanError(null)
       setExtScanOpened(true)
@@ -104,30 +123,44 @@ export function PopupPage() {
 
   // Резолвим документ, когда есть и авторизация, и параметры от OpenPopup.
   const tryResolve = async () => {
-    if (resolvedRef.current) return
-    if (!authedRef.current || !paramsRef.current) return
-    resolvedRef.current = true
-    const { msObjectId, kind } = paramsRef.current
+    const params = paramsRef.current
+    if (!authedRef.current || !params) return
+    if (resolvedSessionRef.current === params.sessionId) return
+    resolvedSessionRef.current = params.sessionId
+    const { msObjectId, kind, sessionId } = params
 
     // Приёмка (supply) не резолвит документ заранее — он создаётся при импорте УПД;
     // передаём поступление МС как preset прямо в страницу приёмки.
     if (kind === 'supply') {
-      setState({ kind: 'acceptance', msObjectId })
+      setState({ kind: 'acceptance', msObjectId, sessionId })
       return
     }
     if (kind !== 'demand' && kind !== 'loss') {
-      setState({ kind: 'error', message: 'Этот тип документа не поддерживается в окне Скандаты.' })
+      setState({
+        kind: 'error',
+        message: 'Этот тип документа не поддерживается в окне Скандаты.',
+        sessionId,
+      })
       return
     }
-    setState({ kind: 'loading', note: 'Загружаем документ…' })
+    setState({ kind: 'loading', note: 'Загружаем документ…', sessionId })
     try {
       const { data: doc } = await documentsApi.resolve(msObjectId, kind)
-      setState(kind === 'demand' ? { kind: 'shipment', doc } : { kind: 'writeoff', doc })
+      // Ответ прошлого открытия не должен заменить уже открытый следующий документ.
+      if (paramsRef.current?.sessionId !== sessionId) return
+      setOrganizationProfileId(doc.organization_profile_id)
+      setState(
+        kind === 'demand'
+          ? { kind: 'shipment', doc, sessionId }
+          : { kind: 'writeoff', doc, sessionId },
+      )
     } catch (e) {
+      if (paramsRef.current?.sessionId !== sessionId) return
       const ax = e as { response?: { data?: { detail?: string } } }
       setState({
         kind: 'error',
         message: ax?.response?.data?.detail || 'Не удалось открыть документ из МойСклад.',
+        sessionId,
       })
     }
   }
@@ -136,7 +169,11 @@ export function PopupPage() {
     const params = new URLSearchParams(window.location.search)
     const contextKey = params.get('contextKey')
     if (!contextKey) {
-      setState({ kind: 'error', message: 'Окно открыто некорректно: нет contextKey.' })
+      setState({
+        kind: 'error',
+        message: 'Окно открыто некорректно: нет contextKey.',
+        sessionId: sessionIdRef.current,
+      })
       return
     }
 
@@ -159,6 +196,7 @@ export function PopupPage() {
         setState({
           kind: 'error',
           message: typeof err?.message === 'string' ? err.message : 'Ошибка авторизации через МойСклад.',
+          sessionId: sessionIdRef.current,
         })
       })
 
@@ -169,7 +207,17 @@ export function PopupPage() {
       if (!data || data.name !== 'OpenPopup') return
       const p = data.popupParameters
       if (p && typeof p.msObjectId === 'string' && typeof p.kind === 'string') {
-        paramsRef.current = { msObjectId: p.msObjectId, kind: p.kind as DocumentKind }
+        const sessionId = ++sessionIdRef.current
+        paramsRef.current = {
+          msObjectId: p.msObjectId,
+          kind: p.kind as DocumentKind,
+          sessionId,
+        }
+        // Каждый OpenPopup — отдельная операция, даже если МойСклад переиспользовал iframe.
+        useScanStore.getState().reset()
+        setExtScanOpened(false)
+        setExtScanError(null)
+        setState({ kind: 'loading', note: 'Загружаем документ…', sessionId })
         void tryResolve()
       }
     }
@@ -178,7 +226,11 @@ export function PopupPage() {
     // Страховка: если OpenPopup не пришёл — не висим бесконечно.
     const timeout = window.setTimeout(() => {
       if (!paramsRef.current) {
-        setState({ kind: 'error', message: 'Не получены параметры документа от МойСклад. Закройте окно и попробуйте снова.' })
+        setState({
+          kind: 'error',
+          message: 'Не получены параметры документа от МойСклад. Закройте окно и попробуйте снова.',
+          sessionId: sessionIdRef.current,
+        })
       }
     }, PARAMS_TIMEOUT_MS)
 
@@ -225,7 +277,11 @@ export function PopupPage() {
           <button
             type="button"
             style={styles.launcherBtn}
-            onClick={() => void openExternalScan(state.kind === 'shipment' ? 'demand' : 'loss', doc.id)}
+            onClick={() => void openExternalScan(
+              state.kind === 'shipment' ? 'demand' : 'loss',
+              doc.id,
+              doc.organization_profile_id,
+            )}
           >
             {extScanOpened ? `Открыть окно ещё раз` : `Открыть окно и начать ${label}`}
           </button>
@@ -249,12 +305,19 @@ export function PopupPage() {
   // Встроенный режим: нужная страница с преднастроенным документом.
   // После завершения (отправка в МС / списание) окно МС закрывается через onSent.
   if (state.kind === 'shipment') {
-    return <ShipmentPage embedded presetDocument={state.doc} onSent={closePopup} />
+    return <ShipmentPage key={state.sessionId} embedded presetDocument={state.doc} onSent={closePopup} />
   }
   if (state.kind === 'acceptance') {
-    return <AcceptancePage embedded presetMoyskladId={state.msObjectId} onSent={closePopup} />
+    return (
+      <AcceptancePage
+        key={state.sessionId}
+        embedded
+        presetMoyskladId={state.msObjectId}
+        onSent={closePopup}
+      />
+    )
   }
-  return <WriteoffPage embedded presetDocument={state.doc} onSent={closePopup} />
+  return <WriteoffPage key={state.sessionId} embedded presetDocument={state.doc} onSent={closePopup} />
 }
 
 const styles: Record<string, CSSProperties> = {

@@ -20,6 +20,7 @@ import {
   type Document,
   type UnresolvedCode,
 } from '../api/client'
+import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 type Phase = 'idle' | 'signing' | 'submitting' | 'processing' | 'done' | 'error'
 
@@ -93,6 +94,7 @@ export function WriteoffPage({
       .get(docId)
       .then(({ data }) => {
         if (cancelled) return
+        setOrganizationProfileId(data.organization_profile_id)
         setPendingDoc(data)
         setDocument(data)
       })
@@ -177,6 +179,15 @@ export function WriteoffPage({
     setWriteoffResult(null)
     setUnresolved([])
   }
+
+  // После успешного списания не оставляем терминальное состояние в переиспользуемой
+  // вкладке: браузер мог заблокировать закрытие, а кладовщик начинает следующий документ.
+  useEffect(() => {
+    if (phase !== 'done' || embedded) return
+    const t = window.setTimeout(handleDetach, 2600)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, embedded])
 
   const canSubmit =
     !!document &&

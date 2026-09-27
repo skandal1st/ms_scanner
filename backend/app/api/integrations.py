@@ -13,8 +13,8 @@ from typing import Optional
 import redis.asyncio as aioredis
 
 from app.db.session import get_db
-from app.db.models import User, Integration, Document, DocumentStatus, Scan, ScanStatus
-from app.api.deps import get_current_user
+from app.db.models import User, Integration, OrganizationProfile, Document, DocumentStatus, Scan, ScanStatus
+from app.api.deps import get_current_user, get_active_organization_profile
 from app.core.security import encrypt_token, decrypt_token
 from app.core.config import settings
 from app.core.logging import logger
@@ -84,6 +84,8 @@ class IntegrationResponse(BaseModel):
     cz_box_mode_enabled: bool = False
     cz_inn: Optional[str] = None
     cz_product_groups: list[str] = []
+    organization_profile_id: Optional[UUID] = None
+    organization_profile_name: Optional[str] = None
 
 
 class UpdateIntegrationRequest(BaseModel):
@@ -117,7 +119,8 @@ class CzLoginResponse(BaseModel):
 
 
 def _to_response(
-    integration: Optional[Integration], edition: str = "full"
+    integration: Optional[Integration], edition: str = "full",
+    profile: Optional[OrganizationProfile] = None,
 ) -> IntegrationResponse:
     if not integration:
         return IntegrationResponse(
@@ -129,21 +132,24 @@ def _to_response(
             cz_box_mode_enabled=False,
             cz_product_groups=[],
         )
-    has_cz = bool(integration.cz_token) and (
-        integration.cz_token_expires_at is None
-        or integration.cz_token_expires_at > datetime.now(timezone.utc)
+    cz_source = profile or integration
+    has_cz = bool(cz_source.cz_token) and (
+        cz_source.cz_token_expires_at is None
+        or cz_source.cz_token_expires_at > datetime.now(timezone.utc)
     )
     return IntegrationResponse(
         edition=edition,
         has_moysklad=bool(integration.moysklad_token),
         moysklad_account_name=integration.moysklad_account_name,
         has_cz=has_cz,
-        cz_token_valid_until=integration.cz_token_expires_at,
-        cz_cert_subject=integration.cz_cert_subject,
-        cz_auth_method=integration.cz_auth_method or settings.CZ_AUTH_METHOD,
-        cz_box_mode_enabled=bool(integration.cz_box_mode_enabled),
-        cz_inn=integration.cz_inn,
-        cz_product_groups=list(integration.cz_product_groups or []),
+        cz_token_valid_until=cz_source.cz_token_expires_at,
+        cz_cert_subject=cz_source.cz_cert_subject,
+        cz_auth_method=cz_source.cz_auth_method or settings.CZ_AUTH_METHOD,
+        cz_box_mode_enabled=bool(cz_source.cz_box_mode_enabled),
+        cz_inn=cz_source.cz_inn,
+        cz_product_groups=list(cz_source.cz_product_groups or []),
+        organization_profile_id=profile.id if profile else None,
+        organization_profile_name=profile.name if profile else None,
     )
 
 
@@ -159,18 +165,20 @@ async def _get_or_create_integration(db: AsyncSession, user_id) -> Integration:
 @router.get("/", response_model=IntegrationResponse)
 async def get_integration(
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
         select(Integration).where(Integration.user_id == current_user.id)
     )
-    return _to_response(result.scalar_one_or_none(), current_user.edition)
+    return _to_response(result.scalar_one_or_none(), current_user.edition, profile)
 
 
 @router.put("/", response_model=IntegrationResponse)
 async def update_integration(
     body: UpdateIntegrationRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     integration = await _get_or_create_integration(db, current_user.id)
@@ -178,18 +186,19 @@ async def update_integration(
     if body.moysklad_token is not None:
         integration.moysklad_token = encrypt_token(body.moysklad_token) if body.moysklad_token else None
     if body.cz_token is not None:
-        integration.cz_token = encrypt_token(body.cz_token) if body.cz_token else None
+        profile.cz_token = encrypt_token(body.cz_token) if body.cz_token else None
     if body.cz_box_mode_enabled is not None:
-        integration.cz_box_mode_enabled = body.cz_box_mode_enabled
+        profile.cz_box_mode_enabled = body.cz_box_mode_enabled
     if body.cz_inn is not None:
-        integration.cz_inn = body.cz_inn.strip() or None
+        profile.cz_inn = body.cz_inn.strip() or None
     if body.cz_product_groups is not None:
         # Нормализуем по справочнику: отсекаем неизвестные коды и дубли, порядок каталога.
-        integration.cz_product_groups = normalize_product_groups(body.cz_product_groups)
+        profile.cz_product_groups = normalize_product_groups(body.cz_product_groups)
 
     await db.commit()
     await db.refresh(integration)
-    return _to_response(integration, current_user.edition)
+    await db.refresh(profile)
+    return _to_response(integration, current_user.edition, profile)
 
 
 @router.get("/cz/product-groups", response_model=list[ProductGroupItem])
@@ -201,7 +210,10 @@ async def list_cz_product_groups(
 
 
 @router.post("/cz/challenge", response_model=CzChallengeResponse)
-async def cz_challenge(current_user: User = Depends(get_current_user)):
+async def cz_challenge(
+    current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
+):
     """Получить challenge от ЧЗ для подписи УКЭПом в браузере.
 
     uuid кладётся в Redis с TTL — single-use, защита от replay.
@@ -215,8 +227,8 @@ async def cz_challenge(current_user: User = Depends(get_current_user)):
     r = aioredis.from_url(settings.REDIS_URL)
     try:
         await r.set(
-            f"cz:challenge:{current_user.id}:{challenge['uuid']}",
-            "1",
+            f"cz:challenge:{current_user.id}:{profile.id}:{challenge['uuid']}",
+            str(profile.id),
             ex=settings.CZ_CHALLENGE_TTL_SECONDS,
         )
     finally:
@@ -229,6 +241,7 @@ async def cz_challenge(current_user: User = Depends(get_current_user)):
 async def cz_login(
     body: CzLoginRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Обменять подписанный challenge на access_token ЧЗ и сохранить.
@@ -236,7 +249,7 @@ async def cz_login(
     Приватный ключ остаётся в КриптоПро CSP клиента — сюда приходит только
     готовая CAdES-BES подпись.
     """
-    redis_key = f"cz:challenge:{current_user.id}:{body.uuid}"
+    redis_key = f"cz:challenge:{current_user.id}:{profile.id}:{body.uuid}"
     r = aioredis.from_url(settings.REDIS_URL)
     try:
         deleted = await r.delete(redis_key)
@@ -261,37 +274,38 @@ async def cz_login(
         raise HTTPException(status_code=502, detail="ЧЗ не вернул token")
 
     integration = await _get_or_create_integration(db, current_user.id)
-    integration.cz_token = encrypt_token(token)
+    profile.cz_token = encrypt_token(token)
     # Срок действия берём из самого JWT-токена ЧЗ (claim exp) — это реальный срок ~10 ч.
     # ЧЗ поле `expire` в ответе не присылает; если вдруг появится — используем его,
     # иначе дефолт 10 ч. Запас 60 сек: считаем «протух» чуть раньше реального expiry.
     jwt_expiry = _cz_token_expiry_from_jwt(token)
     if jwt_expiry is not None:
-        integration.cz_token_expires_at = jwt_expiry - timedelta(seconds=60)
+        profile.cz_token_expires_at = jwt_expiry - timedelta(seconds=60)
     else:
         expire = int(result.get("expire") or CZ_TOKEN_DEFAULT_TTL_SECONDS)
-        integration.cz_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire - 60)
-    integration.cz_cert_thumbprint = body.cert_thumbprint
-    integration.cz_cert_subject = body.cert_subject
-    integration.cz_auth_method = settings.CZ_AUTH_METHOD
+        profile.cz_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expire - 60)
+    profile.cz_cert_thumbprint = body.cert_thumbprint
+    profile.cz_cert_subject = body.cert_subject
+    profile.cz_auth_method = settings.CZ_AUTH_METHOD
     # ИНН участника оборота — для тела документов вывода из оборота. Парсим из субъекта
     # сертификата; если не нашли — оставляем прежнее значение (можно задать вручную в Settings).
     parsed_inn = _parse_inn_from_subject(body.cert_subject)
     if parsed_inn:
-        integration.cz_inn = parsed_inn
+        profile.cz_inn = parsed_inn
 
     await db.commit()
-    await db.refresh(integration)
+    await db.refresh(profile)
 
     return CzLoginResponse(
-        cz_token_valid_until=integration.cz_token_expires_at,
-        cz_cert_subject=integration.cz_cert_subject,
+        cz_token_valid_until=profile.cz_token_expires_at,
+        cz_cert_subject=profile.cz_cert_subject,
     )
 
 
 @router.delete("/cz", response_model=IntegrationResponse)
 async def cz_logout(
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Выход из ЧЗ — обнуляем токен и метаданные сертификата."""
@@ -300,13 +314,13 @@ async def cz_logout(
     )
     integration = result.scalar_one_or_none()
     if integration:
-        integration.cz_token = None
-        integration.cz_token_expires_at = None
-        integration.cz_cert_thumbprint = None
-        integration.cz_cert_subject = None
+        profile.cz_token = None
+        profile.cz_token_expires_at = None
+        profile.cz_cert_thumbprint = None
+        profile.cz_cert_subject = None
         await db.commit()
-        await db.refresh(integration)
-    return _to_response(integration, current_user.edition)
+        await db.refresh(profile)
+    return _to_response(integration, current_user.edition, profile)
 
 
 # ── Списание: вывод из оборота через ЧЗ (УКЭП round-trip) ───────────────────────
@@ -381,6 +395,25 @@ async def _load_owned_document(db: AsyncSession, document_id: UUID, user_id) -> 
     return doc
 
 
+async def _cz_source_for_document(
+    db: AsyncSession, doc: Document, user_id
+) -> OrganizationProfile | Integration | None:
+    if doc.organization_profile_id:
+        profile = (
+            await db.execute(
+                select(OrganizationProfile).where(
+                    OrganizationProfile.id == doc.organization_profile_id,
+                    OrganizationProfile.user_id == user_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if profile:
+            return profile
+    return (
+        await db.execute(select(Integration).where(Integration.user_id == user_id))
+    ).scalar_one_or_none()
+
+
 class GtinGroupRequest(BaseModel):
     gtin: str
     product_group: str
@@ -423,18 +456,15 @@ async def cz_writeoff_prepare(
 
     doc = await _load_owned_document(db, body.document_id, current_user.id)
 
-    int_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
-    integration = int_result.scalar_one_or_none()
-    if not integration or not integration.cz_token:
+    cz_source = await _cz_source_for_document(db, doc, current_user.id)
+    if not cz_source or not cz_source.cz_token:
         raise HTTPException(status_code=400, detail="Нет токена Честного Знака — войдите по УКЭП")
     if (
-        integration.cz_token_expires_at is not None
-        and integration.cz_token_expires_at <= datetime.now(timezone.utc)
+        cz_source.cz_token_expires_at is not None
+        and cz_source.cz_token_expires_at <= datetime.now(timezone.utc)
     ):
         raise HTTPException(status_code=400, detail="Токен Честного Знака истёк — войдите заново")
-    if not integration.cz_inn:
+    if not cz_source.cz_inn:
         raise HTTPException(
             status_code=400,
             detail="Не задан ИНН участника оборота — укажите его в настройках",
@@ -452,8 +482,8 @@ async def cz_writeoff_prepare(
         raise HTTPException(status_code=400, detail="Нет валидных марок для списания")
 
     cz = ChestnyZnakService(
-        token=decrypt_token(integration.cz_token),
-        product_groups=integration.cz_product_groups,
+        token=decrypt_token(cz_source.cz_token),
+        product_groups=cz_source.cz_product_groups,
     )
 
     # Группируем КМ по товарной группе (pg). Марки, которые ЧЗ не находит (нельзя
@@ -485,7 +515,7 @@ async def cz_writeoff_prepare(
                 for c in pg_cises
             ]
             document = cz.build_writeoff_document(
-                inn=integration.cz_inn,
+                inn=cz_source.cz_inn,
                 action=reason["action"],
                 action_date=action_date,
                 cises=ki_cises,
@@ -551,15 +581,12 @@ async def cz_writeoff_submit(
 
     doc = await _load_owned_document(db, document_id, current_user.id)
 
-    int_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
-    integration = int_result.scalar_one_or_none()
-    if not integration or not integration.cz_token:
+    cz_source = await _cz_source_for_document(db, doc, current_user.id)
+    if not cz_source or not cz_source.cz_token:
         raise HTTPException(status_code=400, detail="Нет токена Честного Знака")
 
     sig_by_pg = {s.pg: s.signature for s in body.signatures}
-    cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
+    cz = ChestnyZnakService(token=decrypt_token(cz_source.cz_token))
 
     doc_ids: list[dict] = []
     for pg, part in stored_parts.items():
@@ -634,6 +661,7 @@ def _cis_key(code: str) -> str:
 async def cz_check(
     body: CzCheckRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Пробить марки через ГИС МТ (только чтение): товар, владелец, статус + в каких
@@ -646,13 +674,9 @@ async def cz_check(
             status_code=400, detail=f"Слишком много кодов за раз (максимум {CZ_CHECK_MAX})"
         )
 
-    int_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
-    integration = int_result.scalar_one_or_none()
-    token_ok = bool(integration and integration.cz_token) and (
-        integration.cz_token_expires_at is None
-        or integration.cz_token_expires_at > datetime.now(timezone.utc)
+    token_ok = bool(profile.cz_token) and (
+        profile.cz_token_expires_at is None
+        or profile.cz_token_expires_at > datetime.now(timezone.utc)
     )
     if not token_ok:
         raise HTTPException(
@@ -661,8 +685,8 @@ async def cz_check(
         )
 
     cz = ChestnyZnakService(
-        token=decrypt_token(integration.cz_token),
-        product_groups=integration.cz_product_groups,
+        token=decrypt_token(profile.cz_token),
+        product_groups=profile.cz_product_groups,
     )
     checks = await cz.check_codes(codes)
 

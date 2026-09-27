@@ -66,6 +66,10 @@
             <warehouse>
                 <view/>
             </warehouse>
+            <!-- Юрлица аккаунта: отдельный профиль ЧЗ/складов для каждого юрлица. -->
+            <myCompany>
+                <view/>
+            </myCompany>
         </permissions>
     </access>
 </ServerApplication>

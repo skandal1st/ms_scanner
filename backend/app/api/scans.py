@@ -8,7 +8,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.db.session import get_db
-from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, GtinNameMap, EdoDocument, EdoMark
+from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, OrganizationProfile, GtinNameMap, EdoDocument, EdoMark
 from app.api.deps import get_current_user
 from app.services.gtin_product_store import get_gtin_product
 from cryptography.fernet import InvalidToken
@@ -477,7 +477,7 @@ async def create_scan(
 
 
 async def _resolve_cz_for_boxes(
-    current_user: User, db: AsyncSession
+    current_user: User, db: AsyncSession, document_id: UUID
 ) -> ChestnyZnakService:
     """Собрать сервис ЧЗ для работы с коробами.
 
@@ -488,10 +488,20 @@ async def _resolve_cz_for_boxes(
     if settings.CZ_MOCK_MODE:
         return ChestnyZnakService(token=None)
 
-    int_result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
-    integration = int_result.scalar_one_or_none()
+    integration = (
+        await db.execute(
+            select(OrganizationProfile)
+            .join(Document, Document.organization_profile_id == OrganizationProfile.id)
+            .where(
+                Document.id == document_id,
+                OrganizationProfile.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if integration is None:
+        integration = (
+            await db.execute(select(Integration).where(Integration.user_id == current_user.id))
+        ).scalar_one_or_none()
     if not integration or not integration.cz_box_mode_enabled:
         raise HTTPException(
             status_code=403,
@@ -604,7 +614,7 @@ async def create_box_scans(
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
-    cz = await _resolve_cz_for_boxes(current_user, db)
+    cz = await _resolve_cz_for_boxes(current_user, db, body.document_id)
     return await _create_box_scans_core(
         db, doc.id, _plan_gtins(doc.plan), sscc, body.unpack, current_user.id, cz
     )
@@ -661,7 +671,7 @@ async def create_bulk_scans(
     for code in codes:
         if is_sscc(code):
             if cz is None:
-                cz = await _resolve_cz_for_boxes(current_user, db)
+                cz = await _resolve_cz_for_boxes(current_user, db, body.document_id)
             responses.extend(
                 await _create_box_scans_core(
                     db, body.document_id, plan_gtins, code, body.unpack_boxes, user_id, cz

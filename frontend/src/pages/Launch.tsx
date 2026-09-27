@@ -1,18 +1,27 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
+import { useScanStore } from '../store/scanStore'
+import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 export function LaunchPage() {
   const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Именованная COM-вкладка переиспользуется между операциями. Zustand при такой
+    // навигации живёт дальше, поэтому новый launch всегда начинает чистую сессию.
+    useScanStore.getState().reset()
     const params = new URLSearchParams(window.location.search)
     const launchToken = params.get('t')
     // mode задаёт, какой раздел открыть в новой вкладке: приёмка/отгрузка/списание.
     const mode = params.get('mode')
     // doc — наш внутренний id документа (из кнопки МС): страница сразу его выберет.
     const docId = params.get('doc')
+    // Профиль не является секретом; сервер всё равно проверяет его принадлежность
+    // пользователю по X-Organization-Profile. Он передаётся между storage-partition
+    // iframe МойСклад и отдельной top-level вкладкой.
+    setOrganizationProfileId(params.get('profile'))
     // Внешняя вкладка = киоск-окно сканирования без навигации по разделам.
     const base =
       mode === 'acceptance'

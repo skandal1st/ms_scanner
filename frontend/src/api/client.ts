@@ -8,6 +8,10 @@ const api = axios.create({
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+  const organizationProfileId = localStorage.getItem('organization_profile_id')
+  if (organizationProfileId) {
+    config.headers['X-Organization-Profile'] = organizationProfileId
+  }
   return config
 })
 
@@ -52,6 +56,7 @@ api.interceptors.response.use(
       localStorage.removeItem('access_token')
       localStorage.removeItem('refresh_token')
       localStorage.removeItem('user_id')
+      localStorage.removeItem('organization_profile_id')
       window.location.href = '/login'
     }
     return Promise.reject(error)
@@ -90,6 +95,9 @@ export interface Document {
   writeoff_reason?: string | null
   /** Причина неуспешной отправки в МС (напр. «нет на складе»), если была. */
   error_message?: string | null
+  organization_profile_id?: string | null
+  moysklad_organization_id?: string | null
+  moysklad_store_id?: string | null
   created_at: string
 }
 
@@ -702,6 +710,43 @@ export interface Integration {
   cz_box_mode_enabled: boolean
   cz_inn: string | null
   cz_product_groups: string[]
+  organization_profile_id: string | null
+  organization_profile_name: string | null
+}
+
+export interface Workplace {
+  id: string
+  organization_profile_id: string
+  name: string
+  store_ids: string[]
+  is_default: boolean
+  is_active: boolean
+}
+
+export interface OrganizationProfile {
+  id: string
+  moysklad_organization_id: string | null
+  name: string
+  is_default: boolean
+  cz_inn: string | null
+  has_cz: boolean
+  inventory_store_ids: string[]
+  workplaces: Workplace[]
+}
+
+export const organizationProfilesApi = {
+  list: () => api.get<OrganizationProfile[]>('/organization-profiles/'),
+  sync: () => api.post<OrganizationProfile[]>('/organization-profiles/sync'),
+  update: (
+    id: string,
+    data: { name?: string; is_default?: boolean; inventory_store_ids?: string[] },
+  ) => api.put<OrganizationProfile>(`/organization-profiles/${id}`, data),
+  createWorkplace: (data: {
+    organization_profile_id: string
+    name: string
+    store_ids?: string[]
+    is_default?: boolean
+  }) => api.post<Workplace>('/organization-profiles/workplaces', data),
 }
 
 export interface ProductGroup {

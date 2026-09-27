@@ -17,6 +17,7 @@ import { useResizableWidth } from '../hooks/useResizableWidth'
 import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
+import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 interface ShipmentPageProps {
   /** Встроенный режим (попап МС): документ задан заранее, без выбора; после
@@ -139,6 +140,7 @@ export function ShipmentPage({
       .get(docId)
       .then(({ data }) => {
         if (cancelled) return
+        setOrganizationProfileId(data.organization_profile_id)
         setPendingDoc(data)
         setDocument(data)
       })
@@ -177,6 +179,15 @@ export function ShipmentPage({
     resetSend()
     handleDetach()
   }
+
+  // window.close() может быть запрещён браузером, а в COM-режиме вкладка намеренно
+  // остаётся открытой. В обоих случаях после подтверждения возвращаем чистый выбор.
+  useEffect(() => {
+    if (!done || embedded) return
+    const t = window.setTimeout(handleNextShipment, closingTab ? 2800 : 2400)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [done, embedded, closingTab])
 
   // Вкладка открыта из МС (window.opener) — можно вручную вернуться, закрыв её.
   const canReturnToMs = typeof window !== 'undefined' && !!window.opener

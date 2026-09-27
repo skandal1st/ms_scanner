@@ -3,6 +3,7 @@ import { SettingsPage } from './Settings'
 import { Icon } from '../components/Icon'
 import { SerialIframeDiag } from '../components/SerialIframeDiag'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
+import { getOrganizationProfileId } from '../lib/organizationProfile'
 
 interface LaunchPayload {
   launch_token: string
@@ -70,7 +71,9 @@ export function MsIframePage() {
       const data = await resp.json().catch(() => ({}))
       if (!resp.ok || !data.launch_token) throw new Error('relaunch failed')
       const t = encodeURIComponent(data.launch_token)
-      if (win) win.location.href = `/launch?t=${t}&mode=${mode}`
+      const profile = getOrganizationProfileId()
+      const profileParam = profile ? `&profile=${encodeURIComponent(profile)}` : ''
+      if (win) win.location.href = `/launch?t=${t}&mode=${mode}${profileParam}`
     } catch {
       if (win) win.close()
     }

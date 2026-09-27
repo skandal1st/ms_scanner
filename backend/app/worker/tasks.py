@@ -187,14 +187,31 @@ async def _enrich_scan_product_name_from_ms_by_product_id(db, user_id, scan) -> 
         scan.product_name = row["name"]
 
 
-async def _get_cz_token(db, user_id) -> Optional[str]:
+async def _get_cz_source(db, user_id, document_id=None):
+    from sqlalchemy import select
+    from app.db.models import Document, Integration, OrganizationProfile
+
+    if document_id is not None:
+        profile = (
+            await db.execute(
+                select(OrganizationProfile)
+                .join(Document, Document.organization_profile_id == OrganizationProfile.id)
+                .where(Document.id == document_id, OrganizationProfile.user_id == user_id)
+            )
+        ).scalar_one_or_none()
+        if profile:
+            return profile
+    return (
+        await db.execute(select(Integration).where(Integration.user_id == user_id))
+    ).scalar_one_or_none()
+
+
+async def _get_cz_token(db, user_id, document_id=None) -> Optional[str]:
     """Действующий (не просроченный) токен ЧЗ пользователя или None."""
     from sqlalchemy import select
-    from app.db.models import Integration
     from app.core.security import decrypt_token
 
-    q = await db.execute(select(Integration).where(Integration.user_id == user_id))
-    integ = q.scalar_one_or_none()
+    integ = await _get_cz_source(db, user_id, document_id)
     if not integ or not integ.cz_token:
         return None
     if (
@@ -209,13 +226,9 @@ async def _get_cz_token(db, user_id) -> Optional[str]:
         return None
 
 
-async def _get_cz_product_groups(db, user_id) -> list[str]:
+async def _get_cz_product_groups(db, user_id, document_id=None) -> list[str]:
     """Товарные группы (pg) клиента для сужения перебора в ЧЗ. [] → глобальный дефолт."""
-    from sqlalchemy import select
-    from app.db.models import Integration
-
-    q = await db.execute(select(Integration).where(Integration.user_id == user_id))
-    integ = q.scalar_one_or_none()
+    integ = await _get_cz_source(db, user_id, document_id)
     return list(integ.cz_product_groups or []) if integ else []
 
 
@@ -334,9 +347,9 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             name_override = precheck.product_name
             # Агрегат (блок/короб): развернуть в листовые КМ — отдельный запрос (редко).
             if valid and precheck.child_count and not scan.child_codes:
-                tok = await _get_cz_token(db, user_id)
+                tok = await _get_cz_token(db, user_id, scan.document_id)
                 if tok:
-                    grp = await _get_cz_product_groups(db, user_id)
+                    grp = await _get_cz_product_groups(db, user_id, scan.document_id)
                     agg = None
                     try:
                         agg = await ChestnyZnakService(
@@ -376,10 +389,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
         # Проверка КМ: в mock-режиме сервера — имитация ЧЗ; иначе только формат GS1
         # (без УКЭП и без API ЧЗ). МойСклад проверит CIS при записи в документ.
         elif settings.CZ_MOCK_MODE:
-            int_q = await db.execute(
-                select(Integration).where(Integration.user_id == user_id)
-            )
-            integration = int_q.scalar_one_or_none()
+            integration = await _get_cz_source(db, user_id, scan.document_id)
             cz_token = None
             if integration and integration.cz_token:
                 if (
@@ -394,10 +404,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             # USB-сканер даёт сырой GS1; официальное приложение ЧЗ ходит в API.
             # При невалидном локальном разборе — запрос в ЧЗ по полной CIS (нужен токен УКЭП).
             if not verify_result.valid:
-                int_q = await db.execute(
-                    select(Integration).where(Integration.user_id == user_id)
-                )
-                integration = int_q.scalar_one_or_none()
+                integration = await _get_cz_source(db, user_id, scan.document_id)
                 cz_token = None
                 if integration and integration.cz_token:
                     if (
@@ -460,14 +467,14 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
         # per-code get_code_info пропускаем.
         # Короб (02/37) приходит со status=invalid (не КИ) — проверяем независимо от статуса.
         if precheck is None and not settings.CZ_MOCK_MODE and not scan.is_box and not scan.child_codes:
-            cz_token2 = await _get_cz_token(db, user_id)
+            cz_token2 = await _get_cz_token(db, user_id, scan.document_id)
             if not cz_token2:
                 # Нет/истёк токен ЧЗ — коды не распознаём через ЧЗ (блоки/короба
                 # не развернутся). Сообщаем фронту (баннер «войдите в ЧЗ»).
-                await _push_cz_token_expired(user_id)
+                await _push_cz_token_expired(user_id, str(scan.document_id))
             if cz_token2:
                 info = None
-                cz_groups = await _get_cz_product_groups(db, user_id)
+                cz_groups = await _get_cz_product_groups(db, user_id, scan.document_id)
                 try:
                     info = await ChestnyZnakService(
                         token=cz_token2, mock=False, product_groups=cz_groups
@@ -655,8 +662,8 @@ async def _verify_document_async(document_id: str, user_id: str):
             scan_ids = [str(s.id) for s in scans]
             codes = [s.code for s in scans]
             scan_gtins = [s.gtin for s in scans if s.gtin]
-            cz_token = await _get_cz_token(db, user_id)
-            cz_groups = await _get_cz_product_groups(db, user_id)
+            cz_token = await _get_cz_token(db, user_id, document_id)
+            cz_groups = await _get_cz_product_groups(db, user_id, document_id)
 
             # Товарные группы по GTIN (своя БД → МС → запись в БД): добавляем в перебор
             # ЧЗ первыми, чтобы товар из «невключённой» галочкой группы не давал
@@ -900,14 +907,17 @@ async def _push_ws_update(
     await r.aclose()
 
 
-async def _push_cz_token_expired(user_id: str):
+async def _push_cz_token_expired(user_id: str, document_id: Optional[str] = None):
     """Сообщить фронту, что нужен вход в ЧЗ (баннер «войдите для распознавания кодов»)."""
     import redis.asyncio as aioredis
     import json
     from app.core.config import settings
 
     r = aioredis.from_url(settings.REDIS_URL)
-    await r.publish(f"ws:{user_id}", json.dumps({"type": "cz_token_expired"}))
+    await r.publish(
+        f"ws:{user_id}",
+        json.dumps({"type": "cz_token_expired", "document_id": document_id}),
+    )
     await r.aclose()
 
 
@@ -1102,7 +1112,7 @@ async def _process_document_async(document_id: str, user_id: str):
             # упаковок в МС нельзя — это гарантированный 412. Для supply прерываем
             # запись с понятной ошибкой; для demand (обычно уже развёрнуто в
             # verify_code_task) — прежнее поведение: баннер + отправка как есть.
-            cz_token = None if settings.CZ_MOCK_MODE else await _get_cz_token(db, user_id)
+            cz_token = None if settings.CZ_MOCK_MODE else await _get_cz_token(db, user_id, document_id)
             if not cz_token:
                 if kind == "supply":
                     doc.error_message = (
@@ -1116,7 +1126,7 @@ async def _process_document_async(document_id: str, user_id: str):
                         boxes=len(boxes_to_expand),
                     )
                     if not settings.CZ_MOCK_MODE:
-                        await _push_cz_token_expired(user_id)
+                        await _push_cz_token_expired(user_id, str(document_id))
                     await db.commit()
                     await monitoring_emit(
                         "process_document.cz_token_missing",
@@ -1127,9 +1137,9 @@ async def _process_document_async(document_id: str, user_id: str):
                         boxes=len(boxes_to_expand),
                     )
                     return
-                await _push_cz_token_expired(user_id)
+                await _push_cz_token_expired(user_id, str(document_id))
             else:
-                cz_groups = await _get_cz_product_groups(db, user_id)
+                cz_groups = await _get_cz_product_groups(db, user_id, document_id)
                 cz = ChestnyZnakService(
                     token=cz_token, mock=False, product_groups=cz_groups
                 )
@@ -1515,7 +1525,7 @@ def poll_writeoff_status_task(document_id: str, user_id: str):
 
 async def _poll_writeoff_async(document_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
-    from app.db.models import Document, DocumentStatus, Integration
+    from app.db.models import Document, DocumentStatus
     from app.services.chestnyznak import ChestnyZnakService, CZApiError
     from app.core.security import decrypt_token
     from sqlalchemy import select
@@ -1527,10 +1537,7 @@ async def _poll_writeoff_async(document_id: str, user_id: str):
             logger.warning("writeoff.poll.no_doc_ids", document_id=document_id)
             return
 
-        int_result = await db.execute(
-            select(Integration).where(Integration.user_id == user_id)
-        )
-        integration = int_result.scalar_one_or_none()
+        integration = await _get_cz_source(db, user_id, document_id)
         if not integration or not integration.cz_token:
             logger.warning("writeoff.poll.no_token", document_id=document_id)
             return

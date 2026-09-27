@@ -11,7 +11,7 @@ from jose import JWTError
 from app.core.config import settings
 from app.core.logging import setup_logging, logger
 from app.core.security import decode_token
-from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance, support, mark_control, inventory
+from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance, support, mark_control, inventory, organization_profiles
 from app.api.deps import require_full_edition
 
 
@@ -98,6 +98,7 @@ app.include_router(auth.router)
 app.include_router(documents.router)
 app.include_router(scans.router)
 app.include_router(integrations.router)
+app.include_router(organization_profiles.router)
 app.include_router(moysklad_vendor.router)
 app.include_router(products.router)
 app.include_router(acceptance.router)

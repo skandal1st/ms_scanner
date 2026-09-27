@@ -17,6 +17,7 @@ import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
 import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
+import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwitcher'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -56,6 +57,7 @@ function Layout({ children }: { children: React.ReactNode }) {
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     localStorage.removeItem('user_id')
+    localStorage.removeItem('organization_profile_id')
     window.location.href = '/login'
   }
 
@@ -95,6 +97,7 @@ function Layout({ children }: { children: React.ReactNode }) {
           </NavLink>
         ))}
         <span className="app-nav__spacer" />
+        <OrganizationProfileSwitcher compact />
         <button type="button" onClick={handleLogout}>
           <Icon name="logout" size={16} className="app-nav__icon" />
           Выйти

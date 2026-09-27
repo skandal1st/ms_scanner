@@ -7,8 +7,8 @@ from uuid import UUID
 from datetime import datetime
 
 from app.db.session import get_db
-from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, Scan
-from app.api.deps import get_current_user
+from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan
+from app.api.deps import get_current_user, get_active_organization_profile
 from app.services.moysklad import MoySkladService, SUPPORTED_KINDS
 from app.core.security import decrypt_token
 
@@ -31,6 +31,9 @@ class DocumentResponse(BaseModel):
     scan_count: int = 0
     plan: List[PlanItem] = []
     error_message: Optional[str] = None
+    organization_profile_id: Optional[UUID] = None
+    moysklad_organization_id: Optional[str] = None
+    moysklad_store_id: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -64,6 +67,9 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
         scan_count=scan_count,
         plan=doc.plan or [],
         error_message=doc.error_message,
+        organization_profile_id=doc.organization_profile_id,
+        moysklad_organization_id=doc.moysklad_organization_id,
+        moysklad_store_id=doc.moysklad_store_id,
         created_at=doc.created_at,
     )
 
@@ -115,12 +121,17 @@ async def list_moysklad_documents(
     kind: str,
     search: Optional[str] = Query(None, description="Поиск по номеру/контрагенту (полнотекстовый поиск МС)"),
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Список МС-документов выбранного типа (supply/demand/loss/move/salesreturn)."""
     _ensure_supported_kind(kind)
     ms = await _get_ms_service(current_user, db)
-    return await ms.get_documents(kind, search=search)
+    return await ms.get_documents(
+        kind,
+        search=search,
+        organization_id=profile.moysklad_organization_id,
+    )
 
 
 @router.get("/moysklad-supplies", response_model=List[MoySkladDocumentItem])
@@ -136,9 +147,13 @@ async def list_moysklad_supplies_alias(
 async def list_documents(
     kind: Optional[DocumentKind] = None,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Document).where(Document.user_id == current_user.id)
+    query = select(Document).where(
+        Document.user_id == current_user.id,
+        Document.organization_profile_id == profile.id,
+    )
     if kind is not None:
         _ensure_supported_kind(kind.value)
         query = query.where(Document.kind == kind)
@@ -159,19 +174,69 @@ def _plan_source_kind(doc_kind: str) -> str:
     return "demand" if doc_kind == "loss" else doc_kind
 
 
+def _ref_id(payload: dict, field: str) -> Optional[str]:
+    ref = payload.get(field) or {}
+    meta = ref.get("meta") or {}
+    if ref.get("id"):
+        return str(ref["id"])
+    href = meta.get("href") or ""
+    return href.rstrip("/").rsplit("/", 1)[-1] if href else None
+
+
+async def _profile_for_organization(
+    db: AsyncSession,
+    user_id,
+    organization_id: Optional[str],
+    fallback: OrganizationProfile,
+) -> OrganizationProfile:
+    if not organization_id or fallback.moysklad_organization_id == organization_id:
+        return fallback
+    found = (
+        await db.execute(
+            select(OrganizationProfile).where(
+                OrganizationProfile.user_id == user_id,
+                OrganizationProfile.moysklad_organization_id == organization_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if found:
+        return found
+    if fallback.moysklad_organization_id is None:
+        fallback.moysklad_organization_id = organization_id
+        return fallback
+    profile = OrganizationProfile(
+        user_id=user_id,
+        moysklad_organization_id=organization_id,
+        name=f"Юрлицо {organization_id[:8]}",
+        is_default=False,
+    )
+    db.add(profile)
+    await db.flush()
+    return profile
+
+
 @router.post("/", response_model=DocumentResponse, status_code=201)
 async def create_document(
     body: CreateDocumentRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     _ensure_supported_kind(body.kind.value)
     plan: list = []
+    ms_organization_id: Optional[str] = None
+    ms_store_id: Optional[str] = None
     if body.moysklad_id:
         # Подгружаем план сборки из МС-документа: positions → expected_qty по товарам.
         # Если МС не подключён или запрос упал — план остаётся пустым (произвольная сборка).
         try:
             ms = await _get_ms_service(current_user, db)
+            ms_doc = await ms.get_document(_plan_source_kind(body.kind.value), body.moysklad_id)
+            ms_organization_id = _ref_id(ms_doc, "organization")
+            ms_store_id = _ref_id(ms_doc, "store")
+            profile = await _profile_for_organization(
+                db, current_user.id, ms_organization_id, profile
+            )
             plan = await ms.build_plan(_plan_source_kind(body.kind.value), body.moysklad_id)
         except HTTPException:
             pass
@@ -190,6 +255,9 @@ async def create_document(
         name=body.name,
         kind=body.kind,
         moysklad_id=body.moysklad_id,
+        organization_profile_id=profile.id,
+        moysklad_organization_id=ms_organization_id,
+        moysklad_store_id=ms_store_id,
         plan=plan,
     )
     db.add(doc)
@@ -208,6 +276,7 @@ class ResolveDocRequest(BaseModel):
 async def resolve_document(
     body: ResolveDocRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Найти-или-создать наш Document по документу МС (kind + moysklad_id).
@@ -238,11 +307,17 @@ async def resolve_document(
 
     ms = await _get_ms_service(current_user, db)
     name: Optional[str] = None
+    ms_doc: dict = {}
     try:
         ms_doc = await ms.get_document(body.kind.value, body.moysklad_id)
         name = ms_doc.get("name")
     except Exception:
         pass  # имя не критично — подставим дефолт
+    ms_organization_id = _ref_id(ms_doc, "organization")
+    ms_store_id = _ref_id(ms_doc, "store")
+    profile = await _profile_for_organization(
+        db, current_user.id, ms_organization_id, profile
+    )
     plan: list = []
     try:
         # objectId из кнопки МС — документ самого этого типа, поэтому план строим
@@ -262,6 +337,9 @@ async def resolve_document(
         name=name or f"Документ {body.moysklad_id[:8]}",
         kind=body.kind,
         moysklad_id=body.moysklad_id,
+        organization_profile_id=profile.id,
+        moysklad_organization_id=ms_organization_id,
+        moysklad_store_id=ms_store_id,
         plan=plan,
     )
     db.add(doc)

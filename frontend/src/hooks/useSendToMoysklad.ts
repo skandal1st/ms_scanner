@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { documentsApi } from '../api/client'
 
 /** Минимум, который хук читает у документа при опросе. */
@@ -52,8 +52,20 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
+  const runRef = useRef(0)
+
+  useEffect(
+    () => () => {
+      // Опрос старой операции может завершиться уже после повторного OpenPopup.
+      // Инвалидируем его, чтобы onPoll не вернул предыдущий документ в общий store.
+      runRef.current += 1
+    },
+    [],
+  )
 
   const reset = useCallback(() => {
+    runRef.current += 1
+    setSending(false)
     setError(null)
     setDone(false)
     setClosingTab(false)
@@ -61,6 +73,7 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
 
   const send = useCallback(
     async (docId: string) => {
+      const runId = ++runRef.current
       setSending(true)
       setError(null)
       setDone(false)
@@ -70,7 +83,9 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
         let failReason: string | null = null
         for (let i = 0; i < maxAttempts; i++) {
           await new Promise((r) => setTimeout(r, pollIntervalMs))
+          if (runRef.current !== runId) return
           const { data: fresh } = await fetchDoc(docId)
+          if (runRef.current !== runId) return
           finalStatus = fresh.status
           onPoll?.(fresh)
           if (fresh.status === 'accepted') break
@@ -81,13 +96,16 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
             break
           }
         }
+        if (runRef.current !== runId) return
         if (failReason) {
           setError(failReason)
         } else if (finalStatus === 'accepted') {
           setDone(true)
           if (autoCloseTab && window.opener && !window.opener.closed) {
             setClosingTab(true)
-            setTimeout(() => window.close(), closeTabDelayMs)
+            setTimeout(() => {
+              if (runRef.current === runId) window.close()
+            }, closeTabDelayMs)
           }
         } else {
           setError(
@@ -95,12 +113,13 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
           )
         }
       } catch (e) {
+        if (runRef.current !== runId) return
         setError(
           extractError?.(e) ??
             'Не удалось отправить документ в МойСклад. Попробуйте ещё раз.',
         )
       } finally {
-        setSending(false)
+        if (runRef.current === runId) setSending(false)
       }
     },
     [fetchDoc, onPoll, extractError, pollIntervalMs, maxAttempts, closeTabDelayMs, autoCloseTab],

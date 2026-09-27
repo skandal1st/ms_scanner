@@ -18,12 +18,13 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_current_user, require_full_edition
+from app.api.deps import get_current_user, require_full_edition, get_active_organization_profile
+from app.api.documents import _profile_for_organization, _ref_id
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.security import decrypt_token
 from app.db.models import (
-    User, Document, DocumentKind, DocumentStatus, Integration, Scan, ScanStatus,
+    User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan, ScanStatus,
     GtinProductMap, EdoDocument,
 )
 from app.db.session import get_db
@@ -144,15 +145,23 @@ async def _maybe_ms_service(
 
 
 async def _maybe_cz_service(
-    current_user: User, db: AsyncSession
+    current_user: User, db: AsyncSession, profile_id=None
 ) -> Optional[ChestnyZnakService]:
     """Сервис ЧЗ для разворота коробов на импорте. None, если токен ЧЗ отсутствует
     или просрочен — тогда короба остаются unknown_product и определятся при отправке
     (воркер развернёт их сам). Разворот на импорте нужен лишь для корректного
     предпросмотра товара в таблице приёмки."""
-    result = await db.execute(
-        select(Integration).where(Integration.user_id == current_user.id)
-    )
+    if profile_id:
+        result = await db.execute(
+            select(OrganizationProfile).where(
+                OrganizationProfile.id == profile_id,
+                OrganizationProfile.user_id == current_user.id,
+            )
+        )
+    else:
+        result = await db.execute(
+            select(Integration).where(Integration.user_id == current_user.id)
+        )
     integ = result.scalar_one_or_none()
     if not integ or not integ.cz_token:
         return None
@@ -204,6 +213,7 @@ _PG_LABELS = {g["code"]: g["label"] for g in CZ_PRODUCT_GROUP_CATALOG}
 @router.get("/product-groups", response_model=List[ProductGroup])
 async def list_product_groups(
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Список товарных групп маркировки для выбора перед загрузкой УПД.
@@ -212,10 +222,7 @@ async def list_product_groups(
     если он отметил конкретные группы — показываем только их; если ничего не выбрано —
     весь справочник.
     """
-    integ = (
-        await db.execute(select(Integration).where(Integration.user_id == current_user.id))
-    ).scalar_one_or_none()
-    selected = normalize_product_groups(integ.cz_product_groups if integ else None)
+    selected = normalize_product_groups(profile.cz_product_groups)
     if selected:
         return [ProductGroup(code=c, label=_PG_LABELS[c]) for c in selected]
     return PRODUCT_GROUPS
@@ -225,6 +232,7 @@ async def list_product_groups(
 async def create_acceptance_document(
     body: CreateAcceptanceDocRequest,
     current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Создать документ приёмки (kind=supply) с выбранной товарной группой.
@@ -240,12 +248,20 @@ async def create_acceptance_document(
 
     moysklad_id = (body.moysklad_id or "").strip() or None
     plan: list[dict] = []
+    ms_organization_id = profile.moysklad_organization_id
+    ms_store_id = None
     if moysklad_id:
         # План из позиций поступления МС: gtin/product_id/expected_qty. Best-effort —
         # при сбое МС оставляем план пустым (резолв уйдёт в GtinProductMap/каталог).
         ms = await _maybe_ms_service(current_user, db)
         if ms is not None:
             try:
+                ms_doc = await ms.get_document("supply", moysklad_id)
+                ms_organization_id = _ref_id(ms_doc, "organization")
+                ms_store_id = _ref_id(ms_doc, "store")
+                profile = await _profile_for_organization(
+                    db, current_user.id, ms_organization_id, profile
+                )
                 plan = await ms.build_plan("supply", moysklad_id)
             except Exception as exc:
                 logger.warning(
@@ -261,6 +277,9 @@ async def create_acceptance_document(
         status=DocumentStatus.draft,
         product_group=pg,
         moysklad_id=moysklad_id,
+        organization_profile_id=profile.id,
+        moysklad_organization_id=ms_organization_id,
+        moysklad_store_id=ms_store_id,
         plan=plan,
     )
     db.add(doc)
@@ -384,6 +403,7 @@ async def edo_incoming_count(
 async def import_edo_upd(
     body: EdoImportRequest,
     current_user: User = Depends(require_full_edition),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
     """Создать приёмку из входящего УПД ЭДО: скачать XML из Saby и импортировать коды."""
@@ -430,10 +450,18 @@ async def import_edo_upd(
     # План из поступления МС (если привязано) — как в create_acceptance_document.
     moysklad_id = (body.moysklad_id or "").strip() or None
     plan: list[dict] = []
+    ms_organization_id = profile.moysklad_organization_id
+    ms_store_id = None
     if moysklad_id:
         ms = await _maybe_ms_service(current_user, db)
         if ms is not None:
             try:
+                ms_doc = await ms.get_document("supply", moysklad_id)
+                ms_organization_id = _ref_id(ms_doc, "organization")
+                ms_store_id = _ref_id(ms_doc, "store")
+                profile = await _profile_for_organization(
+                    db, current_user.id, ms_organization_id, profile
+                )
                 plan = await ms.build_plan("supply", moysklad_id)
             except Exception as exc:
                 logger.warning(
@@ -453,6 +481,9 @@ async def import_edo_upd(
         status=DocumentStatus.draft,
         product_group=pg,
         moysklad_id=moysklad_id,
+        organization_profile_id=profile.id,
+        moysklad_organization_id=ms_organization_id,
+        moysklad_store_id=ms_store_id,
         plan=plan,
     )
     db.add(doc)
@@ -785,7 +816,7 @@ async def _import_upd_bytes(
     ms = await _maybe_ms_service(current_user, db)
     # ЧЗ для разворота коробов (AI-02 и пр. агрегаты) на импорте — best-effort:
     # без валидного токена короба останутся unknown_product и определятся при отправке.
-    cz = await _maybe_cz_service(current_user, db)
+    cz = await _maybe_cz_service(current_user, db, doc.organization_profile_id)
 
     # План привязанного поступления МС: gtin → (product_id, product_name) и
     # КодТов/артикул → (product_id, product_name). Позиции УПД сопоставляются с
@@ -1141,7 +1172,7 @@ async def import_marks(
 
     ms = await _maybe_ms_service(current_user, db)
     # ЧЗ для разворота коробов (AI-02 и пр. агрегаты) — best-effort, как в import_upd.
-    cz = await _maybe_cz_service(current_user, db)
+    cz = await _maybe_cz_service(current_user, db, doc.organization_profile_id)
 
     # План привязанного поступления МС: gtin/pack_gtin → товар, артикул/КодТов → товар.
     plan_map: dict[str, tuple[str, Optional[str]]] = {}

@@ -80,8 +80,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-      VITE_WS_URL: ${VITE_WS_URL:-ws://localhost:8000}
+      # Vite работает внутри контейнера: localhost здесь — сам frontend,
+      # поэтому прокси должен обращаться к DNS-имени сервиса Compose.
+      VITE_API_URL: ${VITE_API_URL:-http://backend:8000}
+      VITE_WS_URL: ${VITE_WS_URL:-ws://backend:8000}
     depends_on:
       - backend
 

@@ -8,6 +8,7 @@ import {
   type DocumentKind,
 } from '../api/client'
 import { useScanStore } from '../store/scanStore'
+import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 /** Интеграция текущего пользователя (в т.ч. cz_inn — владелец подписи для сверки марок). */
 export function useIntegration() {
@@ -93,6 +94,7 @@ export function useLoadDocument(documentId: string | null) {
   useEffect(() => {
     if (!documentId || !data) return
     if (data.doc.id !== documentId) return
+    setOrganizationProfileId(data.doc.organization_profile_id)
     setDocument(data.doc)
     setScans(data.scans)
   }, [documentId, data, setDocument, setScans])

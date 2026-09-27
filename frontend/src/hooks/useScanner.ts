@@ -83,6 +83,10 @@ export function useScanner(documentId: string | null) {
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
+      // Один пользователь может одновременно работать в нескольких браузерах и
+      // юрлицах. Канал WS общий для аккаунта, поэтому события другой операции
+      // никогда не должны менять локальную сессию.
+      if (data.document_id && data.document_id !== documentId) return
       if (data.type === 'cz_token_expired') {
         useScanStore.getState().setCzTokenExpired(true)
         return
@@ -146,7 +150,7 @@ export function useScanner(documentId: string | null) {
       clearInterval(ping)
       ws.close()
     }
-  }, [updateScan])
+  }, [documentId, updateScan])
 
   // Если WS недоступен — опрашиваем список сканов, пока есть pending либо идёт проверка
   useEffect(() => {

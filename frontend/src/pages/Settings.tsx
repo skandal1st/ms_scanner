@@ -9,6 +9,7 @@ import {
   useScannerMode,
 } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
+import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
 import {
   diagnosePlugin,
   isPluginAvailable,
@@ -230,6 +231,23 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
     <div className="settings-page">
       <div className="settings-card">
         <h1>Настройки интеграции</h1>
+
+        <section className="section">
+          <div className="section__head">
+            <h2 style={{ margin: 0 }}>Юрлицо и рабочий контекст</h2>
+          </div>
+          <p className="hint">
+            Для каждого юрлица отдельно хранятся авторизация Честного Знака,
+            настройки складов и история документов. Выбранное здесь юрлицо действует
+            только в этом браузере и не переключает другие рабочие места.
+          </p>
+          <OrganizationProfileSwitcher />
+          {integration?.organization_profile_name && (
+            <p className="hint mt-8">
+              Текущий профиль: <b>{integration.organization_profile_name}</b>
+            </p>
+          )}
+        </section>
 
         <section className="section">
           <div className="section__head">

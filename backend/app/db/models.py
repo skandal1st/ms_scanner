@@ -65,6 +65,10 @@ class User(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     integration = relationship("Integration", back_populates="user", uselist=False)
+    organization_profiles = relationship(
+        "OrganizationProfile", back_populates="user", cascade="all, delete-orphan"
+    )
+    workplaces = relationship("Workplace", back_populates="user", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="user")
     cz_logs = relationship("CzLog", back_populates="user")
 
@@ -113,6 +117,64 @@ class Integration(Base):
     user = relationship("User", back_populates="integration")
 
 
+class OrganizationProfile(Base):
+    """Юрлицо внутри одного аккаунта МойСклад.
+
+    Vendor token остаётся в Integration (он общий для accountId), а секреты ЧЗ и
+    настройки складского периметра изолируются здесь.
+    """
+
+    __tablename__ = "organization_profiles"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "moysklad_organization_id", name="uq_org_profile_user_ms_org"
+        ),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    moysklad_organization_id = Column(String(64), nullable=True, index=True)
+    name = Column(String(500), nullable=False, default="Основное юрлицо")
+    is_default = Column(Boolean, nullable=False, default=False, server_default="false")
+    cz_token = Column(Text, nullable=True)
+    cz_token_expires_at = Column(DateTime(timezone=True), nullable=True)
+    cz_cert_thumbprint = Column(String(64), nullable=True)
+    cz_cert_subject = Column(String(500), nullable=True)
+    cz_auth_method = Column(String(16), nullable=False, default="mock", server_default="mock")
+    cz_box_mode_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    cz_inn = Column(String(12), nullable=True)
+    cz_product_groups = Column(JSONB, nullable=False, default=list, server_default="[]")
+    inventory_store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    user = relationship("User", back_populates="organization_profiles")
+    workplaces = relationship(
+        "Workplace", back_populates="organization_profile", cascade="all, delete-orphan"
+    )
+
+
+class Workplace(Base):
+    """Физическое рабочее место: юрлицо + разрешённые склады."""
+
+    __tablename__ = "workplaces"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    organization_profile_id = Column(
+        UUID(as_uuid=True), ForeignKey("organization_profiles.id"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False)
+    store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
+    is_default = Column(Boolean, nullable=False, default=False, server_default="false")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    user = relationship("User", back_populates="workplaces")
+    organization_profile = relationship("OrganizationProfile", back_populates="workplaces")
+
+
 class OAuthState(Base):
     """Одноразовые state токены для OAuth CSRF защиты."""
     __tablename__ = "oauth_states"
@@ -130,6 +192,12 @@ class Document(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
     moysklad_id = Column(String(255), nullable=True, index=True)
+    organization_profile_id = Column(
+        UUID(as_uuid=True), ForeignKey("organization_profiles.id"), nullable=True, index=True
+    )
+    workplace_id = Column(UUID(as_uuid=True), ForeignKey("workplaces.id"), nullable=True)
+    moysklad_organization_id = Column(String(64), nullable=True, index=True)
+    moysklad_store_id = Column(String(64), nullable=True)
     name = Column(String(500), nullable=False)
     kind = Column(
         Enum(DocumentKind),

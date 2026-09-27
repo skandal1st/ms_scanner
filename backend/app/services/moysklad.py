@@ -77,7 +77,11 @@ class MoySkladService:
     # --- Универсальные методы по типу документа ---
 
     async def get_documents(
-        self, kind: str, limit: int = 50, search: Optional[str] = None
+        self,
+        kind: str,
+        limit: int = 50,
+        search: Optional[str] = None,
+        organization_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Список МС-документов выбранного типа.
 
@@ -100,6 +104,11 @@ class MoySkladService:
         }
         expand = expand_by_kind.get(kind)
         base_params: Dict[str, Any] = {"order": "moment,desc"}
+        if organization_id:
+            organization_href = (
+                f"{self.base_url}/entity/organization/{organization_id}"
+            )
+            base_params["filter"] = f"organization={organization_href}"
         if expand:
             base_params["expand"] = expand
 
@@ -177,6 +186,23 @@ class MoySkladService:
             )
             resp.raise_for_status()
             return resp.json()
+
+    async def get_organizations(self) -> List[Dict[str, Any]]:
+        """Юрлица аккаунта МС для настройки профилей."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await self._request_with_retry(
+                client,
+                "GET",
+                f"{self.base_url}/entity/organization",
+                params={"limit": 1000},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        return [
+            {"id": row.get("id"), "name": row.get("name") or "Без названия"}
+            for row in data.get("rows", [])
+            if row.get("id")
+        ]
 
     @staticmethod
     def _gtin_from_barcode_obj(bc: Any) -> Optional[str]:
