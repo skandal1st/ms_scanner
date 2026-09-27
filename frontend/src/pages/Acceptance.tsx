@@ -194,10 +194,18 @@ export function AcceptancePage({
     const src = result?.positions ?? []
     return [...src].sort((a, b) => Number(a.matched) - Number(b.matched))
   }, [result])
-  const unmatched = positions.filter((p) => !p.matched && p.gtin)
+  // В панель сопоставления включаем ВСЕ строки, в том числе позиции УПД без
+  // GTIN/КМ. Раньше они показывались как «нужен товар», но выбрать товар было негде.
+  const unmatched = positions.filter((p) => !p.matched)
+  const unmatchedWithGtin = unmatched.filter((p) => Boolean(p.gtin))
+  // Отправку блокируют только строки, содержащие марки/упаковки. Строка без КМ
+  // может быть обычным немаркированным товаром, её ручная привязка полезна, но опциональна.
+  const blockingUnmatched = unmatched.filter(
+    (p) => Boolean(p.gtin || p.codes_count > 0 || p.packages_count > 0),
+  )
 
   // Авто-подсказки сопоставления GTIN↔товар (МС-поиск по имени из УПД/ЧЗ).
-  const sugQuery = useMatchSuggestions(docId, unmatched.length > 0)
+  const sugQuery = useMatchSuggestions(docId, unmatchedWithGtin.length > 0)
   const sugMap = useMemo(() => {
     const m = new Map<string, MatchSuggestion>()
     for (const s of sugQuery.data ?? []) m.set(s.gtin_key, s)
@@ -207,10 +215,40 @@ export function AcceptancePage({
     g ? sugMap.get(normalizeGtinKey(g) ?? '') : undefined
   const [confirmingAll, setConfirmingAll] = useState(false)
   const highUnmatched = useMemo(
-    () => unmatched.filter((p) => sugFor(p.gtin)?.confidence === 'high'),
+    () => unmatchedWithGtin.filter((p) => sugFor(p.gtin)?.confidence === 'high'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [unmatched, sugMap],
+    [unmatchedWithGtin, sugMap],
   )
+
+  const markPositionLinked = (
+    target: ImportPositionResult,
+    product: ProductSearchItem,
+  ) => {
+    setResult((current) =>
+      current
+        ? {
+            ...current,
+            positions: current.positions.map((position) => {
+              const sameLine =
+                target.line_number != null && position.line_number === target.line_number
+              const sameFallback =
+                target.line_number == null &&
+                position.line_number == null &&
+                position.name === target.name &&
+                position.article === target.article
+              return sameLine || sameFallback
+                ? {
+                    ...position,
+                    matched: true,
+                    product_id: product.id,
+                    product_name: product.name,
+                  }
+                : position
+            }),
+          }
+        : current,
+    )
+  }
 
   const confirmAllSuggestions = async () => {
     if (!docId) return
@@ -321,7 +359,7 @@ export function AcceptancePage({
               )}
             </span>
           ) : (
-            <span className="text-muted">— не сопоставлен —</span>
+            <span className="text-muted">— выберите товар ниже —</span>
           ),
       },
       {
@@ -450,8 +488,10 @@ export function AcceptancePage({
               className="field-label"
               style={{ margin: 0, marginBottom: 8, color: 'var(--st-warn-fg)' }}
             >
-              Сопоставьте товары МойСклад ({unmatched.length}) — без этого приёмку
-              нельзя отправить в МС
+              Сопоставьте товары МойСклад ({unmatched.length})
+              {blockingUnmatched.length > 0
+                ? ' — позиции с маркировкой обязательны для отправки'
+                : ' — позиции без маркировки можно привязать вручную'}
             </div>
             {sugQuery.isLoading && (
               <div className="text-muted" style={{ fontSize: 11, marginBottom: 8 }}>
@@ -482,11 +522,15 @@ export function AcceptancePage({
                       GTIN {p.gtin}
                     </span>
                   </div>
-                  {docId && p.gtin && (
+                  {docId && (
                     <InlineProductPicker
                       documentId={docId}
-                      gtin={p.gtin}
-                      onLinked={refreshAfterLink}
+                      gtin={p.gtin ?? undefined}
+                      position={p.gtin ? undefined : p}
+                      onLinked={(product) => {
+                        if (p.gtin) void refreshAfterLink()
+                        else markPositionLinked(p, product)
+                      }}
                       suggestion={sugFor(p.gtin)}
                     />
                   )}
@@ -548,15 +592,15 @@ export function AcceptancePage({
             disabled={
               !linkedToMs ||
               scans.length === 0 ||
-              unmatched.length > 0 ||
+              blockingUnmatched.length > 0 ||
               sending ||
               alreadyAccepted
             }
             title={
               !linkedToMs
                 ? 'Выберите поступление МойСклад при загрузке УПД'
-                : unmatched.length > 0
-                  ? `Сначала сопоставьте товары (${unmatched.length})`
+                : blockingUnmatched.length > 0
+                  ? `Сначала сопоставьте товары (${blockingUnmatched.length})`
                   : undefined
             }
             onClick={handleSend}
@@ -565,8 +609,8 @@ export function AcceptancePage({
               ? 'Отправлено в МС'
               : sending
                 ? 'Отправка в МС…'
-                : unmatched.length > 0
-                  ? `Сопоставьте товары (${unmatched.length})`
+                : blockingUnmatched.length > 0
+                  ? `Сопоставьте товары (${blockingUnmatched.length})`
                   : 'Отправить приёмку в МС'}
           </button>
         </footer>
@@ -662,12 +706,14 @@ function ExpandedPosition({
 function InlineProductPicker({
   documentId,
   gtin,
+  position,
   onLinked,
   suggestion,
 }: {
   documentId: string
-  gtin: string
-  onLinked: () => void
+  gtin?: string
+  position?: ImportPositionResult
+  onLinked: (product: ProductSearchItem) => void
   suggestion?: MatchSuggestion
 }) {
   const [query, setQuery] = useState('')
@@ -703,10 +749,26 @@ function InlineProductPicker({
     setLinking(true)
     setError(null)
     try {
-      await productsApi.linkGtin(documentId, gtin, p.id, p.name)
+      if (gtin) {
+        await productsApi.linkGtin(documentId, gtin, p.id, p.name)
+      } else if (position) {
+        await productsApi.linkUpdPosition({
+          document_id: documentId,
+          line_number: position.line_number,
+          position_name: position.name,
+          article: position.article,
+          quantity: position.quantity,
+          price: position.price,
+          vat: position.vat,
+          moysklad_product_id: p.id,
+          product_name: p.name,
+        })
+      } else {
+        throw new Error('Не указана позиция для привязки')
+      }
       setQuery('')
       setResults([])
-      onLinked()
+      onLinked(p)
     } catch (e) {
       setError(errorDetail(e) ?? 'Не удалось привязать товар')
     } finally {

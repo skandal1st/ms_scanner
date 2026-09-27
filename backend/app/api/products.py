@@ -36,6 +36,24 @@ class LinkGtinResponse(BaseModel):
     updated_count: int
 
 
+class LinkUpdPositionRequest(BaseModel):
+    document_id: UUID
+    line_number: Optional[int] = None
+    position_name: str
+    article: Optional[str] = None
+    quantity: Optional[float] = None
+    price: Optional[float] = None
+    vat: Optional[int] = None
+    moysklad_product_id: str
+    product_name: Optional[str] = None
+
+
+class LinkUpdPositionResponse(BaseModel):
+    position_key: str
+    product_id: str
+    product_name: Optional[str] = None
+
+
 class BulkLinkItem(BaseModel):
     gtin: str
     moysklad_product_id: str
@@ -307,6 +325,18 @@ async def _get_document_owned(
     return doc
 
 
+def _upd_position_key(
+    line_number: Optional[int], position_name: str, article: Optional[str]
+) -> str:
+    """Стабильный ключ строки УПД, в том числе когда у неё нет GTIN."""
+    if line_number is not None:
+        return f"line:{line_number}"
+    article_key = _norm_article(article)
+    if article_key:
+        return f"article:{article_key}"
+    return f"name:{_norm_name(position_name)}"
+
+
 @router.post("/link-gtin", response_model=LinkGtinResponse)
 async def link_gtin_to_product(
     body: LinkGtinRequest,
@@ -336,6 +366,79 @@ async def link_gtin_to_product(
         )
     await _push_links_and_barcodes(db, current_user, matched, [(body.gtin, pid)])
     return LinkGtinResponse(updated_count=len(matched))
+
+
+@router.post("/link-upd-position", response_model=LinkUpdPositionResponse)
+async def link_upd_position_to_product(
+    body: LinkUpdPositionRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Привязать строку УПД без GTIN/КМ к товару МойСклад.
+
+    Такая строка не создаёт Scan, поэтому обычная GTIN-привязка к ней неприменима.
+    Сохраняем выбор в метаданных документа и плане: UI сразу показывает выбранный
+    товар, а повторный импорт того же УПД сможет использовать эту связь.
+    """
+    doc = await _get_document_owned(db, body.document_id, current_user.id)
+    if str(doc.kind.value if hasattr(doc.kind, "value") else doc.kind) != "supply":
+        raise HTTPException(status_code=400, detail="Документ не является приёмкой")
+    if str(doc.status.value if hasattr(doc.status, "value") else doc.status) == "accepted":
+        raise HTTPException(status_code=409, detail="Принятая приёмка уже не редактируется")
+
+    pid = body.moysklad_product_id.strip()
+    if not pid or len(pid) > 64:
+        raise HTTPException(status_code=400, detail="Некорректный UUID товара МойСклад")
+    product_name = (body.product_name or "").strip() or None
+    position_name = (body.position_name or "").strip()
+    if not position_name:
+        raise HTTPException(status_code=400, detail="Не указано название позиции УПД")
+
+    key = _upd_position_key(body.line_number, position_name, body.article)
+    meta = dict(doc.upd_meta or {})
+    links = dict(meta.get("manual_position_links") or {})
+    links[key] = {
+        "product_id": pid,
+        "product_name": product_name,
+        "position_name": position_name,
+        "article": (body.article or "").strip() or None,
+    }
+    meta["manual_position_links"] = links
+    doc.upd_meta = meta
+
+    # Добавляем/обновляем товар в плане. Для уже существующей позиции поступления
+    # это только уточняет отображение; для пустого поступления сохраняет реквизиты УПД.
+    plan = [dict(p) for p in (doc.plan or []) if isinstance(p, dict)]
+    entry = next((p for p in plan if p.get("product_id") == pid), None)
+    if entry is None:
+        entry = {"product_id": pid, "gtin": None}
+        plan.append(entry)
+    if product_name:
+        entry["product_name"] = product_name
+    if body.quantity is not None:
+        try:
+            entry["expected_qty"] = int(body.quantity)
+        except (TypeError, ValueError):
+            pass
+    if body.price is not None:
+        entry["price"] = body.price
+    if body.vat is not None:
+        entry["vat"] = body.vat
+    doc.plan = plan
+
+    await db.commit()
+    logger.info(
+        "products.link_upd_position.done",
+        document_id=str(doc.id),
+        position_key=key,
+        product_id=pid,
+        user_id=str(current_user.id),
+    )
+    return LinkUpdPositionResponse(
+        position_key=key,
+        product_id=pid,
+        product_name=product_name,
+    )
 
 
 @router.post("/link-gtin-bulk", response_model=BulkLinkResponse)

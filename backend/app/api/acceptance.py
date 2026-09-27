@@ -899,6 +899,51 @@ async def _import_upd_bytes(
 
         # Позиция без кодов — показываем строку «без марок» (как раньше).
         if not order:
+            manual_key = (
+                f"line:{pos.line_number}"
+                if pos.line_number is not None
+                else (
+                    f"article:{_norm_article(pos.article)}"
+                    if _norm_article(pos.article)
+                    else f"name:{' '.join((pos.name or '').lower().split())}"
+                )
+            )
+            manual_link = ((doc.upd_meta or {}).get("manual_position_links") or {}).get(
+                manual_key
+            ) or {}
+            product_id = manual_link.get("product_id")
+            product_name = manual_link.get("product_name")
+            if not product_id:
+                product_id, product_name = await _resolve_product(
+                    pos.gtin,
+                    pos.article,
+                    current_user.id,
+                    ms,
+                    db,
+                    resolve_cache,
+                    plan_map,
+                    article_map,
+                )
+            matched = product_id is not None
+            if product_id:
+                entry = plan_acc.setdefault(
+                    product_id,
+                    {
+                        "gtin": normalize_gtin_key(pos.gtin),
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "expected_qty": 0,
+                    },
+                )
+                if pos.quantity is not None:
+                    try:
+                        entry["expected_qty"] += int(pos.quantity)
+                    except (TypeError, ValueError):
+                        pass
+                if pos.price is not None:
+                    entry["price"] = pos.price
+                if pos.vat is not None:
+                    entry["vat"] = pos.vat
             results.append(
                 ImportPositionResult(
                     name=pos.name,
@@ -907,9 +952,9 @@ async def _import_upd_bytes(
                     quantity=pos.quantity,
                     codes_count=0,
                     packages_count=0,
-                    product_id=None,
-                    product_name=None,
-                    matched=False,
+                    product_id=product_id,
+                    product_name=product_name,
+                    matched=matched,
                     line_number=pos.line_number,
                     price=pos.price,
                     vat=pos.vat,

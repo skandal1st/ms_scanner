@@ -581,6 +581,21 @@ export const productsApi = {
       moysklad_product_id,
       product_name: product_name ?? null,
     }),
+  linkUpdPosition: (data: {
+    document_id: string
+    line_number: number | null
+    position_name: string
+    article: string | null
+    quantity: number | null
+    price: number | null
+    vat: number | null
+    moysklad_product_id: string
+    product_name?: string | null
+  }) => api.post<{
+    position_key: string
+    product_id: string
+    product_name: string | null
+  }>('/products/link-upd-position', data),
   matchSuggestions: (document_id: string) =>
     api.get<MatchSuggestion[]>('/products/match-suggestions', {
       params: { document_id },
