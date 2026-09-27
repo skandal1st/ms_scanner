@@ -764,6 +764,108 @@ export const organizationProfilesApi = {
   }) => api.post<Workplace>('/organization-profiles/workplaces', data),
 }
 
+export interface TsdPairing {
+  code: string
+  payload: string
+  expires_in: number
+  workplace_name: string
+}
+
+export interface TsdDeviceInfo {
+  id: string
+  name: string
+  workplace_name: string
+  is_active: boolean
+  last_seen_at: string | null
+  created_at: string
+}
+
+export const tsdAdminApi = {
+  createPairing: (workplace_id?: string) =>
+    api.post<TsdPairing>('/tsd/pairings', { workplace_id: workplace_id ?? null }),
+  devices: () => api.get<TsdDeviceInfo[]>('/tsd/devices'),
+  revoke: (id: string) => api.delete(`/tsd/devices/${id}`),
+}
+
+const tsdClient = axios.create({
+  baseURL: '/api',
+  headers: { 'Content-Type': 'application/json' },
+})
+
+tsdClient.interceptors.request.use((config) => {
+  const token = localStorage.getItem('tsd_access_token')
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
+tsdClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && localStorage.getItem('tsd_access_token')) {
+      localStorage.removeItem('tsd_access_token')
+      window.location.href = '/tsd'
+    }
+    return Promise.reject(error)
+  },
+)
+
+export interface TsdContext {
+  device_id: string
+  device_name: string
+  workplace_id: string
+  workplace_name: string
+  organization_profile_id: string
+  organization_name: string
+}
+
+export interface TsdDocumentItem {
+  moysklad_id: string
+  local_document_id: string | null
+  name: string
+  agent_name: string | null
+  customer_order_name: string | null
+  store_name: string | null
+  moment: string | null
+  collected: number
+  expected: number
+  in_work: boolean
+  active_on_other_device: boolean
+}
+
+export interface TsdDocumentDetail {
+  id: string
+  name: string
+  status: string
+  plan: PlanItem[]
+  scans: Scan[]
+  session_id: string
+  active_on_other_device: boolean
+}
+
+export const tsdApi = {
+  exchange: (code: string, device_name: string) =>
+    axios.post<{
+      access_token: string
+      device_id: string
+      device_name: string
+      workplace_name: string
+      organization_name: string
+    }>('/api/tsd/auth/exchange', { code, device_name }),
+  me: () => tsdClient.get<TsdContext>('/tsd/me'),
+  documents: (search?: string) =>
+    tsdClient.get<TsdDocumentItem[]>('/tsd/documents', {
+      params: search ? { search } : {},
+    }),
+  selectDocument: (moysklad_id: string) =>
+    tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id }),
+  getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
+  scan: (id: string, code: string) =>
+    tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code }),
+  undoLast: (id: string) =>
+    tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/last`),
+  complete: (id: string) => tsdClient.post(`/tsd/documents/${id}/complete`),
+}
+
 export interface ProductGroup {
   code: string
   label: string

@@ -45,6 +45,14 @@ def create_refresh_token(data: dict[str, Any]) -> str:
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
+def create_tsd_access_token(data: dict[str, Any]) -> str:
+    """Токен терминала на одну смену; обычные API его не принимают."""
+    payload = data.copy()
+    payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=12)
+    payload["type"] = "tsd_access"
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
 def decode_token(token: str) -> dict[str, Any]:
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
 

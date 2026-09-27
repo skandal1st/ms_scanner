@@ -99,8 +99,8 @@ class MoySkladService:
         # у поступления (supply) есть agent (поставщик), но нет customerOrder; у
         # списания (loss) нет ни того, ни другого. Лишний expand МС отклоняет (400).
         expand_by_kind = {
-            "demand": "customerOrder,agent",
-            "supply": "agent",
+            "demand": "customerOrder,agent,store",
+            "supply": "agent,store",
         }
         expand = expand_by_kind.get(kind)
         base_params: Dict[str, Any] = {"order": "moment,desc"}
@@ -162,6 +162,7 @@ class MoySkladService:
             order_name = order.get("name") if isinstance(order, dict) else None
             agent = r.get("agent") or {}
             agent_name = agent.get("name") if isinstance(agent, dict) else None
+            store = r.get("store") or {}
             out.append(
                 {
                     "id": r["id"],
@@ -172,6 +173,10 @@ class MoySkladService:
                     "moment": r.get("moment"),
                     "customer_order_name": order_name or None,
                     "agent_name": agent_name or None,
+                    "store_id": self._id_from_href(
+                        ((store.get("meta") or {}).get("href") or "")
+                    ) if isinstance(store, dict) else None,
+                    "store_name": (store.get("name") or None) if isinstance(store, dict) else None,
                 }
             )
         return out

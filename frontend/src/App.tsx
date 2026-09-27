@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { acceptanceApi } from './api/client'
@@ -18,6 +19,8 @@ import { LaunchPage } from './pages/Launch'
 import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
 import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwitcher'
+
+const TsdPage = lazy(() => import('./pages/Tsd').then((module) => ({ default: module.TsdPage })))
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -119,6 +122,7 @@ export default function App() {
           <Route path="/launch" element={<LaunchPage />} />
           {/* Кастомное модальное окно МС (кнопка на документе): авторизуется по contextKey. */}
           <Route path="/popup" element={<PopupPage />} />
+          <Route path="/tsd" element={<Suspense fallback={null}><TsdPage /></Suspense>} />
           {/* Киоск-окна сканирования — внешняя вкладка, открытая из МС (/launch → сюда).
               Без Layout-навигации: кладовщик заперт на своей задаче и не уходит в
               приёмку/инвентаризацию/настройки. Функции самой задачи (выбор документа,

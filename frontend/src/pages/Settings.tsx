@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { czApi, integrationsApi } from '../api/client'
 import type { Integration } from '../api/client'
@@ -10,6 +10,10 @@ import {
 } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
+
+const TsdPairingSection = lazy(() =>
+  import('../components/TsdPairingSection').then((module) => ({ default: module.TsdPairingSection })),
+)
 import {
   diagnosePlugin,
   isPluginAvailable,
@@ -322,6 +326,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         </section>
 
         <ChestnyZnakSection integration={integration} />
+        {!embedded ? <Suspense fallback={null}><TsdPairingSection /></Suspense> : null}
         <ScannerSection embedded={embedded} />
       </div>
     </div>

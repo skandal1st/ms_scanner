@@ -175,6 +175,41 @@ class Workplace(Base):
     organization_profile = relationship("OrganizationProfile", back_populates="workplaces")
 
 
+class TsdDevice(Base):
+    """Авторизованный терминал сбора данных, привязанный к рабочему месту."""
+
+    __tablename__ = "tsd_devices"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    workplace_id = Column(
+        UUID(as_uuid=True), ForeignKey("workplaces.id"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False, default="ТСД")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="true")
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class TsdDocumentSession(Base):
+    """Сессия комплектации документа на конкретном ТСД."""
+
+    __tablename__ = "tsd_document_sessions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    device_id = Column(
+        UUID(as_uuid=True), ForeignKey("tsd_devices.id"), nullable=False, index=True
+    )
+    document_id = Column(
+        UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True
+    )
+    status = Column(String(16), nullable=False, default="active", server_default="active")
+    started_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class OAuthState(Base):
     """Одноразовые state токены для OAuth CSRF защиты."""
     __tablename__ = "oauth_states"

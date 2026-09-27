@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
@@ -18,6 +18,10 @@ import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
+
+const TsdDocumentQr = lazy(() =>
+  import('../components/TsdDocumentQr').then((module) => ({ default: module.TsdDocumentQr })),
+)
 
 interface ShipmentPageProps {
   /** Встроенный режим (попап МС): документ задан заранее, без выбора; после
@@ -237,6 +241,11 @@ export function ShipmentPage({
               <Icon name="close" size={14} /> Отвязаться
             </button>
           )}
+          {document?.moysklad_id && !embedded ? (
+            <Suspense fallback={null}>
+              <TsdDocumentQr moyskladId={document.moysklad_id} name={document.name} />
+            </Suspense>
+          ) : null}
         </div>
         <span className="acc-header__doc">
           {document?.name ?? 'Документ не выбран'}
