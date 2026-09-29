@@ -11,7 +11,6 @@ import { BulkMarksModal } from '../components/BulkMarksModal'
 import { Icon } from '../components/Icon'
 import { useModal } from '../components/ModalProvider'
 import { useScanStore, ownerCheckState } from '../store/scanStore'
-import { useScannerMode } from '../lib/scannerMode'
 import { useLoadDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
 import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
@@ -39,10 +38,9 @@ export function ShipmentPage({
   const modal = useModal()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
-  // COM-режим: не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
+  // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
   // вкладку и порт открытыми всю смену, как это делает 1С.
-  const isComMode = useScannerMode() === 'com'
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
@@ -60,7 +58,7 @@ export function ShipmentPage({
     fetchDoc: (id) => documentsApi.get(id),
     onPoll: (fresh) => setDocument(fresh),
     // В попапе окно закрывает не window.close, а ClosePopup через onSent.
-    autoCloseTab: !isComMode && !embedded,
+    autoCloseTab: false,
   })
 
   const handleBulkMarks = async (codes: string[]) => {
@@ -439,9 +437,7 @@ export function ShipmentPage({
             <div className="done-overlay__sub">
               {closingTab || embedded
                 ? 'Возвращаемся в МойСклад…'
-                : isComMode
-                  ? 'Марки записаны. Можно сканировать следующую отгрузку.'
-                  : 'Марки записаны в МойСклад.'}
+                : 'Марки записаны. Можно сканировать следующую отгрузку.'}
             </div>
             {!closingTab && !embedded && (
               <div className="flex-row gap-8" style={{ marginTop: 16, justifyContent: 'center' }}>

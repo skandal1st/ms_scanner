@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { ShipmentPage } from './Shipment'
 import { AcceptancePage } from './Acceptance'
-import { WriteoffPage } from './Writeoff'
 import { documentsApi, type Document, type DocumentKind } from '../api/client'
-import { getScannerMode } from '../lib/scannerMode'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 import { useScanStore } from '../store/scanStore'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
@@ -20,9 +17,8 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
  *  4. После «Отгрузить» окно закрываем сообщением `ClosePopup` хост-окну МС.
  *
  * Web Serial (COM-сканер) внутри окна МС заблокирован Permissions-Policy. А
- * keyboard-режим для марок нерабочий: клавиатурный поток теряет разделитель GS
- * (0x1D) — на проде 100% invalid-сканов были без GS. Поэтому при COM-режиме
- * маркированное сканирование (отгрузка/списание) не встраивается в это окно, а
+ * клавиатурный режим для марок нерабочий: клавиатурный поток теряет разделитель GS
+ * (0x1D). Поэтому маркированное сканирование (отгрузка/списание) не встраивается в это окно, а
  * открывается в отдельной top-level вкладке (`/launch`), где Web Serial разрешён
  * и GS сохраняется. Вкладка/порт живут всю смену (autoCloseTab=false в COM).
  */
@@ -256,11 +252,9 @@ export function PopupPage() {
     )
   }
 
-  // COM-режим: марочное сканирование (отгрузка/списание) нельзя вести в этом окне
-  // МС (Web Serial заблокирован Permissions-Policy). Показываем лаунчер, который
-  // открывает сканирование в отдельной вкладке. Keyboard-режим оставляем встроенным
-  // (там марки блокируются с подсказкой, но штрихкоды немаркированного товара идут).
-  if ((state.kind === 'shipment' || state.kind === 'writeoff') && getScannerMode() === 'com') {
+  // Сканирование выполняется только через COM/Web Serial. В iframe МойСклада Web
+  // Serial заблокирован Permissions-Policy, поэтому всегда открываем отдельную вкладку.
+  if (state.kind === 'shipment' || state.kind === 'writeoff') {
     const doc = state.doc
     const label = state.kind === 'shipment' ? 'отгрузку' : 'списание'
     return (
@@ -302,22 +296,14 @@ export function PopupPage() {
     )
   }
 
-  // Встроенный режим: нужная страница с преднастроенным документом.
-  // После завершения (отправка в МС / списание) окно МС закрывается через onSent.
-  if (state.kind === 'shipment') {
-    return <ShipmentPage key={state.sessionId} embedded presetDocument={state.doc} onSent={closePopup} />
-  }
-  if (state.kind === 'acceptance') {
-    return (
-      <AcceptancePage
-        key={state.sessionId}
-        embedded
-        presetMoyskladId={state.msObjectId}
-        onSent={closePopup}
-      />
-    )
-  }
-  return <WriteoffPage key={state.sessionId} embedded presetDocument={state.doc} onSent={closePopup} />
+  return (
+    <AcceptancePage
+      key={state.sessionId}
+      embedded
+      presetMoyskladId={state.msObjectId}
+      onSent={closePopup}
+    />
+  )
 }
 
 const styles: Record<string, CSSProperties> = {

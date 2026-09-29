@@ -375,6 +375,12 @@ html, body, #root { height: 100%; }
   border-color: var(--ms-input-border);
   cursor: not-allowed;
 }
+.scan-input__com-status {
+  height: auto;
+  min-height: 44px;
+  padding: 6px 14px;
+  font-family: var(--ms-font);
+}
 .scan-input__last { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ms-text-subtle); }
 .scan-input__last code {
   background: var(--surface-2);

@@ -3,11 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { czApi, integrationsApi } from '../api/client'
 import type { Integration } from '../api/client'
 import { useModal } from '../components/ModalProvider'
-import {
-  isWebSerialSupported,
-  setScannerMode,
-  useScannerMode,
-} from '../lib/scannerMode'
+import { isWebSerialSupported } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
 
@@ -37,11 +33,10 @@ function describePort(port: SerialPort): string {
 }
 
 function ScannerSection({ embedded = false }: { embedded?: boolean }) {
-  const mode = useScannerMode()
   // В окне МС (iframe) Web Serial заблокирован Permissions-Policy: navigator.serial
   // существует, но getPorts()/requestPort() бросают «disallowed by permissions policy».
   // Поэтому в embedded-режиме порт НЕ трогаем — его подключают в окне сканирования
-  // (top-level вкладка). Здесь только выбор режима (флаг в localStorage).
+  // (top-level вкладка).
   const canManagePorts = isWebSerialSupported() && !embedded
   const supported = isWebSerialSupported()
   const [ports, setPorts] = useState<SerialPort[]>([])
@@ -101,48 +96,13 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
     <section className="section">
       <div className="section__head">
         <h2 style={{ margin: 0 }}>Сканер</h2>
-        <span className={`badge ${mode === 'com' ? 'badge--info' : 'badge--pending'}`}>
-          {mode === 'com' ? 'COM-порт' : 'USB (клавиатура)'}
-        </span>
+        <span className="badge badge--info">COM-порт</span>
       </div>
 
       <p className="hint">
-        Выберите способ ввода кодов маркировки. По умолчанию используется USB-сканер
-        в режиме эмуляции клавиатуры. Если сканер настроен на virtual COM port
-        (USB-CDC) — выберите COM-режим.
+        Сканирование кодов выполняется только через виртуальный COM-порт (USB-CDC).
+        Клавиатурный режим не используется: он теряет служебные GS-разделители DataMatrix.
       </p>
-
-      <div className="field-row mt-8" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 8 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-          <input
-            type="radio"
-            name="scanner-mode"
-            value="keyboard"
-            checked={mode === 'keyboard'}
-            onChange={() => setScannerMode('keyboard')}
-          />
-          USB-сканер (клавиатура)
-        </label>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            cursor: supported ? 'pointer' : 'not-allowed',
-            opacity: supported ? 1 : 0.55,
-          }}
-        >
-          <input
-            type="radio"
-            name="scanner-mode"
-            value="com"
-            checked={mode === 'com'}
-            onChange={() => setScannerMode('com')}
-            disabled={!supported}
-          />
-          COM-порт (Web Serial API)
-        </label>
-      </div>
 
       {!supported && (
         <div className="alert alert--warn mt-12">
@@ -151,7 +111,7 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
         </div>
       )}
 
-      {supported && mode === 'com' && embedded && (
+      {supported && embedded && (
         <div className="alert alert--info mt-12">
           Подключение COM-порта выполняется в <b>окне сканирования</b> — оно откроется
           отдельной вкладкой при нажатии «Начать приёмку/отгрузку» или кнопки на документе
@@ -160,7 +120,7 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
         </div>
       )}
 
-      {canManagePorts && mode === 'com' && (
+      {canManagePorts && (
         <>
           <div className="mt-12">
             {ports.length > 0 ? (

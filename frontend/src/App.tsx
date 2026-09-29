@@ -19,8 +19,12 @@ import { LaunchPage } from './pages/Launch'
 import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
 import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwitcher'
+import { enforceComScannerMode } from './lib/scannerMode'
 
 const TsdPage = lazy(() => import('./pages/Tsd').then((module) => ({ default: module.TsdPage })))
+
+// Одноразово мигрируем старую локальную настройку «USB-клавиатура» в обязательный COM.
+enforceComScannerMode()
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },

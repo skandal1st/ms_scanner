@@ -1,8 +1,7 @@
-import { useRef, useEffect, useState, useCallback, KeyboardEvent } from 'react'
+import { useState, useCallback, type FormEvent } from 'react'
 import { useScanner } from '../hooks/useScanner'
 import { useSerialScanner } from '../hooks/useSerialScanner'
 import { normalizeScannerInput } from '../lib/scannerLayout'
-import { useScannerMode } from '../lib/scannerMode'
 import { useScanStore } from '../store/scanStore'
 import { CodeSearchModal } from './CodeSearchModal'
 import { Icon } from './Icon'
@@ -11,42 +10,12 @@ interface Props {
   documentId: string | null
 }
 
-/** Часть USB-сканеров шлёт префиксом Ctrl+Shift+I/J/C — в Chrome открывается DevTools. */
-function swallowChromeInspectorKeys(ev: globalThis.KeyboardEvent): boolean {
-  if (ev.key === 'F12' || ev.key === 'F11') {
-    ev.preventDefault()
-    ev.stopPropagation()
-    return true
-  }
-  if (ev.ctrlKey && ev.shiftKey) {
-    const k = ev.key.length === 1 ? ev.key.toUpperCase() : ev.key
-    if (k === 'I' || k === 'J' || k === 'C' || k === 'K') {
-      ev.preventDefault()
-      ev.stopPropagation()
-      return true
-    }
-  }
-  if (ev.ctrlKey && !ev.shiftKey && !ev.metaKey && (ev.key === 'u' || ev.key === 'U')) {
-    ev.preventDefault()
-    ev.stopPropagation()
-    return true
-  }
-  if (ev.metaKey && ev.altKey && (ev.key === 'i' || ev.key === 'I')) {
-    ev.preventDefault()
-    ev.stopPropagation()
-    return true
-  }
-  return false
-}
-
 export function ScanInput({ documentId }: Props) {
-  const [value, setValue] = useState('')
+  const [manualValue, setManualValue] = useState('')
+  const [manualOpen, setManualOpen] = useState(false)
   const [lastCode, setLastCode] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
   const { submitCode } = useScanner(documentId)
-  const mode = useScannerMode()
-  const isComMode = mode === 'com'
   const deleteMode = useScanStore((s) => s.deleteMode)
   const setDeleteMode = useScanStore((s) => s.setDeleteMode)
   const unpackBox = useScanStore((s) => s.unpackBox)
@@ -63,121 +32,82 @@ export function ScanInput({ documentId }: Props) {
   )
 
   const serial = useSerialScanner({
-    enabled: isComMode,
+    enabled: true,
     onCode: handleScannedCode,
   })
 
-  // Keyboard wedge: фокус в input, чтобы сканер всегда туда писал.
-  useEffect(() => {
-    if (isComMode) return
-    const el = inputRef.current
-    if (!el) return
-    el.focus()
-    const onBlur = () => setTimeout(() => el.focus(), 0)
-    el.addEventListener('blur', onBlur)
-    return () => el.removeEventListener('blur', onBlur)
-  }, [isComMode])
-
-  // Пока фокус в поле скана — глушим шорткаты DevTools (capture: раньше дефолта Chrome).
-  useEffect(() => {
-    if (isComMode || !documentId) return
-    const onCap = (ev: globalThis.KeyboardEvent) => {
-      if (document.activeElement !== inputRef.current) return
-      swallowChromeInspectorKeys(ev)
-    }
-    window.addEventListener('keydown', onCap, true)
-    return () => window.removeEventListener('keydown', onCap, true)
-  }, [documentId, isComMode])
-
-  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
-    swallowChromeInspectorKeys(e.nativeEvent)
-    if (e.key === 'Enter') {
-      // Берём значение прямо из DOM — у быстрого сканера Enter может прийти
-      // раньше, чем React успеет применить onChange и закрытие state.
-      const raw = inputRef.current?.value ?? value
-      const code = normalizeScannerInput(raw).trim()
-      if (!code) return
-      setValue('')
-      await handleScannedCode(code)
-    }
+  const handleManualSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const code = normalizeScannerInput(manualValue).trim()
+    if (!code) return
+    setManualValue('')
+    await handleScannedCode(code)
   }
-
-  const inputStyle = deleteMode
-    ? { borderColor: 'var(--st-err-fg)', background: 'var(--st-err-bg)' }
-    : undefined
 
   return (
     <div className="scan-input">
-      <label className="field-label" htmlFor="scan-field">Сканирование</label>
+      <div className="field-label">Сканирование</div>
       <div className="scan-input__row">
-        {isComMode ? (
-          <div
-            className="scan-input__field scan-input__com-status"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 6,
-              ...(deleteMode ? { border: '2px solid #dc2626', background: 'var(--st-err-bg)', padding: 6, borderRadius: 6 } : {}),
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              {serial.connected ? (
-                <span className="badge badge--ok"><span className="badge__dot" /> COM-порт подключён</span>
-              ) : (
-                <span className="badge badge--warn">
-                  <span className="badge__dot" /> COM-порт не подключён
-                </span>
-              )}
-              {/* Выбор/выдача порта делается ЗДЕСЬ — в отдельной top-level вкладке
-                  сканирования, где Web Serial разрешён. В окне МС (iframe) доступ к
-                  serial заблокирован Permissions-Policy, поэтому кнопки нет в Настройках. */}
-              {serial.connected ? (
-                <button
-                  type="button"
-                  className="button button--sm"
-                  onClick={() => void serial.disconnect()}
-                >
-                  Отключить
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="button button--sm button--success"
-                  onClick={() => void serial.requestConnect()}
-                  disabled={!serial.supported}
-                >
-                  <Icon name="box" size={14} /> Подключить COM-порт
-                </button>
-              )}
-            </div>
-            {!serial.supported && (
-              <div className="alert alert--warn" style={{ width: '100%', margin: 0 }}>
-                Браузер не поддерживает Web Serial API. Откройте окно сканирования в
-                Chrome или Edge по HTTPS.
-              </div>
+        <div
+          className="scan-input__field scan-input__com-status"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'flex-start',
+            gap: 6,
+            ...(deleteMode ? { border: '2px solid #dc2626', background: 'var(--st-err-bg)', padding: 6, borderRadius: 6 } : {}),
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            {serial.connected ? (
+              <span className="badge badge--ok"><span className="badge__dot" /> COM-порт подключён</span>
+            ) : (
+              <span className="badge badge--warn">
+                <span className="badge__dot" /> COM-порт не подключён
+              </span>
             )}
-            {serial.error && (
-              <div className="alert alert--error" style={{ width: '100%', margin: 0 }}>
-                {serial.error}
-              </div>
+            {/* Выбор/выдача порта делается ЗДЕСЬ — в отдельной top-level вкладке
+                сканирования, где Web Serial разрешён. В окне МС (iframe) доступ к
+                serial заблокирован Permissions-Policy, поэтому кнопки нет в Настройках. */}
+            {serial.connected ? (
+              <button
+                type="button"
+                className="button button--sm"
+                onClick={() => void serial.disconnect()}
+              >
+                Отключить
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="button button--sm button--success"
+                onClick={() => void serial.requestConnect()}
+                disabled={!serial.supported}
+              >
+                <Icon name="box" size={14} /> Подключить COM-порт
+              </button>
             )}
+            <button
+              type="button"
+              className="button button--sm"
+              onClick={() => setManualOpen((open) => !open)}
+              disabled={!documentId}
+            >
+              {manualOpen ? 'Скрыть ручной ввод' : 'Ввести вручную'}
+            </button>
           </div>
-        ) : (
-          <input
-            id="scan-field"
-            ref={inputRef}
-            value={value}
-            onChange={(e) => setValue(normalizeScannerInput(e.target.value))}
-            onKeyDown={handleKeyDown}
-            placeholder={deleteMode ? 'Сканируйте код для удаления…' : 'Сканируйте или введите код…'}
-            disabled={!documentId}
-            className="scan-input__field"
-            autoComplete="off"
-            spellCheck={false}
-            style={inputStyle}
-          />
-        )}
+          {!serial.supported && (
+            <div className="alert alert--warn" style={{ width: '100%', margin: 0 }}>
+              Браузер не поддерживает Web Serial API. Откройте окно сканирования в
+              Chrome или Edge по HTTPS.
+            </div>
+          )}
+          {serial.error && (
+            <div className="alert alert--error" style={{ width: '100%', margin: 0 }}>
+              {serial.error}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           className="button scan-input__camera"
@@ -222,6 +152,27 @@ export function ScanInput({ documentId }: Props) {
           <Icon name="filter" size={15} /> Поиск марки
         </button>
       </div>
+      {manualOpen && (
+        <form
+          className="field-row mt-8"
+          onSubmit={(event) => void handleManualSubmit(event)}
+          style={{ alignItems: 'stretch' }}
+        >
+          <input
+            value={manualValue}
+            onChange={(event) => setManualValue(event.target.value)}
+            placeholder={deleteMode ? 'Введите код для удаления…' : 'Введите код вручную…'}
+            disabled={!documentId}
+            className="scan-input__field"
+            autoComplete="off"
+            spellCheck={false}
+            autoFocus
+          />
+          <button type="submit" className="button button--success" disabled={!documentId || !manualValue.trim()}>
+            Добавить
+          </button>
+        </form>
+      )}
       {deleteMode && (
         <div className="alert alert--error" style={{ marginTop: 8 }}>
           Режим удаления: следующий отсканированный код будет удалён из списка.
