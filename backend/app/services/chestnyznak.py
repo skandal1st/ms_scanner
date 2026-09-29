@@ -251,7 +251,12 @@ def _looks_like_bare_gtin_serial_tail(s: str) -> bool:
         return False
     if not t[:14].isdigit():
         return False
-    if t.startswith("01") and len(t) >= 16 and t[2:16].isdigit():
+    if (
+        t.startswith("01")
+        and len(t) >= 18
+        and t[2:16].isdigit()
+        and t[16:18] == "21"
+    ):
         return False
     return bool(t[14:])
 
@@ -261,7 +266,10 @@ def _normalize_bare_gtin_serial_to_gs1_element_string(s: str) -> str:
     t = (s or "").strip()
     if not _looks_like_bare_gtin_serial_tail(t):
         return t
-    return "01" + t[:14] + "21" + t[14:]
+    # Полный компактный КМ пачки: GTIN(14) + серия(7) + МРЦ(4) + проверка(4).
+    # Для запросов по КИ нужны только GTIN + серия; МРЦ и проверочный код отбрасываем.
+    tail = t[14:21] if len(t) == 29 else t[14:]
+    return "01" + t[:14] + "21" + tail
 
 
 def strip_ai_brackets(code: str) -> str:
@@ -284,6 +292,16 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     """
     if not code:
         return (None, None)
+
+    # Потребительская упаковка табачных групп использует компактный фиксированный
+    # формат без AI и GS: GTIN(14) + серия(7) + МРЦ(4) + код проверки(4).
+    # Последние 8 символов не являются частью серии.
+    if (
+        len(code) == 29
+        and code[:14].isdigit()
+        and not (code.startswith("01") and code[2:16].isdigit() and code[16:18] == "21")
+    ):
+        return (code[:14], code[14:21])
 
     if code.startswith("01") and len(code) >= 16 and code[2:16].isdigit():
         gtin = code[2:16]
@@ -457,6 +475,12 @@ def cis_string_for_moysklad_api(
     # 2) «Голый» код: GTIN(14) + serial[ + GS + криптохвост ], без AI 01/21
     if len(s) >= 15 and s[:14].isdigit():
         gtin = s[:14]
+        # Пачка табачной/альтернативной/никотиносодержащей продукции имеет
+        # нормативный компактный КМ ровно из 29 символов без GS:
+        # GTIN(14) + серия(7) + МРЦ(4) + код проверки(4). В документ МС передаём КИ
+        # GTIN + серия (21 символ), служебный хвост в КИ не входит.
+        if tt in {"TOBACCO", "OTP", "NCP"} and len(s) == 29:
+            return s[:21]
         cut = s[14:].split(_FNC1, 1)
         serial = _trim_serial(cut[0], len(cut) > 1)
         return gtin + serial
@@ -475,6 +499,15 @@ def _cis_confidence(s: str, serial_len: Optional[int]) -> str:
     """Уверенность реконструкции для очищенной строки ``s``. См. normalize_cis."""
     if _FNC1 in s:
         return "exact"  # был разделитель — граница точная
+    # Компактный потребительский КМ табачных групп: при длине серии 7 граница
+    # фиксирована самим 29-символьным форматом, поэтому GS здесь не требуется.
+    if (
+        serial_len == 7
+        and len(s) == 29
+        and s[:14].isdigit()
+        and not (s.startswith("01") and s[2:16].isdigit() and s[16:18] == "21")
+    ):
+        return "exact"
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
         tail = re.sub(r"(?i)%c1", "", s[18:])
     elif len(s) >= 15 and s[:14].isdigit():

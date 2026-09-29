@@ -5,6 +5,7 @@
 """
 
 from app.services.chestnyznak import (
+    _normalize_bare_gtin_serial_to_gs1_element_string,
     parse_gs1_km_gtin_serial,
     extract_gtin,
     is_sscc,
@@ -185,6 +186,33 @@ def test_normalize_gsless_bare_ki_no_tail_is_exact():
     assert cis == f"01{gtin}21ABCDEFG"
 
 
+def test_compact_tobacco_consumer_code_without_gs_is_exact():
+    # Пачка: GTIN(14) + серия(7) + МРЦ(4) + код проверки(4), всего 29 символов.
+    # В этом нормативном формате GS и AI 01/21 отсутствуют по определению.
+    gtin = valid_gtin14()
+    raw = f"{gtin}ABCDEFGAAAAWXYZ"
+
+    parsed_gtin, serial = parse_gs1_km_gtin_serial(raw)
+    assert parsed_gtin == gtin
+    assert serial == "ABCDEFG"
+    assert verify_code_local_gs1(raw).valid is True
+
+    for tracking_type in ("TOBACCO", "OTP", "NCP"):
+        cis, conf = normalize_cis(raw, tracking_type)
+        assert conf == "exact"
+        assert cis == f"{gtin}ABCDEFG"
+    assert _normalize_bare_gtin_serial_to_gs1_element_string(raw) == (
+        f"01{gtin}21ABCDEFG"
+    )
+
+
+def test_structured_29_char_code_is_not_mistaken_for_compact_tobacco():
+    gtin = valid_gtin14()
+    raw = f"01{gtin}21ABCDEFGWXYZ"  # 29 символов, но это структурная AI-нотация.
+    assert len(raw) == 29
+    assert cis_confidence_for_pg(raw, "tobacco") == "ambiguous"
+
+
 # ── cis_confidence_for_pg / serial_len_for_pg (ingest-time gate по pg) ───────────
 
 def test_serial_len_for_pg():
@@ -218,3 +246,12 @@ def test_confidence_for_pg_com_with_gs_is_exact():
     # Настоящий GS → граница точная независимо от группы.
     raw = f"01{_LIVE_OTP_GTIN}21{_LIVE_OTP_SERIAL}{GS}{_LIVE_OTP_TAIL}"
     assert cis_confidence_for_pg(raw, "otp") == "exact"
+
+
+def test_confidence_for_pg_compact_tobacco_code_is_exact_without_gs():
+    gtin = valid_gtin14()
+    raw = f"{gtin}ABCDEFGAAAAWXYZ"
+    for pg in ("tobacco", "otp", "ncp"):
+        assert cis_confidence_for_pg(raw, pg) == "exact"
+    # Та же длина не должна ослаблять gate для нетабачной товарной группы.
+    assert cis_confidence_for_pg(raw, "water") == "ambiguous"
