@@ -12,6 +12,7 @@ from app.services.chestnyznak import (
     cis_compare_forms_for_ms,
     extract_gtin,
     is_sscc,
+    normalize_sscc,
     normalize_gtin_key,
 )
 
@@ -26,7 +27,7 @@ async def _expand_aggregate_for_processing(cz, code: str) -> tuple[list[str], Op
     раскрываем через ``cises/info`` с последующим ``aggregated/list``.
     """
     if is_sscc(code):
-        return list(await cz.unpack_box(code)), None
+        return list(await cz.unpack_box(normalize_sscc(code))), None
 
     info = await cz.get_code_info(code)
     if not (info and info.is_aggregate and info.children):

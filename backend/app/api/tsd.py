@@ -39,7 +39,7 @@ from app.db.models import (
     Workplace,
 )
 from app.db.session import get_db
-from app.services.chestnyznak import is_sscc
+from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import MoySkladService
 
 router = APIRouter(prefix="/tsd", tags=["tsd"])
@@ -536,7 +536,7 @@ async def create_tsd_scan(
 ):
     doc = await _owned_tsd_document(db, device, document_id)
     user, _, _ = await _device_scope(db, device)
-    code = body.code.strip()
+    code = normalize_sscc(body.code)
     if is_sscc(code):
         cz = await _resolve_cz_for_boxes(user, db, doc.id)
         responses = await _create_box_scans_core(

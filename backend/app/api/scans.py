@@ -22,6 +22,7 @@ from app.services.chestnyznak import (
     cis_confidence_for_pg,
     extract_gtin,
     is_sscc,
+    normalize_sscc,
     normalize_gtin_key,
     strip_ai_brackets,
     verify_code_local_gs1,
@@ -545,6 +546,8 @@ async def _create_box_scans_core(
     ``plan_gtins`` делает вызывающий — сюда передаём примитивы (а не ORM-документ),
     т.к. в массовой загрузке документ истекает после per-code commit.
     """
+    sscc = normalize_sscc(sscc)
+
     # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
     if not unpack:
         try:
@@ -610,7 +613,7 @@ async def create_box_scans(
     Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
     doc = await _ensure_document_owner(body.document_id, current_user, db)
-    sscc = body.sscc.strip()
+    sscc = normalize_sscc(body.sscc)
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
@@ -643,7 +646,7 @@ async def create_bulk_scans(
     seen: set[str] = set()
     codes: List[str] = []
     for raw in body.codes:
-        c = (raw or "").strip()
+        c = normalize_sscc(raw or "")
         if not c or c in seen:
             continue
         seen.add(c)

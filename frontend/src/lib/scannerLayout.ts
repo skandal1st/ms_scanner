@@ -14,5 +14,9 @@ export function normalizeScannerInput(input: string): string {
   for (const ch of input) {
     out += RU_TO_EN[ch] ?? ch
   }
-  return out
+  const trimmed = out.trim()
+  // Ручная вставка GS1 часто содержит человекочитаемый AI: (00)<18 цифр>.
+  // В API и ЧЗ SSCC должен уходить в каноническом виде 00<18 цифр>.
+  const bracketedSscc = trimmed.match(/^\(00\)(\d{18})$/)
+  return bracketedSscc ? `00${bracketedSscc[1]}` : out
 }

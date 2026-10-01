@@ -9,6 +9,7 @@ from app.services.chestnyznak import (
     parse_gs1_km_gtin_serial,
     extract_gtin,
     is_sscc,
+    normalize_sscc,
     normalize_gtin_key,
     verify_code_local_gs1,
     cis_string_for_moysklad_api,
@@ -65,6 +66,17 @@ def test_extract_gtin_matches_parse():
 
 def test_is_sscc_true_for_20_digit_00():
     assert is_sscc("00" + "1" * 18) is True
+
+
+def test_is_sscc_accepts_bracketed_ai00_and_normalizes_to_canonical_form():
+    human_readable = "(00)046402759700334510"
+    assert normalize_sscc(human_readable) == "00046402759700334510"
+    assert is_sscc(human_readable) is True
+
+
+def test_normalize_sscc_does_not_strip_parentheses_from_regular_cis():
+    cis = "010460717793018321AB(CD)"
+    assert normalize_sscc(cis) == cis
 
 
 def test_is_sscc_false_for_wrong_len_or_prefix():

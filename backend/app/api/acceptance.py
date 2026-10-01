@@ -35,6 +35,7 @@ from app.services.chestnyznak import (
     parse_gs1_km_gtin_serial,
     extract_gtin,
     is_sscc,
+    normalize_sscc,
     CZ_PRODUCT_GROUP_CATALOG,
     CZ_PRODUCT_GROUP_CODES,
     normalize_product_groups,
@@ -1261,7 +1262,8 @@ async def import_marks(
             order.append(g)
         return groups[g]
 
-    for code in codes:
+    for raw_code in codes:
+        code = normalize_sscc(raw_code)
         if is_sscc(code):
             _bucket(_package_gtin(code, None))["packages"].append(code)
         else:

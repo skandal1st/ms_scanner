@@ -23,7 +23,7 @@ export function ScanInput({ documentId }: Props) {
 
   const handleScannedCode = useCallback(
     async (code: string) => {
-      const trimmed = code.trim()
+      const trimmed = normalizeScannerInput(code).trim()
       if (!trimmed) return
       setLastCode(trimmed)
       await submitCode(trimmed)

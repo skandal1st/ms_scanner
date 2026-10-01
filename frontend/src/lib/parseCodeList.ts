@@ -1,3 +1,5 @@
+import { normalizeScannerInput } from './scannerLayout'
+
 /**
  * Разобрать вставленный/загруженный список марок в массив кодов.
  *
@@ -13,7 +15,7 @@ export function parseCodeList(text: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const part of text.split(/[\r\n\t]+/)) {
-    const code = part.trim()
+    const code = normalizeScannerInput(part).trim()
     if (!code || seen.has(code)) continue
     seen.add(code)
     out.push(code)

@@ -705,6 +705,7 @@ class ChestnyZnakService:
         по коду SSCC (перебор товарных групп) и разворачивает дерево вложенных КИ в
         листовые КМ пачек. Если ЧЗ состав не отдал — ``CZApiError``.
         """
+        sscc = normalize_sscc(sscc)
         if self.mock:
             await asyncio.sleep(random.uniform(0.2, 0.5))
             count = random.randint(3, 5)
@@ -793,6 +794,7 @@ class ChestnyZnakService:
         Перечень индивидуальных КМ этот метод не возвращает — для «целиком» он и не
         нужен: в МС уходит один transportpack-код, состав резолвит МС/ЧЗ.
         """
+        sscc = normalize_sscc(sscc)
         if self.mock:
             await asyncio.sleep(random.uniform(0.2, 0.5))
             pool = list(plan_gtins or [])
@@ -1512,9 +1514,22 @@ def extract_gtin(code: str) -> Optional[str]:
     return g
 
 
+def normalize_sscc(code: str) -> str:
+    """Канонический SSCC: ``(00)<18 цифр>`` → ``00<18 цифр>``.
+
+    При ручной вставке GS1-коды часто приходят в человекочитаемой AI-нотации со
+    скобками. Скобки убираем только у полного SSCC, чтобы не менять допустимые
+    символы ``(``/``)`` внутри серийной части обычного КМ.
+    """
+    c = (code or "").strip()
+    if len(c) == 22 and c.startswith("(00)") and c[4:].isdigit():
+        return "00" + c[4:]
+    return c
+
+
 def is_sscc(code: str) -> bool:
-    """SSCC-короб — AI 00 + 18 цифр (20 знаков). Раскладка — только на клиенте (normalizeScannerInput)."""
-    c = code.strip()
+    """SSCC-короб — AI 00 + 18 цифр, с допустимой записью AI как ``(00)``."""
+    c = normalize_sscc(code)
     return c.startswith("00") and len(c) == 20 and c.isdigit()
 
 

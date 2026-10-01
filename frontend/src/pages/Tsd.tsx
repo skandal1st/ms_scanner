@@ -1,8 +1,9 @@
-import { FormEvent, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import axios from 'axios'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem } from '../api/client'
 import { buildProgress } from '../store/scanStore'
+import { normalizeScannerInput } from '../lib/scannerLayout'
 
 function apiMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -231,7 +232,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => { inputRef.current?.focus() }, [])
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (code.trim() && !scan.isPending) scan.mutate(code.trim())
+    const normalized = normalizeScannerInput(code).trim()
+    if (normalized && !scan.isPending) scan.mutate(normalized)
   }
   return (
     <main className="tsd-shell tsd-picking">
