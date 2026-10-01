@@ -5,6 +5,7 @@ import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
+import { FlowWorkspaceTabs, useFlowWorkspaceTab } from '../components/FlowWorkspaceTabs'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { UnknownProductsPicker } from '../components/UnknownProductsPicker'
 import { BulkMarksModal } from '../components/BulkMarksModal'
@@ -38,6 +39,11 @@ export function ShipmentPage({
   const modal = useModal()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
+  const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('shipment_workspace_tab')
+  const workspaceIssueCount = stats.invalid + stats.duplicate + stats.unknown_product + stats.used_in_other_doc
+  const summaryCount = progress.hasPlan
+    ? `${progress.total.scanned}/${progress.total.expected}`
+    : progress.total.addedTotal
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
   // вкладку и порт открытыми всю смену, как это делает 1С.
@@ -313,14 +319,29 @@ export function ShipmentPage({
 
         <div className="acc-right">
           <UnknownProductsPicker />
-          <ProgressTable />
-          <div className="acc-right__head">
-            <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
-            <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>
-          </div>
-          <div className="acc-table-wrap">
-            <CodesTable signatureInn={signatureInn} />
-          </div>
+          <FlowWorkspaceTabs
+            summaryLabel="Сборка"
+            summaryCount={summaryCount}
+            marksCount={scans.length}
+            issueCount={workspaceIssueCount}
+            pendingCount={stats.scanned + stats.pending}
+            active={workspaceTab}
+            onChange={setWorkspaceTab}
+            summary={
+              progress.hasSummary ? (
+                <ProgressTable tabbed onInspectMarks={() => setWorkspaceTab('marks')} />
+              ) : (
+                <div className="flow-tabs__empty">
+                  Выберите отгрузку и начните сканирование — здесь появится состав сборки.
+                </div>
+              )
+            }
+            marks={
+              <div className="acc-table-wrap">
+                <CodesTable signatureInn={signatureInn} />
+              </div>
+            }
+          />
         </div>
       </div>
 

@@ -14,7 +14,12 @@ import type { CSSProperties } from 'react'
 
 const COLLAPSE_KEY = 'progress_collapsed'
 
-export function ProgressTable() {
+interface ProgressTableProps {
+  tabbed?: boolean
+  onInspectMarks?: () => void
+}
+
+export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableProps = {}) {
   const modal = useModal()
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
@@ -73,32 +78,36 @@ export function ProgressTable() {
     progress.hasPlan &&
     progress.total.expected > 0 &&
     progress.total.addedTotal > progress.total.expected
+  const isCollapsed = tabbed ? false : collapsed
 
   return (
-    <div style={styles.wrap}>
+    <div style={{ ...styles.wrap, ...(tabbed ? styles.tabbedWrap : {}) }}>
       <div
-        style={{ ...styles.head, cursor: 'pointer', marginBottom: collapsed ? 6 : 10 }}
-        onClick={() => setCollapsed((v) => !v)}
-        role="button"
-        tabIndex={0}
+        style={{ ...styles.head, cursor: tabbed ? 'default' : 'pointer', marginBottom: isCollapsed ? 6 : 10 }}
+        onClick={tabbed ? undefined : () => setCollapsed((v) => !v)}
+        role={tabbed ? undefined : 'button'}
+        tabIndex={tabbed ? undefined : 0}
         onKeyDown={(e) => {
+          if (tabbed) return
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
             setCollapsed((v) => !v)
           }
         }}
-        aria-expanded={!collapsed}
+        aria-expanded={tabbed ? undefined : !collapsed}
       >
         <span style={styles.title}>
-          <Icon
-            name="chevron"
-            size={15}
-            style={{
-              ...styles.chevron,
-              transform: collapsed ? 'rotate(-90deg)' : 'none',
-              transition: 'transform 0.15s ease',
-            }}
-          />
+          {!tabbed && (
+            <Icon
+              name="chevron"
+              size={15}
+              style={{
+                ...styles.chevron,
+                transform: collapsed ? 'rotate(-90deg)' : 'none',
+                transition: 'transform 0.15s ease',
+              }}
+            />
+          )}
           {title}
         </span>
         {progress.hasPlan ? (
@@ -116,7 +125,7 @@ export function ProgressTable() {
           </span>
         )}
       </div>
-      {collapsed && progress.hasPlan && (
+      {isCollapsed && progress.hasPlan && (
         <div style={styles.barWrap}>
           <div
             style={{
@@ -131,7 +140,7 @@ export function ProgressTable() {
           />
         </div>
       )}
-      {!collapsed && canPickProduct && (
+      {!isCollapsed && canPickProduct && (
         <div style={styles.targetBar}>
           <span style={styles.targetLabel}>Сканировать в товар:</span>
           <button
@@ -152,7 +161,7 @@ export function ProgressTable() {
           </button>
         </div>
       )}
-      {!collapsed && <div style={{ ...styles.list, maxHeight: listHeight }}>
+      {!isCollapsed && <div style={{ ...styles.list, ...(tabbed ? styles.tabbedList : { maxHeight: listHeight }) }}>
         {progress.rows.map((item) => {
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
@@ -180,8 +189,10 @@ export function ProgressTable() {
           const selectable = Boolean(item.product_id || gtinKey)
           const isTarget = Boolean(item.product_id && targetProductId === item.product_id)
           const isSelected = Boolean(selection && selectionMatchesRow(selection, item))
-          const select = () =>
+          const select = () => {
             togglePositionSelection({ productId: item.product_id, gtinKey })
+            onInspectMarks?.()
+          }
           const rowStyle: CSSProperties = {
             ...styles.row,
             cursor: selectable ? 'pointer' : 'default',
@@ -237,7 +248,7 @@ export function ProgressTable() {
           )
         })}
       </div>}
-      {!collapsed && (
+      {!isCollapsed && !tabbed && (
         <div
           className="acc-hsplit"
           onMouseDown={startResize}
@@ -246,7 +257,7 @@ export function ProgressTable() {
           title="Потяните, чтобы изменить высоту панели прогресса"
         />
       )}
-      {!collapsed && progress.offPlanRows.length > 0 && (
+      {!isCollapsed && progress.offPlanRows.length > 0 && (
         <div style={styles.offPlanWrap}>
           <div style={styles.offPlanHead}>
             <Icon name="warning" size={14} /> Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
@@ -274,7 +285,7 @@ export function ProgressTable() {
           ))}
         </div>
       )}
-      {!collapsed && overflow > 0 && progress.hasPlan && (
+      {!isCollapsed && overflow > 0 && progress.hasPlan && (
         <div style={styles.overflowNote}>
           Всего сверх плана: {overflow}{' '}
           <span style={{ color: 'var(--ms-text-subtle)' }}>— уйдут в отгрузку вместе с валидными</span>
@@ -292,6 +303,16 @@ const styles: Record<string, CSSProperties> = {
     padding: 14,
     marginBottom: 12,
     boxShadow: 'var(--shadow-1)',
+  },
+  tabbedWrap: {
+    display: 'flex',
+    flex: 1,
+    minHeight: 0,
+    flexDirection: 'column',
+    marginBottom: 0,
+    border: 0,
+    borderRadius: 0,
+    boxShadow: 'none',
   },
   head: {
     display: 'flex',
@@ -347,6 +368,11 @@ const styles: Record<string, CSSProperties> = {
     // Компенсируем отрицательные поля/outline выделенных строк, чтобы их не
     // подрезал скролл-контейнер и не появлялась горизонтальная прокрутка.
     padding: '4px 6px',
+  },
+  tabbedList: {
+    flex: 1,
+    minHeight: 0,
+    maxHeight: 'none',
   },
   row: {},
   rowHead: {

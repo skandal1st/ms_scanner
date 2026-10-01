@@ -249,10 +249,93 @@ html, body, #root { height: 100%; }
 .acc-right__head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 .acc-table-wrap {
   flex: 1;
+  min-height: 0;
   overflow: auto;
   border: 1px solid var(--ms-border-light);
   border-radius: var(--r-md);
   background: var(--ms-bg);
+}
+.flow-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--ms-border-light);
+  border-radius: var(--r-md);
+  background: var(--ms-bg);
+  box-shadow: var(--shadow-1);
+}
+.flow-tabs__list {
+  display: flex;
+  min-height: 42px;
+  padding: 0 10px;
+  gap: 2px;
+  border-bottom: 1px solid var(--ms-border-light);
+  background: var(--surface-2);
+}
+.flow-tabs__tab {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 130px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ms-text-muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.flow-tabs__tab:hover { color: var(--ms-text); background: var(--ms-bg); }
+.flow-tabs__tab:focus-visible { outline: 2px solid var(--brand); outline-offset: -3px; }
+.flow-tabs__tab--active {
+  color: var(--brand-strong);
+  border-bottom-color: var(--brand);
+  background: var(--ms-bg);
+}
+.flow-tabs__count {
+  color: var(--ms-text-subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.flow-tabs__badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: var(--r-pill);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.flow-tabs__badge--pending { color: var(--st-warn-fg); background: var(--st-warn-bg); }
+.flow-tabs__badge--issue { color: var(--st-err-fg); background: var(--st-err-bg); }
+.flow-tabs__panel {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 12px;
+  overflow: hidden;
+}
+.flow-tabs__panel[hidden] { display: none; }
+.flow-tabs__empty {
+  display: grid;
+  min-height: 180px;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+  color: var(--ms-text-muted);
+  font-size: 13px;
+  text-align: center;
 }
 .acc-footer {
   display: flex;

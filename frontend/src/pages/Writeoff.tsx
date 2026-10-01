@@ -6,6 +6,7 @@ import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
+import { FlowWorkspaceTabs, useFlowWorkspaceTab } from '../components/FlowWorkspaceTabs'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
 import { Icon } from '../components/Icon'
 import { useScanStore } from '../store/scanStore'
@@ -49,7 +50,13 @@ export function WriteoffPage({
     setWriteoffResult,
     verifying,
     setVerifying,
+    getProgress,
   } = useScanStore()
+  const progress = getProgress()
+  const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('writeoff_workspace_tab')
+  const summaryCount = progress.hasPlan
+    ? `${progress.total.scanned}/${progress.total.expected}`
+    : progress.total.addedTotal
   const qc = useQueryClient()
 
   const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
@@ -368,7 +375,6 @@ export function WriteoffPage({
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
           <StatsPanel />
-          <ProgressTable />
 
           <div
             className="section"
@@ -456,43 +462,61 @@ export function WriteoffPage({
         </div>
 
         <div className="acc-right">
-          <div className="acc-right__head">
-            <span className="h3" style={{ margin: 0 }}>Коды маркировки</span>
-            <span className="text-muted" style={{ fontSize: 11 }}>{scans.length} шт.</span>
-          </div>
-          {unresolved.length > 0 && (
-            <div
-              role="alert"
-              style={{
-                margin: '0 0 10px',
-                padding: 12,
-                background: 'var(--st-err-bg)',
-                border: '1px solid var(--st-err-bd)',
-                borderRadius: 'var(--r-md)',
-              }}
-            >
-              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--st-err-fg)', marginBottom: 6 }}>
-                Не удалось списать ({unresolved.length}) — Честный Знак не нашёл эти марки
-              </div>
-              <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-                {unresolved.map((u) => (
-                  <div key={u.cis} style={{ fontSize: 11, color: 'var(--st-err-fg)', display: 'flex', gap: 8 }}>
-                    <code style={{ flex: 1, wordBreak: 'break-all' }}>
-                      {u.cis.slice(0, 40)}{u.cis.length > 40 ? '…' : ''}
-                    </code>
-                    <span style={{ flexShrink: 0, color: 'var(--st-err-fg)', fontWeight: 600 }}>{u.reason}</span>
+          <FlowWorkspaceTabs
+            summaryLabel="Состав списания"
+            summaryCount={summaryCount}
+            marksCount={scans.length}
+            issueCount={stats.invalid + stats.duplicate + stats.unknown_product + stats.used_in_other_doc + unresolved.length}
+            pendingCount={stats.scanned + stats.pending}
+            active={workspaceTab}
+            onChange={setWorkspaceTab}
+            summary={
+              progress.hasSummary ? (
+                <ProgressTable tabbed onInspectMarks={() => setWorkspaceTab('marks')} />
+              ) : (
+                <div className="flow-tabs__empty">
+                  Выберите документ и начните сканирование — здесь появится состав списания.
+                </div>
+              )
+            }
+            marks={
+              <>
+                {unresolved.length > 0 && (
+                  <div
+                    role="alert"
+                    style={{
+                      margin: '0 0 10px',
+                      padding: 12,
+                      background: 'var(--st-err-bg)',
+                      border: '1px solid var(--st-err-bd)',
+                      borderRadius: 'var(--r-md)',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--st-err-fg)', marginBottom: 6 }}>
+                      Не удалось списать ({unresolved.length}) — Честный Знак не нашёл эти марки
+                    </div>
+                    <div style={{ maxHeight: 160, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      {unresolved.map((u) => (
+                        <div key={u.cis} style={{ fontSize: 11, color: 'var(--st-err-fg)', display: 'flex', gap: 8 }}>
+                          <code style={{ flex: 1, wordBreak: 'break-all' }}>
+                            {u.cis.slice(0, 40)}{u.cis.length > 40 ? '…' : ''}
+                          </code>
+                          <span style={{ flexShrink: 0, color: 'var(--st-err-fg)', fontWeight: 600 }}>{u.reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--st-err-fg)', marginTop: 6, opacity: 0.85 }}>
+                      Остальные марки списываются как обычно. Проверьте эти коды и удалите
+                      из документа, если они не подлежат списанию.
+                    </div>
                   </div>
-                ))}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--st-err-fg)', marginTop: 6, opacity: 0.85 }}>
-                Остальные марки списываются как обычно. Проверьте эти коды и удалите
-                из документа, если они не подлежат списанию.
-              </div>
-            </div>
-          )}
-          <div className="acc-table-wrap">
-            <CodesTable />
-          </div>
+                )}
+                <div className="acc-table-wrap">
+                  <CodesTable />
+                </div>
+              </>
+            }
+          />
         </div>
       </div>
 
