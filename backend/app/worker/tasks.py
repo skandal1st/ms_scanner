@@ -35,6 +35,66 @@ async def _expand_aggregate_for_processing(cz, code: str) -> tuple[list[str], Op
     return list(info.children), info.product_name
 
 
+def _build_moysklad_scans_data(
+    scans,
+    kind: str,
+    gtin_to_product_id: dict[str, str],
+) -> list[dict]:
+    """Подготовить сканы к записи в позиции документа МойСклад.
+
+    Для отгрузки SSCC, который пользователь выбрал как «короб целиком»
+    (``is_box=True``), всегда остаётся одним ``transportpack``. Состав короба может
+    быть сохранён в ``child_codes`` после проверки в ЧЗ, но это справочная
+    информация и не должно превращать выбранный пользователем короб в пачки.
+
+    При приёмке агрегаты по-прежнему разворачиваются: этот поток импортирует коды
+    упаковок из УПД и записывает в МС вложенные марки.
+    """
+    rows: list[dict] = []
+    for scan in scans:
+        pid_default = (
+            scan.moysklad_product_id
+            or (
+                gtin_to_product_id.get(normalize_gtin_key(scan.gtin))
+                if scan.gtin
+                else None
+            )
+        )
+        send_whole_box = kind == "demand" and bool(scan.is_box)
+        if scan.child_codes and not send_whole_box:
+            # Развёрнутый агрегат: в МС пишем КМ вложенных пачек поштучно.
+            for child_code in scan.child_codes:
+                child_gtin = (
+                    normalize_gtin_key(extract_gtin(child_code))
+                    or normalize_gtin_key(scan.gtin)
+                )
+                rows.append({
+                    "code": child_code,
+                    "gtin": child_gtin,
+                    "product_id": (
+                        scan.moysklad_product_id
+                        or (gtin_to_product_id.get(child_gtin) if child_gtin else None)
+                        or pid_default
+                    ),
+                    "is_box": False,
+                    "quantity": 1,
+                })
+        else:
+            rows.append({
+                "code": scan.code,
+                "gtin": scan.gtin,
+                "product_id": pid_default,
+                "is_box": scan.is_box,
+                "is_barcode": scan.is_barcode,
+                "quantity": (
+                    (int(scan.box_quantity or 0) or 1)
+                    if (scan.is_box or scan.is_barcode)
+                    else 1
+                ),
+            })
+    return rows
+
+
 def _extract_moysklad_error(body: str) -> Optional[str]:
     """Достать человекочитаемый текст ошибки из тела ответа МС ({"errors":[{"error":...}]}).
 
@@ -1106,7 +1166,15 @@ async def _process_document_async(document_id: str, user_id: str):
         # такие агрегаты в листовые КМ пачек через ЧЗ (cises/info + aggregated/list,
         # «короб→блоки→пачки»), иначе в МС уйдёт код блока как одна штука. Сканы
         # отгрузки (demand) уже развёрнуты в verify_code_task — у них child_codes есть.
-        boxes_to_expand = [s for s in valid_scans if s.is_box and not s.child_codes]
+        # В отгрузке is_box означает явный выбор «Короб: целиком»: такой SSCC
+        # отправляем одним transportpack и не раскрываем здесь повторно. Для режима
+        # «раскрывать» /scans/box сразу создаёт отдельные сканы пачек (is_box=False).
+        # Автоматическое раскрытие перед записью требуется только для приёмки по УПД.
+        boxes_to_expand = (
+            [s for s in valid_scans if s.is_box and not s.child_codes]
+            if kind == "supply"
+            else []
+        )
         if boxes_to_expand:
             # Развернуть агрегаты (НомУпак: блок/короб) в листовые КМ можно только
             # через ЧЗ. Без валидного токена (или в mock-режиме) писать сырые коды
@@ -1294,47 +1362,11 @@ async def _process_document_async(document_id: str, user_id: str):
                         remaining=len(remaining_scans),
                     )
                     break
-                scans_data = []
-                for s in remaining_scans:
-                    pid_default = (
-                        s.moysklad_product_id
-                        or (
-                            gtin_to_product_id.get(normalize_gtin_key(s.gtin))
-                            if s.gtin
-                            else None
-                        )
-                    )
-                    if s.child_codes:
-                        # Блок/агрегат: в МС пишем КМ вложенных пачек поштучно,
-                        # код блока не отправляем.
-                        for cc in s.child_codes:
-                            cg = normalize_gtin_key(extract_gtin(cc)) or normalize_gtin_key(s.gtin)
-                            scans_data.append({
-                                "code": cc,
-                                "gtin": cg,
-                                "product_id": (
-                                    s.moysklad_product_id
-                                    or (gtin_to_product_id.get(cg) if cg else None)
-                                    or pid_default
-                                ),
-                                "is_box": False,
-                                "quantity": 1,
-                            })
-                    else:
-                        scans_data.append({
-                            "code": s.code,
-                            "gtin": s.gtin,
-                            "product_id": pid_default,
-                            "is_box": s.is_box,
-                            # Штрихкод немаркированного товара: quantity без trackingCode.
-                            "is_barcode": s.is_barcode,
-                            # Короб «целиком»/штрихкод = box_quantity единиц; обычный скан = 1.
-                            "quantity": (
-                                (int(s.box_quantity or 0) or 1)
-                                if (s.is_box or s.is_barcode)
-                                else 1
-                            ),
-                        })
+                scans_data = _build_moysklad_scans_data(
+                    remaining_scans,
+                    kind,
+                    gtin_to_product_id,
+                )
                 # В update_document попадут только строки с product_id.
                 if not any(s.get("product_id") for s in scans_data):
                     logger.warning(
