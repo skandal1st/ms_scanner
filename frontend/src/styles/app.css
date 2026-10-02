@@ -858,3 +858,11 @@ html, body, #root { height: 100%; }
 .tsd-online--offline { color: #a13b18; }
 .tsd-online--offline i { background: #a13b18; }
 .tsd-shell { padding-bottom: env(safe-area-inset-bottom); }
+
+.tsd-input-actions { display: flex; gap: 8px; width: 100%; }
+.tsd-input-actions .tsd-button { flex: 1; min-height: 44px; }
+.tsd-code-debug { margin: 8px 18px 18px; font-size: 13px; }
+.tsd-code-debug summary { cursor: pointer; padding: 8px 0; }
+.tsd-code-debug code { display: block; padding: 10px; overflow-wrap: anywhere; white-space: pre-wrap; user-select: text; background: #edf0f6; }
+.tsd-scan-box input { height: 40px; color: #17233d; caret-color: auto; font-family: monospace; font-size: 14px; }
+.tsd-last span { white-space: normal; overflow-wrap: anywhere; }
