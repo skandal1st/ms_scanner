@@ -869,6 +869,8 @@ export const tsdApi = {
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code }),
   undoLast: (id: string) =>
     tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/last`),
+  deleteScan: (id: string, scanId: string) =>
+    tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/${scanId}`),
   complete: (id: string) => tsdClient.post(`/tsd/documents/${id}/complete`),
 }
 

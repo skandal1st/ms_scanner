@@ -567,6 +567,8 @@ async def delete_last_tsd_scan(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, device.user_id)
     scan = (
         await db.execute(
             select(Scan).where(Scan.document_id == doc.id).order_by(Scan.scanned_at.desc()).limit(1)
@@ -579,6 +581,30 @@ async def delete_last_tsd_scan(
     await db.commit()
     logger.info(
         "tsd.scan.undone", device_id=str(device.id), document_id=str(doc.id), scan_id=str(scan.id)
+    )
+    return response
+
+
+@router.delete("/documents/{document_id}/scans/{scan_id}", response_model=ScanResponse)
+async def delete_tsd_scan(
+    document_id: UUID,
+    scan_id: UUID,
+    device: TsdDevice = Depends(get_tsd_device),
+    db: AsyncSession = Depends(get_db),
+):
+    await _owned_tsd_document(db, device, document_id)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, device.user_id)
+    scan = (await db.execute(select(Scan).where(
+        Scan.id == scan_id, Scan.document_id == doc.id,
+    ))).scalar_one_or_none()
+    if not scan:
+        raise HTTPException(404, "Марка не найдена в этой отгрузке")
+    response = ScanResponse.model_validate(scan)
+    await db.delete(scan)
+    await db.commit()
+    logger.info(
+        "tsd.scan.deleted", device_id=str(device.id), document_id=str(doc.id), scan_id=str(scan.id)
     )
     return response
 

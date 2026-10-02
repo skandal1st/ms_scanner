@@ -201,6 +201,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [code, setCode] = useState('')
   const [manualInput, setManualInput] = useState(false)
   const [lastCode, setLastCode] = useState('')
+  const [reviewing, setReviewing] = useState(false)
+  const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
+  const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
+  const [visibleScans, setVisibleScans] = useState(50)
   const submitting = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const { data: doc = initial } = useQuery({
@@ -216,6 +220,14 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     (Boolean(effectiveGtinKey(value)) && normalizeGtinKey(row.gtin) === effectiveGtinKey(value)),
   )
   const current = (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
+  const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
+  const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
+    || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
+  const selectPosition = (value: typeof positionFilter) => {
+    setPositionFilter(value)
+    setSelectedScanId(null)
+    setVisibleScans(50)
+  }
   const percent = progress.total.expected > 0
     ? Math.min(100, Math.round(progress.total.addedTotal * 100 / progress.total.expected))
     : 0
@@ -254,6 +266,19 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     onSuccess: () => { setMessage(null); refresh() },
     onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
   })
+  const remove = useMutation({
+    networkMode: 'always',
+    mutationFn: (scanId: string) => tsdApi.deleteScan(doc.id, scanId).then((r) => r.data),
+    onMutate: () => qc.cancelQueries({ queryKey: ['tsd-document', initial.id] }),
+    onSuccess: (removed) => {
+      qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => previous
+        ? { ...previous, scans: previous.scans.filter((item) => item.id !== removed.id) } : previous)
+      setSelectedScanId(null)
+      setMessage({ kind: 'ok', text: 'Выбранная марка удалена из сборки' })
+      refresh()
+    },
+    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+  })
   const complete = useMutation({
     networkMode: 'always',
     mutationFn: () => tsdApi.complete(doc.id),
@@ -263,13 +288,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => {
     // Android scanners may inject through the IME and need an editable, focused input.
     // Restore focus after React applies mode changes or removes readOnly after a request.
-    if (!scan.isPending && !undo.isPending && !complete.isPending) {
+    if (!reviewing && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending) {
       inputRef.current?.focus()
     }
-  }, [manualInput, scan.isPending, undo.isPending, complete.isPending])
+  }, [manualInput, reviewing, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
-    if (!normalized || submitting.current || scan.isPending || complete.isPending || undo.isPending) return
+    if (!normalized || reviewing || submitting.current || scan.isPending || complete.isPending || undo.isPending || remove.isPending) return
     if (!online) {
       setMessage({ kind: 'error', text: 'Нет сети. Подключитесь к Wi-Fi и повторите скан.' })
       return
@@ -284,10 +309,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => {
     // Keyboard-wedge scanners may paste an entire code without an Enter suffix.
     // Manual typing is submitted explicitly; no offline or pending scan queue.
-    if (!code.trim() || manualInput || !online || scan.isPending || undo.isPending || complete.isPending) return
+    if (!code.trim() || reviewing || manualInput || !online || scan.isPending || undo.isPending || complete.isPending || remove.isPending) return
     const timer = window.setTimeout(() => acceptRef.current(), 500)
     return () => window.clearTimeout(timer)
-  }, [code, manualInput, online, scan.isPending, undo.isPending, complete.isPending])
+  }, [code, reviewing, manualInput, online, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
   const submit = (event: FormEvent) => { event.preventDefault(); acceptCode() }
   return (
     <main className="tsd-shell tsd-picking">
@@ -316,14 +341,14 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <span aria-hidden>▥</span>
         <label htmlFor="tsd-scan-input">Сканируйте штрихкод</label>
         <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
-          readOnly={scan.isPending || undo.isPending || complete.isPending} inputMode="text"
+          readOnly={reviewing || scan.isPending || undo.isPending || complete.isPending || remove.isPending} inputMode="text"
           autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
-        <p className="hint">{scan.isPending ? 'Записываем скан…' : manualInput ? 'Введите код и нажмите «Принять код».' : 'Код принимается автоматически, Enter не обязателен.'}</p>
+        <p className="hint">{reviewing ? 'Закройте список позиций, чтобы продолжить сканирование.' : scan.isPending ? 'Записываем скан…' : manualInput ? 'Введите код и нажмите «Принять код».' : 'Код принимается автоматически, Enter не обязателен.'}</p>
         <div className="tsd-input-actions">
           <button type="button" className="tsd-button" onClick={() => setManualInput((value) => !value)}>
             {manualInput ? 'Режим сканера' : 'Ввести вручную'}
           </button>
-          <button type="submit" className="tsd-button tsd-button--primary" disabled={!online || !code.trim() || scan.isPending || undo.isPending || complete.isPending}>Принять код</button>
+          <button type="submit" className="tsd-button tsd-button--primary" disabled={reviewing || !online || !code.trim() || scan.isPending || undo.isPending || complete.isPending || remove.isPending}>Принять код</button>
         </div>
       </form>
       {message || last ? (
@@ -333,11 +358,49 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         </div>
       ) : null}
       {lastCode && <details className="tsd-code-debug"><summary>Показать последний код</summary><code>{lastCode}</code></details>}
+      <details className="tsd-order-review" onToggle={(event) => setReviewing(event.currentTarget.open)}>
+        <summary>Позиции заказа ({progress.rows.length}) и сканы ({doc.scans.length})</summary>
+        <p className="hint">Выберите товар, затем конкретную марку для удаления при пересорте.</p>
+        {reviewing && <>
+          <div className="tsd-position-list">
+            {progress.rows.map((row, index) => <button key={`${row.product_id || row.gtin}:${index}`} type="button"
+              aria-pressed={positionFilter === index} className="tsd-position" onClick={() => selectPosition(index)}>
+              <strong>{row.product_name}</strong>
+              <span>{row.unmarked ? 'Штрихкод' : 'GTIN'}: {row.gtin}</span>
+              <b>{row.addedTotal} / {row.expected} шт.{row.addedTotal > row.expected ? ' · Сверх плана' : ''}</b>
+            </button>)}
+          </div>
+          <div className="tsd-input-actions">
+            <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>
+            <button type="button" className="tsd-button" aria-pressed={positionFilter === 'other'} onClick={() => selectPosition('other')}>Вне плана</button>
+          </div>
+          <h3>Сканы: {filteredScans.length}</h3>
+          {filteredScans.length === 0 && <p className="hint">По выбранной позиции ещё нет сканов.</p>}
+          <div className="tsd-mark-list">
+            {filteredScans.slice(0, visibleScans).map((item) => <button type="button" key={item.id}
+              className="tsd-mark" aria-pressed={selectedScanId === item.id} disabled={remove.isPending}
+              onClick={() => setSelectedScanId((previous) => previous === item.id ? null : item.id)}>
+              <strong>{item.product_name || rowForScan(item)?.product_name || 'Товар вне плана'}</strong>
+              <span>GTIN: {effectiveGtinKey(item) || 'не распознан'}{item.box_quantity ? ` · ${item.box_quantity} шт.` : ''}</span>
+              <code>{item.code}</code>
+              <span>{item.error_message || (['scanned', 'valid', 'overflow'].includes(item.status) ? 'Добавлен в сборку' : 'Не засчитан в сборку')}</span>
+            </button>)}
+          </div>
+          {filteredScans.length > visibleScans && <button type="button" className="tsd-button" onClick={() => setVisibleScans((count) => count + 50)}>Показать ещё 50</button>}
+          {selectedScan && <div className="tsd-delete-selection">
+            <strong>Выбрана марка для удаления</strong><code>{selectedScan.code}</code>
+            {(selectedScan.is_box || selectedScan.is_barcode) && <p>Удаляется весь скан: {selectedScan.box_quantity || 1} шт.</p>}
+            <button type="button" className="tsd-button tsd-button--danger"
+              disabled={!online || doc.status !== 'draft' || remove.isPending || scan.isPending || undo.isPending || complete.isPending}
+              onClick={() => remove.mutate(selectedScan.id)}>{remove.isPending ? 'Удаляем…' : 'Удалить выбранную марку'}</button>
+          </div>}
+        </>}
+      </details>
       <footer className="tsd-actions">
-        <button type="button" className="tsd-button tsd-button--danger" disabled={!online || undo.isPending || scan.isPending || complete.isPending || !last} onClick={() => undo.mutate()}>
+        <button type="button" className="tsd-button tsd-button--danger" disabled={!online || remove.isPending || undo.isPending || scan.isPending || complete.isPending || !last} onClick={() => undo.mutate()}>
           Отменить скан
         </button>
-        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || complete.isPending || scan.isPending || undo.isPending || Boolean(code.trim())} onClick={() => complete.mutate()}>
+        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || remove.isPending || complete.isPending || scan.isPending || undo.isPending || Boolean(code.trim())} onClick={() => complete.mutate()}>
           Завершить сборку
         </button>
       </footer>
