@@ -300,13 +300,16 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
 }
 
 export function TsdPage() {
-  const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token')))
+  const qc = useQueryClient()
+  const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token')) && !new URLSearchParams(window.location.search).has('pair'))
+  const [requestedId, setRequestedId] = useState(() => new URLSearchParams(window.location.search).get('document'))
+  const requestedOnce = useRef<string | null>(null)
   const [activeId, setActiveId] = useState(() => localStorage.getItem('tsd_document_id'))
   const [document, setDocument] = useState<TsdDocumentDetail | null>(null)
   const restored = useQuery({
     queryKey: ['tsd-document', activeId],
     queryFn: () => tsdApi.getDocument(activeId!).then((r) => r.data),
-    enabled: authorized && Boolean(activeId) && !document,
+    enabled: authorized && Boolean(activeId) && !document && !requestedId,
   })
   const open = (doc: TsdDocumentDetail) => {
     localStorage.setItem('tsd_document_id', doc.id)
@@ -317,14 +320,39 @@ export function TsdPage() {
     localStorage.removeItem('tsd_document_id')
     setActiveId(null)
     setDocument(null)
+    setRequestedId(null)
+    window.history.replaceState({}, '', '/tsd')
   }
-  const current = document || restored.data
+  const fromLink = useMutation({
+    networkMode: 'always',
+    mutationFn: (id: string) => tsdApi.selectDocument(id).then((r) => r.data),
+    onSuccess: (doc) => {
+      open(doc)
+      setRequestedId(null)
+      window.history.replaceState({}, '', '/tsd')
+    },
+  })
+  useEffect(() => {
+    if (authorized && requestedId && requestedOnce.current !== requestedId) {
+      requestedOnce.current = requestedId
+      fromLink.mutate(requestedId)
+    }
+  }, [authorized, requestedId])
+  const ready = () => {
+    qc.removeQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('tsd-') })
+    localStorage.removeItem('tsd_document_id')
+    setActiveId(null)
+    setDocument(null)
+    setAuthorized(true)
+  }
+  const current = document || (!requestedId ? restored.data : null)
   let content
-  if (!authorized) content = <TsdLogin onReady={() => setAuthorized(true)} />
-  else if (activeId && !current) content = <main className="tsd-shell tsd-login">
+  if (!authorized) content = <TsdLogin onReady={ready} />
+  else if (requestedId || (activeId && !current)) content = <main className="tsd-shell tsd-login">
     <h1>Сборка заказа</h1>
-    <p>{restored.error ? apiMessage(restored.error) : 'Восстанавливаем документ…'}</p>
-    <button type="button" className="tsd-button" onClick={back}>К списку отгрузок</button>
+    <p>{fromLink.error ? apiMessage(fromLink.error) : restored.error ? apiMessage(restored.error) : requestedId ? 'Открываем отгрузку…' : 'Восстанавливаем документ…'}</p>
+    {requestedId && fromLink.error && <button type="button" className="tsd-button" onClick={() => fromLink.mutate(requestedId)}>Повторить</button>}
+    <button type="button" className="tsd-button" disabled={fromLink.isPending} onClick={back}>К списку отгрузок</button>
   </main>
   else if (current) content = <TsdPicking key={current.id} initial={current} onBack={back} />
   else content = <TsdShipmentList onOpen={open} />

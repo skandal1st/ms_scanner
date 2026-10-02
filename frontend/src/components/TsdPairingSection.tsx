@@ -79,12 +79,12 @@ export function TsdPairingSection() {
       {pairingOpen && pairing.data ? (
         <div className="tsd-pairing-card" role="dialog" aria-label="QR подключения ТСД">
           <div className="tsd-pairing-card__qr">
-            <QRCodeSVG value={pairing.data.payload} size={220} level="M" />
+            <QRCodeSVG value={`${window.location.origin}/tsd?pair=${encodeURIComponent(pairing.data.code)}`} size={220} level="M" />
           </div>
           <div>
             <h3>Отсканируйте QR на ТСД</h3>
             <p><b>{pairing.data.workplace_name}</b></p>
-            <p className="hint">Откройте на терминале страницу <b>/tsd</b> и нажмите аппаратную кнопку сканирования.</p>
+            <p className="hint">Отсканируйте QR камерой терминала — откроется PWA и устройство подключится автоматически. Можно также считать QR в поле подключения установленной PWA.</p>
             <button type="button" className="button" onClick={() => setPairingOpen(false)}>
               Закрыть
             </button>

@@ -13,8 +13,8 @@ export function TsdDocumentQr({ moyskladId, name }: { moyskladId: string; name: 
           <div className="tsd-qr-dialog">
             <h2>Открыть на ТСД</h2>
             <p>{name}</p>
-            <QRCodeSVG value={`SKANDATA:DOCUMENT:${moyskladId}`} size={260} level="M" />
-            <p className="hint">QR выбирает документ, но не содержит токен авторизации.</p>
+            <QRCodeSVG value={`${window.location.origin}/tsd?document=${encodeURIComponent(moyskladId)}`} size={260} level="M" />
+            <p className="hint">QR открывает отгрузку в PWA. Устройство должно быть подключено; токена авторизации в QR нет.</p>
             <button type="button" className="button button--primary" onClick={() => setOpen(false)}>
               Закрыть
             </button>
