@@ -42,3 +42,12 @@ def test_decode_rejects_tampered_token():
     tampered = tok[:-2] + ("aa" if not tok.endswith("aa") else "bb")
     with pytest.raises(JWTError):
         decode_token(tampered)
+
+
+def test_password_hash_roundtrip():
+    from app.core.security import hash_password, verify_password
+
+    hashed = hash_password("release-audit-only")
+    assert hashed.startswith("$2b$")
+    assert verify_password("release-audit-only", hashed)
+    assert not verify_password("wrong-password", hashed)
