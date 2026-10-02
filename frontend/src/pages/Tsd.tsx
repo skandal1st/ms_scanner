@@ -2,9 +2,17 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent 
 import axios from 'axios'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem } from '../api/client'
-import { buildProgress, effectiveGtinKey, findProgressRowForScan } from '../store/scanStore'
+import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
+import { useTsdSound } from '../hooks/useTsdSound'
+import { Icon } from '../components/Icon'
+
+function progressState(added: number, expected: number) {
+  return expected > 0 && added > expected ? 'overflow'
+    : expected > 0 && added === expected ? 'done' : added > 0 ? 'partial' : 'empty'
+}
+const progressLabels = { empty: 'Не собрано', partial: 'В сборке', done: 'Собрано', overflow: 'Сверх плана' }
 
 function apiMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -196,6 +204,7 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
 
 function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: () => void }) {
   const online = useTsdOnline()
+  const sound = useTsdSound()
   const qc = useQueryClient()
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [code, setCode] = useState('')
@@ -205,8 +214,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const [visibleScans, setVisibleScans] = useState(50)
+  const [targetProductId, setTargetProductId] = useState<string | null>(null)
   const submitting = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const reviewRef = useRef<HTMLDetailsElement>(null)
   const { data: doc = initial } = useQuery({
     queryKey: ['tsd-document', initial.id],
     queryFn: () => tsdApi.getDocument(initial.id).then((r) => r.data),
@@ -216,7 +227,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
   const last = doc.scans[0]
   const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
-  const current = (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
+  const target = progress.rows.find((row) => row.product_id === targetProductId && targetProductId)
+  const current = target || (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
   const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
   const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
     || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
@@ -231,14 +243,18 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const refresh = () => qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] })
   const scan = useMutation({
     networkMode: 'always',
-    mutationFn: (value: string) => tsdApi.scan(doc.id, value).then((r) => r.data),
+    mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const matched = rowForScan(result)
+      const overPlan = Boolean(matched && matched.expected > 0 && !result.duplicate && !rejected
+        && matched.addedTotal + scanUnits(result) > matched.expected)
+      const errorFeedback = Boolean(result.duplicate || rejected || !matched || overPlan)
       setMessage(result.duplicate
         ? { kind: 'error', text: 'Этот код уже отсканирован' }
         : rejected ? { kind: 'error', text: result.error_message || 'Не удалось распознать марку' }
         : !matched ? { kind: 'error', text: `Скан записан, но GTIN ${effectiveGtinKey(result) || 'не определён'} отсутствует в плане отгрузки` }
+        : overPlan ? { kind: 'error', text: `Марка добавлена сверх плана: ${matched.product_name}` }
         : { kind: 'ok', text: result.product_name || matched.product_name || 'Скан принят' })
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => {
         const current = previous || initial
@@ -246,13 +262,15 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       })
       setCode('')
       refresh()
-      window.navigator.vibrate?.(result.duplicate || rejected ? [80, 60, 80] : 60)
+      sound.play(errorFeedback ? 'error' : 'ok')
+      window.navigator.vibrate?.(errorFeedback ? [80, 60, 80] : 60)
       inputRef.current?.focus()
     },
     onError: (error) => {
       setMessage({ kind: 'error', text: apiMessage(error) })
       setCode('')
       window.navigator.vibrate?.([120, 80, 120])
+      sound.play('error')
       inputRef.current?.focus()
     },
     onSettled: () => { submitting.current = false },
@@ -261,7 +279,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     networkMode: 'always',
     mutationFn: () => tsdApi.undoLast(doc.id),
     onSuccess: () => { setMessage(null); refresh() },
-    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+    onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
   })
   const remove = useMutation({
     networkMode: 'always',
@@ -274,13 +292,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       setMessage({ kind: 'ok', text: 'Выбранная марка удалена из сборки' })
       refresh()
     },
-    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+    onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
   })
   const complete = useMutation({
     networkMode: 'always',
     mutationFn: () => tsdApi.complete(doc.id),
     onSuccess: onBack,
-    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+    onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
   })
   useEffect(() => {
     // Android scanners may inject through the IME and need an editable, focused input.
@@ -288,18 +306,24 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     if (!reviewing && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending) {
       inputRef.current?.focus()
     }
-  }, [manualInput, reviewing, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
+  }, [manualInput, targetProductId, reviewing, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
     if (!normalized || reviewing || submitting.current || scan.isPending || complete.isPending || undo.isPending || remove.isPending) return
     if (!online) {
       setMessage({ kind: 'error', text: 'Нет сети. Подключитесь к Wi-Fi и повторите скан.' })
+      sound.play('error')
+      return
+    }
+    if (targetProductId && !target) {
+      setMessage({ kind: 'error', text: 'Выбранная позиция больше недоступна. Включите автоматический выбор.' })
+      sound.play('error')
       return
     }
     submitting.current = true
     setLastCode(normalized)
     setMessage(null)
-    scan.mutate(normalized)
+    scan.mutate({ code: normalized, productId: target?.product_id || undefined })
   }
   const acceptRef = useRef(acceptCode)
   acceptRef.current = acceptCode
@@ -325,8 +349,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <b>{percent}%</b>
         <div><i style={{ width: `${percent}%` }} /></div>
       </section>
-      <section className="tsd-current">
-        <div><span>Текущий товар</span><small>{progress.rows.indexOf(current) + 1} из {progress.rows.length}</small></div>
+      <section className={`tsd-current tsd-progress--${progressState(current?.addedTotal || 0, current?.expected || 0)}`}>
+        <div><span>{target ? 'Выбранный товар' : 'Текущий товар'}</span><small>{progress.rows.indexOf(current) + 1} из {progress.rows.length}</small></div>
         <h2>{current?.product_name || 'Сканируйте товар'}</h2>
         {last && <p className="hint">GTIN последнего скана: {effectiveGtinKey(last) || 'не распознан'}</p>}
         <div className="tsd-counts">
@@ -334,9 +358,16 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <p><span>Собрано</span><b>{current?.addedTotal ?? 0} <small>шт.</small></b></p>
         </div>
       </section>
-      <form className="tsd-scan-box" onSubmit={submit}>
-        <span aria-hidden>▥</span>
-        <label htmlFor="tsd-scan-input">Сканируйте штрихкод</label>
+      <div className="tsd-scan-options">
+        <span>{targetProductId ? 'Ручная привязка' : 'Авто по GTIN'}</span>
+        <button type="button" data-tsd-sound className="tsd-button" aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук включён' : 'Включить звук'}</button>
+      </div>
+      {targetProductId && <div className="tsd-target">
+        <span>Следующие марки → <strong>{target?.product_name || 'Позиция недоступна'}</strong></span>
+        <button type="button" className="tsd-button" disabled={scan.isPending || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто по GTIN</button>
+      </div>}
+      <form className={`tsd-scan-box ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
+        <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} />Сканируйте штрихкод</label>
         <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
           readOnly={reviewing || scan.isPending || undo.isPending || complete.isPending || remove.isPending} inputMode="text"
           autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
@@ -355,18 +386,27 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         </div>
       ) : null}
       {lastCode && <details className="tsd-code-debug"><summary>Показать последний код</summary><code>{lastCode}</code></details>}
-      <details className="tsd-order-review" onToggle={(event) => setReviewing(event.currentTarget.open)}>
+      <details ref={reviewRef} className="tsd-order-review" onToggle={(event) => setReviewing(event.currentTarget.open)}>
         <summary>Позиции заказа ({progress.rows.length}) и сканы ({doc.scans.length})</summary>
-        <p className="hint">Выберите товар, затем конкретную марку для удаления при пересорте.</p>
+        <p className="hint">Выберите позицию для привязки следующих марок или марку для удаления.</p>
         {reviewing && <>
           <div className="tsd-position-list">
             {progress.rows.map((row, index) => <button key={`${row.product_id || row.gtin}:${index}`} type="button"
-              aria-pressed={positionFilter === index} className="tsd-position" onClick={() => selectPosition(index)}>
+              aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}`} onClick={() => selectPosition(index)}>
               <strong>{row.product_name}</strong>
               <span>{row.unmarked ? 'Штрихкод' : 'GTIN'}: {row.gtin}</span>
-              <b>{row.addedTotal} / {row.expected} шт.{row.addedTotal > row.expected ? ' · Сверх плана' : ''}</b>
+              <b>{row.addedTotal} / {row.expected} шт. · {progressLabels[progressState(row.addedTotal, row.expected)]}{targetProductId === row.product_id ? ' · Выбрана для сканирования' : ''}</b>
             </button>)}
           </div>
+          {typeof positionFilter === 'number' && progress.rows[positionFilter]?.product_id && <button type="button" className="tsd-button tsd-button--primary"
+            disabled={scan.isPending || undo.isPending || remove.isPending || complete.isPending || Boolean(code.trim())}
+            onClick={() => {
+              setTargetProductId(progress.rows[positionFilter].product_id!)
+              setSelectedScanId(null)
+              setMessage(null)
+              if (reviewRef.current) reviewRef.current.open = false
+              setReviewing(false)
+            }}>Сканировать в выбранную позицию</button>}
           <div className="tsd-input-actions">
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'other'} onClick={() => selectPosition('other')}>Вне плана</button>
@@ -375,7 +415,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           {filteredScans.length === 0 && <p className="hint">По выбранной позиции ещё нет сканов.</p>}
           <div className="tsd-mark-list">
             {filteredScans.slice(0, visibleScans).map((item) => <button type="button" key={item.id}
-              className="tsd-mark" aria-pressed={selectedScanId === item.id} disabled={remove.isPending}
+              className={`tsd-mark tsd-progress--${!rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : ['scanned', 'valid'].includes(item.status) ? 'done' : 'partial'}`} aria-pressed={selectedScanId === item.id} disabled={remove.isPending}
               onClick={() => setSelectedScanId((previous) => previous === item.id ? null : item.id)}>
               <strong>{item.product_name || rowForScan(item)?.product_name || 'Товар вне плана'}</strong>
               <span>GTIN: {effectiveGtinKey(item) || 'не распознан'}{item.box_quantity ? ` · ${item.box_quantity} шт.` : ''}</span>

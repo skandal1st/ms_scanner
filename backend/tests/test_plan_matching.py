@@ -46,3 +46,21 @@ async def test_scan_prefers_exact_plan_alias_over_stale_cache(monkeypatch):
     assert scan.moysklad_product_id == "true"
     assert scan.product_name == "True"
     cached.assert_not_awaited()
+
+
+async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypatch):
+    doc = NS(kind="demand", plan=[
+        {"gtin": "04620164405358", "product_id": "true", "product_name": "True"},
+        {"gtin": "04620543080503", "product_id": "chosen", "product_name": "Выбранный товар"},
+    ])
+    monkeypatch.setattr(scans, "editable_document", AsyncMock(return_value=doc))
+    cached = AsyncMock()
+    monkeypatch.setattr(scans, "get_gtin_product", cached)
+    db = NS(execute=AsyncMock(return_value=Result(None)), add=lambda value: None,
+            commit=AsyncMock(), refresh=AsyncMock())
+    raw = "010462016440535821TEST000000001\x1d93TEST"
+    scan, duplicate = await scans._create_scan_record(db, uuid4(), raw, uuid4(), moysklad_product_id="chosen")
+    assert not duplicate and scan.moysklad_product_id == "chosen"
+    assert scan.product_name == "Выбранный товар"
+    assert scan.gtin == "04620164405358" and scan.code == raw
+    cached.assert_not_awaited()

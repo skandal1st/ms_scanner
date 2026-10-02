@@ -112,6 +112,7 @@ class TsdDocumentDetail(BaseModel):
 
 class TsdScanRequest(BaseModel):
     code: str = Field(min_length=1, max_length=4096)
+    moysklad_product_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class TsdDeviceRow(BaseModel):
@@ -538,8 +539,15 @@ async def create_tsd_scan(
     from app.services.document_guard import editable_document
     doc = await editable_document(db, document_id, device.user_id)
     user, _, _ = await _device_scope(db, device)
+    target = None
+    if body.moysklad_product_id:
+        target = next((p for p in doc.plan or [] if p.get("product_id") == body.moysklad_product_id), None)
+        if target is None:
+            raise HTTPException(400, "Выбранная позиция отсутствует в плане отгрузки. Обновите список позиций.")
     code = normalize_sscc(body.code)
     if is_sscc(code):
+        if target:
+            raise HTTPException(400, "Для короба включите автоматический выбор позиции. Ручная привязка доступна для отдельных марок.")
         cz = await _resolve_cz_for_boxes(user, db, doc.id)
         responses = await _create_box_scans_core(
             db, doc.id, _plan_gtins(doc.plan), code, False, device.user_id, cz
@@ -549,9 +557,15 @@ async def create_tsd_scan(
     if marked is not None:
         raise HTTPException(400, "Это маркированный товар — отсканируйте Data Matrix")
     if unmarked is not None:
+        if target and target.get("product_id") != unmarked.get("product_id"):
+            raise HTTPException(400, "Штрихкод относится к другой позиции. Включите автоматический выбор или выберите нужный товар.")
         scan, duplicate = await _create_or_increment_barcode_scan(db, doc.id, code, unmarked)
     else:
-        scan, duplicate = await _create_scan_record(db, doc.id, code, device.user_id)
+        if target and target.get("marked") is False:
+            raise HTTPException(400, "Выбрана немаркированная позиция. Сканируйте её обычный штрихкод.")
+        scan, duplicate = await _create_scan_record(
+            db, doc.id, code, device.user_id, moysklad_product_id=body.moysklad_product_id
+        )
     response = ScanResponse.model_validate(scan)
     response.duplicate = duplicate
     logger.info(

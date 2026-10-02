@@ -871,6 +871,39 @@ html, body, #root { height: 100%; }
 .tsd-position-list, .tsd-mark-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 12px 0; }
 .tsd-position, .tsd-mark { display: grid; gap: 6px; box-sizing: border-box; min-width: 0; width: 100%; padding: 12px; border: 1px solid var(--tsd-line); border-radius: 8px; background: #fff; text-align: left; font: inherit; color: inherit; cursor: pointer; overflow-wrap: anywhere; }
 .tsd-position span, .tsd-mark span { font-size: 13px; color: var(--tsd-muted); }
-.tsd-position[aria-pressed="true"], .tsd-mark[aria-pressed="true"], .tsd-order-review .tsd-button[aria-pressed="true"] { border-color: #1677ee; background: #edf5ff; }
+.tsd-position[aria-pressed="true"], .tsd-mark[aria-pressed="true"], .tsd-order-review .tsd-button[aria-pressed="true"] { outline: 2px solid var(--brand); outline-offset: 1px; }
 .tsd-mark code, .tsd-delete-selection code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; font-size: 12px; }
 .tsd-delete-selection { display: grid; gap: 12px; padding: 12px; margin-top: 12px; border: 1px solid #e8a1a1; border-radius: 8px; background: #fff0f0; }
+
+.tsd-total { padding: 10px 18px 14px; }
+.tsd-total strong { font-size: 32px; }
+.tsd-total > span, .tsd-total > b { font-size: 14px; }
+.tsd-total > div { height: 7px; }
+.tsd-current { border-top-width: 6px; }
+.tsd-current > div:first-child { padding: 10px 18px 0; font-size: 13px; }
+.tsd-current h2 { min-height: 0; margin: 6px 18px 10px; font-size: 18px; line-height: 1.3; }
+.tsd-current > .hint { margin: 6px 18px; font-size: 12px; }
+.tsd-counts p { padding: 10px 18px; }
+.tsd-counts span { font-size: 13px; }
+.tsd-counts b { font-size: 24px; }
+.tsd-scan-options { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 18px; font-size: 13px; color: var(--tsd-muted); }
+.tsd-scan-options .tsd-button { min-height: 44px; font-size: 13px; }
+.tsd-target { display: grid; gap: 8px; margin: 10px 18px; padding: 10px; background: var(--st-info-bg); border: 1px solid var(--st-info-bd); border-radius: 8px; font-size: 13px; color: var(--st-info-fg); overflow-wrap: anywhere; }
+.tsd-target .tsd-button { min-height: 44px; }
+.tsd-scan-box { margin: 10px 18px; padding: 10px; gap: 4px; }
+.tsd-scan-box label { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.tsd-scan-box input { height: 36px; font-size: 16px; }
+.tsd-scan-box input:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 3px; }
+.tsd-scan-box--ok { border-color: var(--st-ok-fg); color: var(--st-ok-fg); }
+.tsd-scan-box--error { border-color: var(--st-err-fg); color: var(--st-err-fg); }
+.tsd-last { padding: 10px 12px; font-size: 13px; background: var(--st-ok-bg); color: var(--st-ok-fg); }
+.tsd-last--error { background: var(--st-err-bg); color: var(--st-err-fg); }
+.tsd-position { font-size: 14px; }
+.tsd-position b { font-size: 14px; }
+.tsd-progress--empty { background: var(--ms-bg); }
+.tsd-progress--partial { background: var(--st-warn-bg); border-color: var(--st-warn-bd); }
+.tsd-progress--done { background: var(--st-ok-bg); border-color: var(--st-ok-bd); }
+.tsd-progress--overflow { background: var(--st-err-bg); border-color: var(--st-err-bd); }
+.tsd-position.tsd-progress--partial b { color: var(--st-warn-fg); }
+.tsd-position.tsd-progress--done b { color: var(--st-ok-fg); }
+.tsd-position.tsd-progress--overflow b { color: var(--st-err-fg); }

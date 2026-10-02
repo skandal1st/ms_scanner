@@ -867,8 +867,8 @@ export const tsdApi = {
   selectDocument: (moysklad_id: string) =>
     tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id }),
   getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
-  scan: (id: string, code: string) =>
-    tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code }),
+  scan: (id: string, code: string, moysklad_product_id?: string) =>
+    tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code, moysklad_product_id }),
   undoLast: (id: string) =>
     tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/last`),
   deleteScan: (id: string, scanId: string) =>

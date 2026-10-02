@@ -37,3 +37,12 @@ test('invalid marks do not increase progress and removed marks reduce it',()=>{
   assert.equal(buildProgress(plan,[scan('04620543080527',null,'invalid')]).total.addedTotal,0);
   assert.equal(buildProgress(plan,[]).total.addedTotal,0);
 });
+
+test('manual position wins over a GTIN from another row',()=>{
+  const plan=[item('true',['04620164405358']),item('chosen',['04620543080503'])];
+  const s=scan('04620164405358','chosen');
+  const result=buildProgress(plan,[s]);
+  assert.equal(findProgressRowForScan(s,result.rows).product_id,'chosen');
+  assert.equal(result.rows[0].addedTotal,0);
+  assert.equal(result.rows[1].addedTotal,1);
+});
