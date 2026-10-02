@@ -286,7 +286,9 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         </section>
 
         <ChestnyZnakSection integration={integration} />
-        {!embedded ? <Suspense fallback={null}><TsdPairingSection /></Suspense> : null}
+        <Suspense fallback={<p className="hint">Загружаем подключение ТСД…</p>}>
+          <TsdPairingSection />
+        </Suspense>
         <ScannerSection embedded={embedded} />
       </div>
     </div>
