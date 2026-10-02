@@ -260,7 +260,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     onSuccess: onBack,
     onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
   })
-  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => {
+    // Android scanners may inject through the IME and need an editable, focused input.
+    // Restore focus after React applies mode changes or removes readOnly after a request.
+    if (!scan.isPending && !undo.isPending && !complete.isPending) {
+      inputRef.current?.focus()
+    }
+  }, [manualInput, scan.isPending, undo.isPending, complete.isPending])
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
     if (!normalized || submitting.current || scan.isPending || complete.isPending || undo.isPending) return
@@ -310,11 +316,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <span aria-hidden>▥</span>
         <label htmlFor="tsd-scan-input">Сканируйте штрихкод</label>
         <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
-          readOnly={scan.isPending || undo.isPending || complete.isPending} inputMode={manualInput ? 'text' : 'none'}
+          readOnly={scan.isPending || undo.isPending || complete.isPending} inputMode="text"
           autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
         <p className="hint">{scan.isPending ? 'Записываем скан…' : manualInput ? 'Введите код и нажмите «Принять код».' : 'Код принимается автоматически, Enter не обязателен.'}</p>
         <div className="tsd-input-actions">
-          <button type="button" className="tsd-button" onClick={() => { setManualInput((value) => !value); inputRef.current?.focus() }}>
+          <button type="button" className="tsd-button" onClick={() => setManualInput((value) => !value)}>
             {manualInput ? 'Режим сканера' : 'Ввести вручную'}
           </button>
           <button type="submit" className="tsd-button tsd-button--primary" disabled={!online || !code.trim() || scan.isPending || undo.isPending || complete.isPending}>Принять код</button>
