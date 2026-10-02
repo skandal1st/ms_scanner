@@ -95,6 +95,8 @@ export interface Document {
   writeoff_reason?: string | null
   /** Причина неуспешной отправки в МС (напр. «нет на складе»), если была. */
   error_message?: string | null
+  processing_progress?: { sent: number; total: number; stage: string } | null
+  cz_doc_ids?: { pg: string; doc_id?: string; state?: string; status?: string }[] | null
   organization_profile_id?: string | null
   moysklad_organization_id?: string | null
   moysklad_store_id?: string | null
@@ -627,6 +629,7 @@ export interface AcceptanceDoc {
   plan_count: number
   /** Причина неуспешной отправки в МС (напр. истёк токен ЧЗ), если была. */
   error_message: string | null
+  processing_progress?: { sent: number; total: number; stage: string } | null
 }
 
 export interface ImportPositionResult {
@@ -789,10 +792,12 @@ export const tsdAdminApi = {
 
 const tsdClient = axios.create({
   baseURL: '/api',
+  timeout: 20_000,
   headers: { 'Content-Type': 'application/json' },
 })
 
 tsdClient.interceptors.request.use((config) => {
+  if (!navigator.onLine) return Promise.reject(new Error('Нет сети. Подключитесь к Wi-Fi и повторите операцию.'))
   const token = localStorage.getItem('tsd_access_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
@@ -803,6 +808,7 @@ tsdClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401 && localStorage.getItem('tsd_access_token')) {
       localStorage.removeItem('tsd_access_token')
+      localStorage.removeItem('tsd_document_id')
       window.location.href = '/tsd'
     }
     return Promise.reject(error)
@@ -850,7 +856,7 @@ export const tsdApi = {
       device_name: string
       workplace_name: string
       organization_name: string
-    }>('/api/tsd/auth/exchange', { code, device_name }),
+    }>('/api/tsd/auth/exchange', { code, device_name }, { timeout: 20_000 }),
   me: () => tsdClient.get<TsdContext>('/tsd/me'),
   documents: (search?: string) =>
     tsdClient.get<TsdDocumentItem[]>('/tsd/documents', {

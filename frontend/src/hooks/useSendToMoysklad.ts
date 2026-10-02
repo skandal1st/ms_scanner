@@ -5,9 +5,11 @@ import { documentsApi } from '../api/client'
 interface PollableDoc {
   status: string
   error_message?: string | null
+  processing_progress?: { sent: number; total: number; stage: string } | null
 }
 
 interface Options<T extends PollableDoc> {
+  activeDocument?: (T & { id: string }) | null
   /** Получить свежий документ на опросе (documentsApi.get / acceptanceApi.getDoc). */
   fetchDoc: (id: string) => Promise<{ data: T }>
   /** Обновить локальный/сторовый стейт свежим документом на каждом опросе. */
@@ -43,7 +45,7 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
     onPoll,
     extractError,
     pollIntervalMs = 1500,
-    maxAttempts = 20,
+    maxAttempts = 800,
     closeTabDelayMs = 1200,
     autoCloseTab = true,
   } = opts
@@ -53,45 +55,61 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
   const [done, setDone] = useState(false)
   const [closingTab, setClosingTab] = useState(false)
   const runRef = useRef(0)
+  const sendingRef = useRef(false)
+  const [progress, setProgress] = useState<PollableDoc["processing_progress"]>(null)
 
   useEffect(
     () => () => {
       // Опрос старой операции может завершиться уже после повторного OpenPopup.
       // Инвалидируем его, чтобы onPoll не вернул предыдущий документ в общий store.
       runRef.current += 1
+      sendingRef.current = false
     },
     [],
   )
 
   const reset = useCallback(() => {
     runRef.current += 1
+    sendingRef.current = false
     setSending(false)
+    setProgress(null)
     setError(null)
     setDone(false)
     setClosingTab(false)
   }, [])
 
   const send = useCallback(
-    async (docId: string) => {
+    async (docId: string, resume = false) => {
+      if (sendingRef.current) return
+      sendingRef.current = true
       const runId = ++runRef.current
       setSending(true)
       setError(null)
       setDone(false)
       try {
-        await documentsApi.process(docId)
+        if (!resume) await documentsApi.process(docId)
         let finalStatus = 'processing'
         let failReason: string | null = null
+        let networkFailures = 0
         for (let i = 0; i < maxAttempts; i++) {
           await new Promise((r) => setTimeout(r, pollIntervalMs))
           if (runRef.current !== runId) return
-          const { data: fresh } = await fetchDoc(docId)
+          let fresh: T
+          try {
+            fresh = (await fetchDoc(docId)).data
+            networkFailures = 0
+          } catch (e) {
+            if (++networkFailures < 5) continue
+            throw e
+          }
           if (runRef.current !== runId) return
+          setProgress(fresh.processing_progress ?? null)
           finalStatus = fresh.status
           onPoll?.(fresh)
           if (fresh.status === 'accepted') break
           // Воркер выставил причину неуспеха — прекращаем опрос и показываем её,
           // а не ждём ложное «ещё обрабатывается».
-          if (fresh.error_message) {
+          if (fresh.status !== "processing" && fresh.error_message) {
             failReason = fresh.error_message
             break
           }
@@ -116,14 +134,36 @@ export function useSendToMoysklad<T extends PollableDoc>(opts: Options<T>) {
         if (runRef.current !== runId) return
         setError(
           extractError?.(e) ??
+            ((e as { response?: { data?: { detail?: string } } }).response?.data?.detail) ??
             'Не удалось отправить документ в МойСклад. Попробуйте ещё раз.',
         )
       } finally {
-        if (runRef.current === runId) setSending(false)
+        if (runRef.current === runId) {
+          sendingRef.current = false
+          setSending(false)
+        }
       }
     },
     [fetchDoc, onPoll, extractError, pollIntervalMs, maxAttempts, closeTabDelayMs, autoCloseTab],
   )
 
-  return { send, sending, error, done, closingTab, setError, reset }
+  const sendRef = useRef(send)
+  sendRef.current = send
+  const activeId = opts.activeDocument?.id
+  const activeStatus = opts.activeDocument?.status
+  const previousId = useRef(activeId)
+  useEffect(() => {
+    if (previousId.current !== activeId) {
+      previousId.current = activeId
+      reset()
+    }
+    if (activeId && activeStatus === 'processing' && !sendingRef.current) {
+      void sendRef.current(activeId, true)
+    }
+  }, [activeId, activeStatus, reset])
+
+  const progressLabel = progress?.stage === 'sending' && progress.total > 0
+    ? `Передано ${progress.sent}/${progress.total} марок…`
+    : 'Отправка в МС…'
+  return { send, sending, error, done, closingTab, setError, reset, progressLabel }
 }

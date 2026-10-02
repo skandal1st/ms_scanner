@@ -4,9 +4,11 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem } from '../api/client'
 import { buildProgress } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 
 function apiMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
+    if (!error.response) return 'Нет ответа от сервера. Проверьте связь и список марок перед повторным сканированием.'
     return String(error.response?.data?.detail || 'Не удалось выполнить операцию')
   }
   return error instanceof Error ? error.message : 'Не удалось выполнить операцию'
@@ -36,10 +38,13 @@ function documentCode(raw: string): string | null {
 }
 
 function TsdLogin({ onReady }: { onReady: () => void }) {
+  const online = useTsdOnline()
+  const autoExchanged = useRef(false)
   const [code, setCode] = useState(() => new URLSearchParams(window.location.search).get('pair') || '')
   const [name, setName] = useState(() => localStorage.getItem('tsd_device_name') || 'ТСД АТОЛ')
   const inputRef = useRef<HTMLInputElement>(null)
   const exchange = useMutation({
+    networkMode: 'always',
     mutationFn: () => tsdApi.exchange(normalizePairingCode(code), name).then((r) => r.data),
     onSuccess: (data) => {
       localStorage.setItem('tsd_access_token', data.access_token)
@@ -50,13 +55,16 @@ function TsdLogin({ onReady }: { onReady: () => void }) {
   })
   useEffect(() => {
     inputRef.current?.focus()
-    if (code && new URLSearchParams(window.location.search).get('pair')) exchange.mutate()
+    if (online && !autoExchanged.current && code && new URLSearchParams(window.location.search).get('pair')) {
+      autoExchanged.current = true
+      exchange.mutate()
+    }
     // Автообмен нужен только при первом открытии app-link.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (code.trim() && name.trim()) exchange.mutate()
+    if (online && code.trim() && name.trim() && !exchange.isPending) exchange.mutate()
   }
   return (
     <main className="tsd-shell tsd-login">
@@ -79,7 +87,7 @@ function TsdLogin({ onReady }: { onReady: () => void }) {
           />
         </label>
         {exchange.error ? <div className="tsd-alert tsd-alert--error">{apiMessage(exchange.error)}</div> : null}
-        <button type="submit" className="tsd-button tsd-button--primary" disabled={exchange.isPending || !code.trim()}>
+        <button type="submit" className="tsd-button tsd-button--primary" disabled={!online || exchange.isPending || !code.trim() || !name.trim()}>
           {exchange.isPending ? 'Подключаем…' : 'Подключить устройство'}
         </button>
       </form>
@@ -108,6 +116,7 @@ function ShipmentRow({ item, onOpen }: { item: TsdDocumentItem; onOpen: () => vo
 }
 
 function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) {
+  const online = useTsdOnline()
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
   const [tab, setTab] = useState<'available' | 'work'>('available')
@@ -116,11 +125,12 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
   const [openError, setOpenError] = useState<string | null>(null)
   const qrRef = useRef<HTMLInputElement>(null)
   const { data: me } = useQuery({ queryKey: ['tsd-me'], queryFn: () => tsdApi.me().then((r) => r.data) })
-  const { data: documents = [], isLoading, refetch } = useQuery({
+  const { data: documents = [], isLoading, error: listError, refetch } = useQuery({
     queryKey: ['tsd-documents', deferredSearch],
     queryFn: () => tsdApi.documents(deferredSearch.trim()).then((r) => r.data),
   })
   const select = useMutation({
+    networkMode: 'always',
     mutationFn: (id: string) => tsdApi.selectDocument(id).then((r) => r.data),
     onSuccess: onOpen,
     onError: (error) => setOpenError(apiMessage(error)),
@@ -136,7 +146,7 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
       setOpenError('Это не QR отгрузки Скандаты')
       return
     }
-    select.mutate(id)
+    if (online && !select.isPending) select.mutate(id)
   }
   return (
     <main className="tsd-shell">
@@ -145,7 +155,7 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
           <h1>Отгрузки</h1>
           <p>{me?.workplace_name || 'Рабочее место'} · {me?.organization_name || 'Юрлицо'}</p>
         </div>
-        <span className="tsd-online"><i />Онлайн</span>
+        <TsdConnection />
       </header>
       <div className="tsd-list-controls">
         <label className="tsd-search">
@@ -166,17 +176,18 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
         <button className={tab === 'available' ? 'active' : ''} onClick={() => setTab('available')}>Доступные</button>
         <button className={tab === 'work' ? 'active' : ''} onClick={() => setTab('work')}>В работе</button>
       </div>
+      {listError ? <div className="tsd-alert tsd-alert--error">{apiMessage(listError)} <button type="button" className="tsd-button" onClick={() => refetch()} disabled={!online}>Повторить</button></div> : null}
       {openError ? <div className="tsd-alert tsd-alert--error">{openError}</div> : null}
       <section className="tsd-shipment-list" aria-live="polite">
         {isLoading ? <p className="tsd-empty">Загружаем отгрузки…</p> : null}
-        {!isLoading && filtered.length === 0 ? (
+        {!isLoading && !listError && filtered.length === 0 ? (
           <div className="tsd-empty">
             <p>{tab === 'work' ? 'Нет начатых сборок' : 'Нет доступных отгрузок'}</p>
             <button type="button" className="tsd-button" onClick={() => refetch()}>Обновить</button>
           </div>
         ) : null}
         {filtered.map((item) => (
-          <ShipmentRow key={item.moysklad_id} item={item} onOpen={() => select.mutate(item.moysklad_id)} />
+          <ShipmentRow key={item.moysklad_id} item={item} onOpen={() => { if (online && !select.isPending) select.mutate(item.moysklad_id) }} />
         ))}
       </section>
     </main>
@@ -184,6 +195,7 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
 }
 
 function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: () => void }) {
+  const online = useTsdOnline()
   const qc = useQueryClient()
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [code, setCode] = useState('')
@@ -202,6 +214,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     : 0
   const refresh = () => qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] })
   const scan = useMutation({
+    networkMode: 'always',
     mutationFn: (value: string) => tsdApi.scan(doc.id, value).then((r) => r.data),
     onSuccess: (result) => {
       setMessage(result.duplicate
@@ -220,11 +233,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     },
   })
   const undo = useMutation({
+    networkMode: 'always',
     mutationFn: () => tsdApi.undoLast(doc.id),
     onSuccess: () => { setMessage(null); refresh() },
     onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
   })
   const complete = useMutation({
+    networkMode: 'always',
     mutationFn: () => tsdApi.complete(doc.id),
     onSuccess: onBack,
     onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
@@ -233,14 +248,18 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const submit = (event: FormEvent) => {
     event.preventDefault()
     const normalized = normalizeScannerInput(code).trim()
-    if (normalized && !scan.isPending) scan.mutate(normalized)
+    if (!online) {
+      setMessage({ kind: 'error', text: 'Нет сети. Подключитесь к Wi-Fi и повторите скан.' })
+      return
+    }
+    if (normalized && !scan.isPending && !complete.isPending && !undo.isPending) scan.mutate(normalized)
   }
   return (
     <main className="tsd-shell tsd-picking">
       <header className="tsd-header tsd-header--picking">
         <button type="button" className="tsd-back" onClick={onBack} aria-label="Назад">‹</button>
         <div><h1>Сборка заказа</h1><p>{doc.name}</p></div>
-        <span className="tsd-online"><i />Онлайн</span>
+        <TsdConnection />
       </header>
       {doc.active_on_other_device ? <div className="tsd-alert tsd-alert--warn">Отгрузка также открыта на другом ТСД</div> : null}
       <section className="tsd-total">
@@ -260,7 +279,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       <form className="tsd-scan-box" onSubmit={submit}>
         <span aria-hidden>▥</span>
         <label htmlFor="tsd-scan-input">Сканируйте штрихкод</label>
-        <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" />
+        <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" enterKeyHint="send" />
       </form>
       {message || last ? (
         <div className={`tsd-last ${message?.kind === 'error' ? 'tsd-last--error' : ''}`}>
@@ -269,10 +288,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         </div>
       ) : null}
       <footer className="tsd-actions">
-        <button type="button" className="tsd-button tsd-button--danger" disabled={undo.isPending || !last} onClick={() => undo.mutate()}>
+        <button type="button" className="tsd-button tsd-button--danger" disabled={!online || undo.isPending || scan.isPending || complete.isPending || !last} onClick={() => undo.mutate()}>
           Отменить скан
         </button>
-        <button type="button" className="tsd-button tsd-button--primary" disabled={complete.isPending} onClick={() => complete.mutate()}>
+        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || complete.isPending || scan.isPending || undo.isPending} onClick={() => complete.mutate()}>
           Завершить сборку
         </button>
       </footer>
@@ -282,8 +301,32 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
 
 export function TsdPage() {
   const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token')))
+  const [activeId, setActiveId] = useState(() => localStorage.getItem('tsd_document_id'))
   const [document, setDocument] = useState<TsdDocumentDetail | null>(null)
-  if (!authorized) return <TsdLogin onReady={() => setAuthorized(true)} />
-  if (document) return <TsdPicking initial={document} onBack={() => setDocument(null)} />
-  return <TsdShipmentList onOpen={setDocument} />
+  const restored = useQuery({
+    queryKey: ['tsd-document', activeId],
+    queryFn: () => tsdApi.getDocument(activeId!).then((r) => r.data),
+    enabled: authorized && Boolean(activeId) && !document,
+  })
+  const open = (doc: TsdDocumentDetail) => {
+    localStorage.setItem('tsd_document_id', doc.id)
+    setActiveId(doc.id)
+    setDocument(doc)
+  }
+  const back = () => {
+    localStorage.removeItem('tsd_document_id')
+    setActiveId(null)
+    setDocument(null)
+  }
+  const current = document || restored.data
+  let content
+  if (!authorized) content = <TsdLogin onReady={() => setAuthorized(true)} />
+  else if (activeId && !current) content = <main className="tsd-shell tsd-login">
+    <h1>Сборка заказа</h1>
+    <p>{restored.error ? apiMessage(restored.error) : 'Восстанавливаем документ…'}</p>
+    <button type="button" className="tsd-button" onClick={back}>К списку отгрузок</button>
+  </main>
+  else if (current) content = <TsdPicking key={current.id} initial={current} onBack={back} />
+  else content = <TsdShipmentList onOpen={open} />
+  return <><TsdPwaControls />{content}</>
 }

@@ -76,6 +76,7 @@ class AcceptanceDocResponse(BaseModel):
     # Причина неуспешной отправки в МС (напр. истёк токен ЧЗ) — показывается на
     # странице приёмки вместо ложного «МойСклад ещё обрабатывает».
     error_message: Optional[str] = None
+    processing_progress: Optional[dict] = None
 
 
 class ImportPositionResult(BaseModel):
@@ -740,7 +741,10 @@ async def import_upd(
 ):
     """Загрузить УПД 5.03: распарсить позиции, сопоставить с товарами МС по GTIN,
     сохранить коды маркировки как сканы документа."""
-    doc = await _get_acceptance_doc(document_id, current_user, db)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, current_user.id)
+    if doc.kind != DocumentKind.supply:
+        raise HTTPException(400, "Документ не является приёмкой")
 
     raw = await file.read()
     if not raw:
@@ -1202,7 +1206,10 @@ async def import_marks(
     мутируем: кол-во/цена берутся из привязанного поступления МС. Несопоставленные
     GTIN привязываются вручную панелью подбора (``/products/link-gtin``).
     """
-    doc = await _get_acceptance_doc(document_id, current_user, db)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, current_user.id)
+    if doc.kind != DocumentKind.supply:
+        raise HTTPException(400, "Документ не является приёмкой")
 
     # Нормализуем список: strip, отбрасываем пустые, дедуп с сохранением порядка.
     seen: set[str] = set()
@@ -1433,4 +1440,5 @@ async def get_acceptance_document(
         scan_count=count,
         plan_count=len(doc.plan or []),
         error_message=doc.error_message,
+        processing_progress=doc.processing_progress,
     )

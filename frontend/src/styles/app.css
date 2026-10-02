@@ -850,3 +850,11 @@ html, body, #root { height: 100%; }
   .tsd-shell { box-shadow: none; }
   .tsd-pairing-card { grid-template-columns: 1fr; justify-items: center; text-align: center; }
 }
+
+.tsd-pwa { max-width: 600px; margin: 0 auto; padding: 8px 16px; background: #edf0f6; color: #17233d; }
+.tsd-pwa:empty { display: none; }
+.tsd-pwa p { font-size: 14px; line-height: 1.5; margin: 8px 0; }
+.tsd-pwa .tsd-button { min-height: 44px; }
+.tsd-online--offline { color: #a13b18; }
+.tsd-online--offline i { background: #a13b18; }
+.tsd-shell { padding-bottom: env(safe-area-inset-bottom); }

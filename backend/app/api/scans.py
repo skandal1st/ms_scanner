@@ -7,6 +7,8 @@ from typing import List, Optional
 from uuid import UUID
 from datetime import datetime, timezone
 
+from app.services.document_guard import editable_document
+from app.db.models import DocumentStatus
 from app.db.session import get_db
 from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, OrganizationProfile, GtinNameMap, EdoDocument, EdoMark
 from app.api.deps import get_current_user
@@ -177,8 +179,7 @@ async def _create_scan_record(
     code = code.strip()
     gtin = gtin_override if is_box else extract_gtin(code)
 
-    doc_row = await db.execute(select(Document).where(Document.id == document_id))
-    doc_obj = doc_row.scalar_one()
+    doc_obj = await editable_document(db, document_id, current_user_id)
 
     initial_name = None
     if moysklad_product_id and doc_obj.plan:
@@ -387,6 +388,8 @@ async def _create_or_increment_barcode_scan(
     Повторный скан того же штрихкода в документе наращивает ``box_quantity`` (а не
     возвращает «дубль»). ЧЗ не вызывается — скан сразу ``valid``. Возвращает (scan, False).
     """
+    owner = (await db.execute(select(Document.user_id).where(Document.id == document_id))).scalar_one()
+    await editable_document(db, document_id, owner)
     code = code.strip()
     key = normalize_gtin_key(code)
     existing = (
@@ -435,7 +438,7 @@ async def create_scan(
     «плоский» штрихкод и совпал с немаркированной позицией плана, добавляем кол-во
     без вызова ЧЗ. Штрихкод маркированного товара — подсказка отсканировать КМ.
     """
-    doc = await _ensure_document_owner(body.document_id, current_user, db)
+    doc = await editable_document(db, body.document_id, current_user.id)
     if is_sscc(body.code):
         raise HTTPException(
             400,
@@ -612,7 +615,7 @@ async def create_box_scans(
     действующий вход в Честный Знак по УКЭП; в dev/mock — без ограничений.
     Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
-    doc = await _ensure_document_owner(body.document_id, current_user, db)
+    doc = await editable_document(db, body.document_id, current_user.id)
     sscc = normalize_sscc(body.sscc)
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
@@ -640,7 +643,7 @@ async def create_bulk_scans(
     Возвращает массив сканов (дубли — с ``duplicate=True``). Статусы ``pending``
     дотягиваются по WS по мере проверки в Celery.
     """
-    doc = await _ensure_document_owner(body.document_id, current_user, db)
+    doc = await editable_document(db, body.document_id, current_user.id)
 
     # Нормализуем список: strip, отбрасываем пустые, дедуп с сохранением порядка.
     seen: set[str] = set()
@@ -745,8 +748,7 @@ async def patch_scan_product(
 
     scan.moysklad_product_id = _normalize_moysklad_product_id(body.moysklad_product_id)
 
-    doc_row = await db.execute(select(Document).where(Document.id == scan.document_id))
-    doc_obj = doc_row.scalar_one()
+    doc_obj = await editable_document(db, scan.document_id, current_user.id)
     scan.product_name = None
     if scan.moysklad_product_id and doc_obj.plan:
         for p in doc_obj.plan:
@@ -859,7 +861,7 @@ async def delete_document_scans(
     db: AsyncSession = Depends(get_db),
 ):
     """Удалить все марки (сканы) документа из БД."""
-    await _ensure_document_owner(document_id, current_user, db)
+    await editable_document(db, document_id, current_user.id)
     result = await db.execute(
         delete(Scan).where(Scan.document_id == document_id)
     )
@@ -883,7 +885,7 @@ async def delete_scans_bulk(
     db: AsyncSession = Depends(get_db),
 ):
     """Удалить пачку сканов документа по их id (напр. позицию не из плана целиком)."""
-    await _ensure_document_owner(body.document_id, current_user, db)
+    await editable_document(db, body.document_id, current_user.id)
     if not body.scan_ids:
         return {"deleted": 0}
     result = await db.execute(
@@ -918,5 +920,6 @@ async def delete_scan(
     scan = result.scalar_one_or_none()
     if not scan:
         raise HTTPException(status_code=404, detail="Scan not found")
+    await editable_document(db, scan.document_id, current_user.id)
     await db.delete(scan)
     await db.commit()

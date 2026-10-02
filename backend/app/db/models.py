@@ -241,6 +241,7 @@ class Document(Base):
         nullable=False,
     )
     status = Column(Enum(DocumentStatus), default=DocumentStatus.draft, nullable=False)
+    processing_progress = Column(JSONB, nullable=True)
     # План сборки: массив объектов {gtin, product_id, product_name, expected_qty}.
     # Пустой массив = режим без плана (произвольная сборка).
     plan = Column(JSONB, nullable=False, default=list, server_default="[]")

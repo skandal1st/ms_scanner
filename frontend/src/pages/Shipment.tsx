@@ -55,12 +55,14 @@ export function ShipmentPage({
   const {
     send: sendToMs,
     sending,
+    progressLabel,
     done,
     closingTab,
     error: sendError,
     setError: setSendError,
     reset: resetSend,
   } = useSendToMoysklad<Document>({
+    activeDocument: document,
     fetchDoc: (id) => documentsApi.get(id),
     onPoll: (fresh) => setDocument(fresh),
     // В попапе окно закрывает не window.close, а ClosePopup через onSent.
@@ -409,8 +411,11 @@ export function ShipmentPage({
             !document ||
             scans.length === 0 ||
             sending ||
+            document?.status === "processing" ||
+            document?.status === "accepted" ||
             verifying ||
             stats.scanned > 0 ||
+            stats.pending > 0 ||
             stats.unknown_product > 0
           }
           title={
@@ -423,7 +428,7 @@ export function ShipmentPage({
           onClick={() => setShowConfirm(true)}
         >
           {sending
-            ? 'Обрабатывается…'
+            ? progressLabel
             : stats.scanned > 0
               ? `Проверьте марки (${stats.scanned})`
               : stats.unknown_product > 0

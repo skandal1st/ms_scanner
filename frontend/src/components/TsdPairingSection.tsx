@@ -44,6 +44,11 @@ export function TsdPairingSection() {
         Подключите ТСД к текущему юрлицу и рабочему месту. QR действует 5 минут и
         используется только один раз.
       </p>
+      <p className="hint">
+        Для тестов на Android откройте <a href="/tsd" target="_blank" rel="noopener noreferrer">мобильную версию ТСД</a>
+        {' '}в Chrome и установите её на главный экран. Затем откройте приложение
+        и подключите устройство свежим QR. Сканер: ввод с клавиатуры и Enter.
+      </p>
       {workplaces.length > 0 ? (
         <label className="field mt-8" style={{ maxWidth: 420 }}>
           <span>Рабочее место ТСД</span>

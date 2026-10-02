@@ -24,6 +24,7 @@ celery_app.conf.update(
 
 # Периодические задачи (Celery Beat запускается встроенно в воркере: `-B`).
 celery_app.conf.beat_schedule = {
+    "resume-writeoff-polling": {"task": "resume_writeoff_polling", "schedule": crontab(minute="*/5")},
     "cleanup-stale-processing": {
         "task": "cleanup_stale_processing",
         "schedule": crontab(minute=0),  # раз в час, в начале часа

@@ -177,6 +177,11 @@ async def _link_gtin_core(
     сопоставленные сканы. Общий движок, чтобы одиночная и массовая привязка вели
     себя одинаково.
     """
+    from app.services.document_guard import editable_document
+    # Bulk linking calls this repeatedly in one transaction. Preserve the prior
+    # item's pending plan changes before refreshing the locked ORM document.
+    await db.flush()
+    doc = await editable_document(db, doc.id, user_id)
     target_key = normalize_gtin_key(gtin)
     if not target_key:
         raise HTTPException(status_code=400, detail="Некорректный GTIN")
@@ -383,8 +388,8 @@ async def link_upd_position_to_product(
     doc = await _get_document_owned(db, body.document_id, current_user.id)
     if str(doc.kind.value if hasattr(doc.kind, "value") else doc.kind) != "supply":
         raise HTTPException(status_code=400, detail="Документ не является приёмкой")
-    if str(doc.status.value if hasattr(doc.status, "value") else doc.status) == "accepted":
-        raise HTTPException(status_code=409, detail="Принятая приёмка уже не редактируется")
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, doc.id, current_user.id)
 
     pid = body.moysklad_product_id.strip()
     if not pid or len(pid) > 64:

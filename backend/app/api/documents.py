@@ -20,6 +20,7 @@ class PlanItem(BaseModel):
     product_id: Optional[str]
     product_name: str
     expected_qty: int
+    marked: Optional[bool] = None
 
 
 class DocumentResponse(BaseModel):
@@ -31,6 +32,8 @@ class DocumentResponse(BaseModel):
     scan_count: int = 0
     plan: List[PlanItem] = []
     error_message: Optional[str] = None
+    processing_progress: Optional[dict] = None
+    cz_doc_ids: Optional[list[dict]] = None
     organization_profile_id: Optional[UUID] = None
     moysklad_organization_id: Optional[str] = None
     moysklad_store_id: Optional[str] = None
@@ -67,6 +70,8 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
         scan_count=scan_count,
         plan=doc.plan or [],
         error_message=doc.error_message,
+        processing_progress=doc.processing_progress,
+        cz_doc_ids=doc.cz_doc_ids,
         organization_profile_id=doc.organization_profile_id,
         moysklad_organization_id=doc.moysklad_organization_id,
         moysklad_store_id=doc.moysklad_store_id,
@@ -355,19 +360,12 @@ async def refresh_plan(
     db: AsyncSession = Depends(get_db),
 ):
     """Перетянуть план сборки из МС-документа (если он привязан)."""
-    result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.user_id == current_user.id,
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(404, "Document not found")
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, current_user.id)
+
     _ensure_supported_kind(doc.kind.value)
     if not doc.moysklad_id:
         raise HTTPException(400, "Документ не привязан к МойСклад")
-
     ms = await _get_ms_service(current_user, db)
     doc.plan = await ms.build_plan(_plan_source_kind(doc.kind.value), doc.moysklad_id)
     await db.commit()
@@ -488,15 +486,8 @@ async def verify_document(
     в ЧЗ идёт здесь одной операцией. Прогресс — через WS scan_update по каждому скану,
     завершение — событие verify_done.
     """
-    result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.user_id == current_user.id,
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, current_user.id)
 
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus
@@ -525,16 +516,13 @@ async def process_document(
     Завершить документ: Celery обновляет МС (positions, при необходимости
     trackingCodes) и ставит статус accepted. API Честного Знака не вызывается.
     """
-    result = await db.execute(
-        select(Document).where(
-            Document.id == document_id,
-            Document.user_id == current_user.id,
-        )
-    )
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    _ensure_supported_kind(doc.kind.value)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, current_user.id)
+    if doc.kind not in (DocumentKind.demand, DocumentKind.supply):
+        raise HTTPException(400, "Для списания используйте отправку в Честный Знак")
+    if not doc.moysklad_id:
+        raise HTTPException(409, "Сначала выберите документ МойСклад")
+    await _get_ms_service(current_user, db)
 
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus
@@ -543,7 +531,7 @@ async def process_document(
     scanned_q = await db.execute(
         select(func.count(Scan.id)).where(
             Scan.document_id == document_id,
-            Scan.status == ScanStatus.scanned,
+            Scan.status.in_([ScanStatus.scanned, ScanStatus.pending]),
         )
     )
     scanned_count = scanned_q.scalar_one()
@@ -575,10 +563,23 @@ async def process_document(
         )
 
     from app.worker.tasks import process_document_task
+    count = (await db.execute(select(func.count(Scan.id)).where(
+        Scan.document_id == document_id, Scan.status.in_([ScanStatus.valid, ScanStatus.overflow])
+    ))).scalar_one()
+    if not count:
+        raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
     doc.status = DocumentStatus.processing
+    doc.error_message = None
+    doc.processing_progress = {"sent": 0, "total": count, "stage": "preparing"}
     await db.commit()
 
-    process_document_task.delay(str(document_id), str(current_user.id))
+    try:
+        process_document_task.delay(str(document_id), str(current_user.id))
+    except Exception:
+        doc.status = DocumentStatus.draft
+        doc.error_message = "Не удалось поставить отправку в очередь. Повторите попытку."
+        await db.commit()
+        raise HTTPException(503, doc.error_message)
     return {"status": "processing", "document_id": str(document_id)}
 
 

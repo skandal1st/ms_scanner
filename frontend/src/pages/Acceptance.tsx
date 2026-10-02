@@ -48,12 +48,14 @@ export function AcceptancePage({
   const {
     send: sendToMs,
     sending,
+    progressLabel,
     error: sendError,
     done: sendDone,
     closingTab,
     setError: setSendError,
     reset: resetSend,
   } = useSendToMoysklad<AcceptanceDoc>({
+    activeDocument: doc,
     fetchDoc: (id) => acceptanceApi.getDoc(id),
     onPoll: (fresh) => setDoc(fresh),
     extractError: errorDetail,
@@ -594,6 +596,7 @@ export function AcceptancePage({
               scans.length === 0 ||
               blockingUnmatched.length > 0 ||
               sending ||
+            doc?.status === "processing" ||
               alreadyAccepted
             }
             title={
@@ -608,7 +611,7 @@ export function AcceptancePage({
             {alreadyAccepted
               ? 'Отправлено в МС'
               : sending
-                ? 'Отправка в МС…'
+                ? progressLabel
                 : blockingUnmatched.length > 0
                   ? `Сопоставьте товары (${blockingUnmatched.length})`
                   : 'Отправить приёмку в МС'}

@@ -177,6 +177,35 @@ export function WriteoffPage({
     setUnresolved([])
   }
 
+  // Recover completion after WS loss or reopening the page.
+  const writeoffDocId = document?.id
+  const serverProcessing = document?.status === 'processing'
+  useEffect(() => {
+    if (!writeoffDocId || (!serverProcessing && phase !== 'processing')) return
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout>
+    const poll = async () => {
+      try {
+        const { data } = await documentsApi.get(writeoffDocId)
+        if (cancelled) return
+        setDocument(data)
+        if (data.status === 'accepted') {
+          setPhase('done')
+          setMessage(null)
+          return
+        }
+        if (data.error_message) {
+          setPhase('error')
+          setMessage(data.error_message)
+        } else setPhase('processing')
+        if (data.status !== 'processing') return
+      } catch { /* retry a transient network failure */ }
+      if (!cancelled) timer = setTimeout(poll, 5000)
+    }
+    void poll()
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [writeoffDocId, serverProcessing, phase, setDocument])
+
   // Отвязаться от текущего документа → вернуться к выбору (без F5). Сканы остаются в БД.
   const handleDetach = () => {
     reset()
@@ -525,6 +554,11 @@ export function WriteoffPage({
         {message && phase === 'error' && (
           <span style={{ color: 'var(--st-err-fg)', fontSize: 12, marginRight: 12 }}>{message}</span>
         )}
+        {message && document?.cz_doc_ids?.some((item) => item.doc_id) && (
+          <span style={{ fontSize: 12, maxWidth: 360, overflowWrap: 'anywhere' }}>
+            Документы ЧЗ: {document.cz_doc_ids.filter((item) => item.doc_id).map((item) => `${item.pg}: ${item.doc_id}`).join('; ')}
+          </span>
+        )}
         {stats.scanned > 0 && (
           <button
             type="button"
@@ -539,7 +573,7 @@ export function WriteoffPage({
         <button
           type="button"
           className="button button--success"
-          disabled={!canSubmit}
+          disabled={!canSubmit || document?.status === "processing" || document?.status === "accepted"}
           title={
             stats.scanned > 0
               ? `Сначала проверьте марки (${stats.scanned} не проверено)`

@@ -1073,7 +1073,7 @@ def cleanup_stale_processing_task():
 
 async def _cleanup_stale_processing_async() -> int:
     from app.db.session import AsyncSessionLocal
-    from app.db.models import Document, DocumentStatus
+    from app.db.models import Document, DocumentStatus, DocumentKind
     from sqlalchemy import select
 
     cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_PROCESSING_HOURS)
@@ -1081,6 +1081,7 @@ async def _cleanup_stale_processing_async() -> int:
         result = await db.execute(
             select(Document).where(
                 Document.status == DocumentStatus.processing,
+                Document.kind != DocumentKind.loss,
                 Document.updated_at < cutoff,
             )
         )
@@ -1104,6 +1105,30 @@ async def _cleanup_stale_processing_async() -> int:
 
 
 async def _process_document_async(document_id: str, user_id: str):
+    from app.services.document_guard import processing_lock
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Document, DocumentStatus
+    from sqlalchemy import select
+    async with processing_lock(f"process:{document_id}") as acquired:
+        if not acquired:
+            return
+        try:
+            await _process_document_unlocked_async(document_id, user_id)
+        except Exception as exc:
+            async with AsyncSessionLocal() as db:
+                doc = (await db.execute(select(Document).where(
+                    Document.id == document_id, Document.user_id == user_id,
+                    Document.status == DocumentStatus.processing,
+                ))).scalar_one_or_none()
+                if doc:
+                    doc.status = DocumentStatus.draft
+                    doc.error_message = (str(exc) if isinstance(exc, ValueError) else
+                        "Отправка в МойСклад прервалась. Часть марок могла сохраниться; повторная отправка продолжит с оставшихся.")
+                    await db.commit()
+            raise
+
+
+async def _process_document_unlocked_async(document_id: str, user_id: str):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus, Scan, ScanStatus, Integration
     from app.services.moysklad import MoySkladService
@@ -1114,24 +1139,20 @@ async def _process_document_async(document_id: str, user_id: str):
 
     async with AsyncSessionLocal() as db:
         # Получаем сам документ — нужен kind для разветвления
-        doc_result = await db.execute(select(Document).where(Document.id == document_id))
+        doc_result = await db.execute(select(Document).where(Document.id == document_id, Document.user_id == user_id))
         doc = doc_result.scalar_one_or_none()
         if not doc:
             logger.error("process_document.not_found", document_id=document_id)
             return
 
+        if doc.status != DocumentStatus.processing:
+            return
         t0 = time.monotonic()
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
         # demand — отгрузка, supply — приёмка по УПД. Обе ветки пишут trackingCodes
         # в позиции МС-документа одним и тем же механизмом (update_document).
         if kind not in ("demand", "supply"):
-            logger.warning(
-                "process_document.unsupported_kind",
-                document_id=document_id,
-                kind=kind,
-            )
-            return
-
+            raise ValueError("Этот документ нельзя отправить в МойСклад через проведение")
         # Сканы для отправки: valid + overflow.
         # overflow — сверхплановые, визуально помечены красным, но идут в МС.
         # Плюс несопоставленные КОРОБА (is_box, unknown_product): у агрегата с AI 02
@@ -1155,12 +1176,13 @@ async def _process_document_async(document_id: str, user_id: str):
         valid_scans = result.scalars().all()
 
         if not valid_scans:
-            logger.warning(
-                "process_document.no_valid_scans",
-                document_id=document_id,
-                kind=kind,
-            )
-
+            raise ValueError("Нет проверенных марок или товаров для отправки")
+        unresolved = (await db.execute(select(Scan.id).where(
+            Scan.document_id == document_id,
+            Scan.status.in_([ScanStatus.pending, ScanStatus.scanned]),
+        ).limit(1))).first()
+        if unresolved:
+            raise ValueError("Проверка марок ещё не завершена. Дождитесь результата.")
         # Приёмка по УПД: коды упаковок (НомУпак) сохранены как is_box без раскрытия
         # (импорт УПД в API синхронно ЧЗ не дёргает). Перед записью в МС разворачиваем
         # такие агрегаты в листовые КМ пачек через ЧЗ (cises/info + aggregated/list,
@@ -1281,6 +1303,8 @@ async def _process_document_async(document_id: str, user_id: str):
         integration = int_result.scalar_one_or_none()
 
         # Обновление МС-документа (trackingCodes для supply и отгрузочных типов)
+        if not doc.moysklad_id or not integration or not integration.moysklad_token:
+            raise ValueError("МойСклад не подключён или документ не выбран")
         if doc.moysklad_id and integration and integration.moysklad_token and valid_scans:
             ms_token = decrypt_token(integration.moysklad_token)
             ms = MoySkladService(ms_token)
@@ -1350,179 +1374,27 @@ async def _process_document_async(document_id: str, user_id: str):
                         document_id=document_id,
                     )
 
-            remaining_scans = list(valid_scans)
-            max_iterations = len(valid_scans) + 1
-            iterations = 0
-            while remaining_scans:
-                iterations += 1
-                if iterations > max_iterations:
-                    logger.error(
-                        "process_document.retry_limit",
-                        document_id=document_id,
-                        remaining=len(remaining_scans),
-                    )
-                    break
-                scans_data = _build_moysklad_scans_data(
-                    remaining_scans,
-                    kind,
-                    gtin_to_product_id,
-                )
-                # В update_document попадут только строки с product_id.
-                if not any(s.get("product_id") for s in scans_data):
-                    logger.warning(
-                        "process_document.no_product_ids",
-                        document_id=document_id,
-                        kind=kind,
-                        scans=len(scans_data),
-                    )
-                    break
+            scans_data = _build_moysklad_scans_data(valid_scans, kind, gtin_to_product_id)
+            if any(not item.get("product_id") for item in scans_data):
+                raise ValueError("Не все марки сопоставлены с товарами МойСклад. Сопоставьте товары и повторите.")
+
+            async def progress(sent, total):
+                doc.processing_progress = {"sent": sent, "total": total, "stage": "sending"}
+                await db.commit()
+
+            # Protect even distinct local sessions linked to the same MS document.
+            from app.services.document_guard import processing_lock
+            async with processing_lock(f"ms:{user_id}:{kind}:{doc.moysklad_id}") as acquired:
+                if not acquired:
+                    raise ValueError("Этот документ МойСклад уже отправляется из другой сессии. Дождитесь завершения.")
                 result = await ms.update_document(
-                    kind,
-                    doc.moysklad_id,
-                    scans_data,
-                    position_quantities=product_qty,
-                    position_prices=product_price,
-                    description=ms_description,
+                    kind, doc.moysklad_id, scans_data,
+                    position_quantities=product_qty, position_prices=product_price,
+                    description=ms_description, on_progress=progress,
                 )
-                if isinstance(result, dict) and result.get("__moysklad_412__") is True:
-                    body = result.get("body") or ""
-                    # 412 «несколько одинаковых кодов X» — код уже записан в позицию МС
-                    # (повторная отгрузка того же документа). Это не битый КМ: убираем его
-                    # из отправки и повторяем — остальные коды запишутся, документ
-                    # финализируется. Идемпотентность на случай, если засев seen_cis из
-                    # существующих trackingCodes не сработал (МС не отдал их в списке).
-                    dup_m = re.search(
-                        r"несколько одинаковых кодов\s+([^\s\",}]+)",
-                        body,
-                        flags=re.IGNORECASE,
-                    )
-                    if dup_m:
-                        dup_code = dup_m.group(1)
-                        dup_scan = next(
-                            (
-                                s
-                                for s in remaining_scans
-                                if _cis_matches_ms_error_message(s.code, dup_code)
-                                or any(
-                                    _cis_matches_ms_error_message(cc, dup_code)
-                                    for cc in (s.child_codes or [])
-                                )
-                            ),
-                            None,
-                        )
-                        if dup_scan:
-                            logger.warning(
-                                "process_document.dup_code_in_ms",
-                                document_id=document_id,
-                                code=dup_code,
-                            )
-                            remaining_scans = [
-                                s for s in remaining_scans if s.id != dup_scan.id
-                            ]
-                            continue
-                        logger.error(
-                            "process_document.dup_code_unmatched",
-                            document_id=document_id,
-                            dup_code=dup_code,
-                            scan_codes=[
-                                (str(s.id), (s.code or "")[:120]) for s in remaining_scans
-                            ],
-                        )
-                        break
-                    m = re.search(
-                        r"неверный формат кода маркировки\s+([^\s\",}]+)",
-                        body,
-                        flags=re.IGNORECASE,
-                    )
-                    bad_code = m.group(1) if m else None
-                    if not bad_code:
-                        # 412 не про формат кода (напр. error_3007 «Нельзя отгрузить
-                        # товар, которого нет на складе»). Это бизнес-ошибка МС, а не
-                        # битый КМ — показываем кладовщику текст МС и не роняем задачу
-                        # необработанным исключением (иначе документ навсегда виснет
-                        # в «Обрабатывается»).
-                        ms_reason = _extract_moysklad_error(body)
-                        logger.error(
-                            "process_document.moysklad_412_business",
-                            document_id=document_id,
-                            reason=ms_reason,
-                            body=body[:800],
-                        )
-                        doc.error_message = (
-                            f"МойСклад отклонил документ: {ms_reason}"
-                            if ms_reason
-                            else "МойСклад отклонил сохранение документа (412). "
-                            "Проверьте остатки и позиции документа в МойСклад."
-                        )
-                        # Возвращаем в draft — «Обрабатывается» не должно врать;
-                        # кладовщик видит причину и может повторить после исправления.
-                        doc.status = DocumentStatus.draft
-                        await db.commit()
-                        await monitoring_emit(
-                            "process_document.rejected",
-                            level="error",
-                            duration_ms=int((time.monotonic() - t0) * 1000),
-                            document_id=document_id,
-                            kind=kind,
-                            reason=ms_reason,
-                        )
-                        return
-                    bad_scan = next(
-                        (
-                            s
-                            for s in remaining_scans
-                            if _cis_matches_ms_error_message(s.code, bad_code)
-                            or any(
-                                _cis_matches_ms_error_message(cc, bad_code)
-                                for cc in (s.child_codes or [])
-                            )
-                        ),
-                        None,
-                    )
-                    if not bad_scan:
-                        logger.error(
-                            "process_document.bad_code_unmatched",
-                            document_id=document_id,
-                            bad_code=bad_code,
-                            scan_codes=[
-                                (str(s.id), (s.code or "")[:120]) for s in remaining_scans
-                            ],
-                        )
-                        # Не роняем весь батч из-за одного несопоставимого кода:
-                        # прекращаем ретраи; коды, принятые в прошлых итерациях,
-                        # сохранены, документ финализируется как accepted.
-                        break
-
-                    bad_scan.status = ScanStatus.invalid
-                    bad_scan.error_message = (
-                        "Код отклонён МойСклад: неверный формат кода маркировки"
-                    )
-                    await db.commit()
-                    await _push_ws_update(
-                        str(user_id),
-                        str(bad_scan.id),
-                        bad_scan.status,
-                        bad_scan.product_name,
-                        bad_scan.error_message,
-                        gtin=bad_scan.gtin,
-                        moysklad_product_id=bad_scan.moysklad_product_id,
-                    )
-                    logger.warning(
-                        "process_document.bad_code_filtered",
-                        document_id=document_id,
-                        code=bad_code,
-                    )
-                    remaining_scans = [s for s in remaining_scans if s.id != bad_scan.id]
-                    if not remaining_scans:
-                        logger.warning(
-                            "process_document.no_scans_after_filter",
-                            document_id=document_id,
-                            kind=kind,
-                        )
-                    continue
-
-                break
-            valid_scans = remaining_scans
+            if result.get("__moysklad_412__"):
+                reason = _extract_moysklad_error(result.get("body") or "")
+                raise ValueError("МойСклад отклонил документ: " + (reason or "проверьте марки и повторите отправку"))
 
         # Финальный статус документа
         doc.status = DocumentStatus.accepted
@@ -1557,94 +1429,86 @@ def poll_writeoff_status_task(document_id: str, user_id: str):
 
 
 async def _poll_writeoff_async(document_id: str, user_id: str):
+    from app.services.document_guard import processing_lock
+    async with processing_lock(f"writeoff:{document_id}") as acquired:
+        if acquired:
+            await _poll_writeoff_unlocked(document_id, user_id)
+
+
+async def _poll_writeoff_unlocked(document_id, user_id):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus
     from app.services.chestnyznak import ChestnyZnakService, CZApiError
     from app.core.security import decrypt_token
     from sqlalchemy import select
-
     async with AsyncSessionLocal() as db:
-        doc_result = await db.execute(select(Document).where(Document.id == document_id))
-        doc = doc_result.scalar_one_or_none()
+        doc = (await db.execute(select(Document).where(
+            Document.id == document_id, Document.user_id == user_id,
+            Document.status == DocumentStatus.processing,
+        ))).scalar_one_or_none()
         if not doc or not doc.cz_doc_ids:
-            logger.warning("writeoff.poll.no_doc_ids", document_id=document_id)
             return
-
-        integration = await _get_cz_source(db, user_id, document_id)
-        if not integration or not integration.cz_token:
-            logger.warning("writeoff.poll.no_token", document_id=document_id)
+        source = await _get_cz_source(db, user_id, document_id)
+        if not source or not source.cz_token:
+            await _push_cz_token_expired(user_id, document_id)
             return
-
-        cz = ChestnyZnakService(token=decrypt_token(integration.cz_token))
-        items = list(doc.cz_doc_ids)
-        statuses: dict[str, Optional[str]] = {}
-        error: Optional[str] = None
-
-        # Несколько попыток с задержкой: ждём перехода всех документов в терминальный статус.
-        for _attempt in range(15):
-            all_terminal = True
-            for item in items:
-                doc_id = item["doc_id"]
-                if statuses.get(doc_id) in _WRITEOFF_OK:
-                    continue
-                try:
-                    info = await cz.get_document_info(item["pg"], doc_id)
-                except CZApiError as e:
-                    error = str(e)
-                    all_terminal = False
-                    continue
+        cz = ChestnyZnakService(token=decrypt_token(source.cz_token))
+        items = [dict(item) for item in doc.cz_doc_ids]
+        error = None
+        for item in items:
+            if not item.get("doc_id") or item.get("status") in _WRITEOFF_OK:
+                continue
+            try:
+                info = await cz.get_document_info(item["pg"], item["doc_id"])
                 status = info.get("status") if info else None
-                statuses[doc_id] = status
-                if status in _WRITEOFF_PENDING:
-                    all_terminal = False
-                elif status not in _WRITEOFF_OK:
-                    reason = cz.format_document_errors(info) if info else None
-                    error = (
-                        f"Честный Знак отклонил документ: {reason}"
-                        if reason
-                        else f"Документ {doc_id}: статус {status}"
-                    )
-            if all_terminal:
-                break
-            await asyncio.sleep(4)
-
-        all_ok = bool(statuses) and all(
-            statuses.get(i["doc_id"]) in _WRITEOFF_OK for i in items
-        )
+                item["status"] = status
+                if status not in _WRITEOFF_OK and status not in _WRITEOFF_PENDING:
+                    error = cz.format_document_errors(info) or f"ЧЗ отклонил документ: {status}"
+            except CZApiError as exc:
+                error = str(exc)
+        doc.cz_doc_ids = items
+        all_ok = all(i.get("doc_id") and i.get("status") in _WRITEOFF_OK for i in items)
+        uncertain = any(not i.get("doc_id") for i in items)
+        pending = any(i.get("doc_id") and i.get("status") in _WRITEOFF_PENDING for i in items)
         if all_ok:
             doc.status = DocumentStatus.accepted
+            doc.error_message = None
             await db.commit()
-            logger.info("writeoff.poll.done", document_id=document_id)
             await _push_writeoff_status(str(user_id), str(document_id), "done", None)
-            await monitoring_emit(
-                "writeoff.done",
-                source="worker",
-                document_id=str(document_id),
-                docs=len(items),
-            )
-        else:
-            # Не финализируем как accepted; возвращаем в draft, чтобы можно было повторить.
-            doc.status = DocumentStatus.draft
+            await monitoring_emit("writeoff.done", source="worker", document_id=str(document_id), docs=len(items))
+        elif pending:
             await db.commit()
-            logger.warning(
-                "writeoff.poll.error",
-                document_id=document_id,
-                statuses={i["doc_id"]: statuses.get(i["doc_id"]) for i in items},
-                reason=error,
-            )
-            await _push_writeoff_status(
-                str(user_id),
-                str(document_id),
-                "error",
-                error or "Не все документы обработаны Честным Знаком",
-            )
-            await monitoring_emit(
-                "writeoff.error",
-                level="error",
-                source="worker",
-                document_id=str(document_id),
-                error=error or "Не все документы обработаны Честным Знаком",
-            )
+            poll_writeoff_status_task.apply_async(args=[str(document_id), str(user_id)], countdown=60)
+        else:
+            if uncertain:
+                error = "Часть списания имеет неизвестный результат отправки. Проверьте документы в ЧЗ; повторная отправка заблокирована."
+            doc.error_message = error or doc.error_message or "ЧЗ отклонил часть списания. Проверьте ранее отправленные документы."
+            rejected = all(i.get("doc_id") and i.get("status") not in _WRITEOFF_OK and i.get("status") not in _WRITEOFF_PENDING for i in items)
+            if rejected:
+                doc.status = DocumentStatus.draft
+                doc.cz_doc_ids = []
+            await db.commit()
+            await _push_writeoff_status(str(user_id), str(document_id), "error", doc.error_message)
+            await monitoring_emit("writeoff.error", level="error", source="worker", document_id=str(document_id), error=doc.error_message)
+
+
+@celery_app.task(name="resume_writeoff_polling")
+def resume_writeoff_polling_task():
+    return _run(_resume_writeoff_polling_async())
+
+
+async def _resume_writeoff_polling_async():
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Document, DocumentStatus, DocumentKind
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        docs = (await db.execute(select(Document.id, Document.user_id).where(
+            Document.kind == DocumentKind.loss, Document.status == DocumentStatus.processing,
+            Document.cz_doc_ids.is_not(None),
+        ))).all()
+    for doc_id, user_id in docs:
+        poll_writeoff_status_task.delay(str(doc_id), str(user_id))
+    return len(docs)
 
 
 @celery_app.task(name="edo_sync")

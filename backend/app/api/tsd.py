@@ -535,6 +535,8 @@ async def create_tsd_scan(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, document_id, device.user_id)
     user, _, _ = await _device_scope(db, device)
     code = normalize_sscc(body.code)
     if is_sscc(code):

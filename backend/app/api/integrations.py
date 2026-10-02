@@ -454,7 +454,12 @@ async def cz_writeoff_prepare(
         raise HTTPException(status_code=400, detail="Неизвестная причина списания")
     reason = WRITEOFF_REASONS[body.reason]
 
-    doc = await _load_owned_document(db, body.document_id, current_user.id)
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, body.document_id, current_user.id)
+    if doc.kind.value != "loss":
+        raise HTTPException(400, "Для списания выберите документ списания")
+    if doc.cz_doc_ids:
+        raise HTTPException(409, "Списание уже отправлялось в ЧЗ. Проверьте результат ранее отправленных документов.")
 
     cz_source = await _cz_source_for_document(db, doc, current_user.id)
     if not cz_source or not cz_source.cz_token:
@@ -532,6 +537,7 @@ async def cz_writeoff_prepare(
             "document_id": str(doc.id),
             "reason": body.reason,
             "parts": stored_parts,
+            "scan_codes": sorted(cises),
         }
         r = aioredis.from_url(settings.REDIS_URL)
         try:
@@ -565,55 +571,84 @@ async def cz_writeoff_submit(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Подать подписанные документы вывода из оборота в ЧЗ и запустить опрос статуса."""
-    redis_key = f"cz:writeoff:{current_user.id}:{body.writeoff_token}"
+    """Submit under a cross-process lock; persist each external outcome immediately."""
+    from app.services.document_guard import processing_lock
     r = aioredis.from_url(settings.REDIS_URL)
+    redis_key = f"cz:writeoff:{current_user.id}:{body.writeoff_token}"
     try:
-        raw = await r.getdel(redis_key)
+        raw = await r.get(redis_key)
+        if not raw:
+            raise HTTPException(400, "Сессия списания истекла — повторите")
+        payload = json.loads(raw)
+        document_id = UUID(payload["document_id"])
+        async with processing_lock(f"writeoff:{document_id}") as acquired:
+            if not acquired:
+                raise HTTPException(409, "Списание уже отправляется")
+            result = await _submit_writeoff_parts(db, current_user, payload, body.signatures)
+        await r.delete(redis_key)
+        return result
     finally:
         await r.aclose()
-    if not raw:
-        raise HTTPException(status_code=400, detail="Сессия списания истекла — повторите")
 
-    payload = json.loads(raw)
-    document_id = UUID(payload["document_id"])
-    stored_parts: dict[str, dict] = payload["parts"]
 
-    doc = await _load_owned_document(db, document_id, current_user.id)
-
-    cz_source = await _cz_source_for_document(db, doc, current_user.id)
-    if not cz_source or not cz_source.cz_token:
-        raise HTTPException(status_code=400, detail="Нет токена Честного Знака")
-
-    sig_by_pg = {s.pg: s.signature for s in body.signatures}
-    cz = ChestnyZnakService(token=decrypt_token(cz_source.cz_token))
-
-    doc_ids: list[dict] = []
-    for pg, part in stored_parts.items():
-        signature = sig_by_pg.get(pg)
-        if not signature:
-            raise HTTPException(status_code=400, detail=f"Нет подписи для группы {pg}")
-        try:
-            cz_doc_id = await cz.submit_document(
-                pg=pg,
-                product_document_b64=part["product_document_b64"],
-                signature_b64=signature,
-            )
-        except CZApiError as e:
-            # Не 401 — иначе axios-интерцептор выкинет на /login.
-            raise HTTPException(status_code=502, detail=str(e))
-        doc_ids.append({"doc_id": cz_doc_id, "pg": pg})
-
-    doc.cz_doc_ids = doc_ids
+async def _submit_writeoff_parts(db, current_user, payload, signatures):
+    from app.services.document_guard import editable_document
+    doc = await editable_document(db, UUID(payload["document_id"]), current_user.id)
+    if doc.kind.value != "loss" or doc.cz_doc_ids:
+        raise HTTPException(409, "Списание уже отправлялось в ЧЗ. Повторная отправка заблокирована.")
+    stored_parts = payload["parts"]
+    sig_by_pg = {s.pg: s.signature for s in signatures}
+    if not stored_parts or any(not sig_by_pg.get(pg) for pg in stored_parts):
+        raise HTTPException(400, "Подпишите все товарные группы до отправки")
+    scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalars().all()
+    if any(s.status in (ScanStatus.pending, ScanStatus.scanned) for s in scans):
+        raise HTTPException(409, "Сначала завершите проверку марок")
+    if sorted(_scan_cises([s for s in scans if s.status in (ScanStatus.valid, ScanStatus.overflow)])) != payload.get("scan_codes"):
+        raise HTTPException(409, "Список марок изменился после подготовки. Подготовьте и подпишите списание заново.")
+    source = await _cz_source_for_document(db, doc, current_user.id)
+    if not source or not source.cz_token:
+        raise HTTPException(400, "Нет токена Честного Знака")
+    if source.cz_token_expires_at and source.cz_token_expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(400, "Токен Честного Знака истёк — войдите заново")
+    cz = ChestnyZnakService(token=decrypt_token(source.cz_token))
+    items = [{"pg": pg, "state": "ready"} for pg in stored_parts]
+    doc.cz_doc_ids = items
     doc.status = DocumentStatus.processing
+    doc.error_message = None
     await db.commit()
-
     from app.worker.tasks import poll_writeoff_status_task
-
-    poll_writeoff_status_task.delay(str(doc.id), str(current_user.id))
-
-    logger.info("writeoff.submitted", document_id=str(doc.id), docs=len(doc_ids))
-    return WriteoffSubmitResponse(doc_ids=[d["doc_id"] for d in doc_ids])
+    try:
+        for index, (pg, part) in enumerate(stored_parts.items()):
+            # If the process dies during POST, its uncertain outcome is durable.
+            items[index] = {"pg": pg, "state": "submitting"}
+            doc.cz_doc_ids = [dict(i) for i in items]
+            await db.commit()
+            external_id = await cz.submit_document(
+                pg=pg, product_document_b64=part["product_document_b64"], signature_b64=sig_by_pg[pg],
+            )
+            if not external_id:
+                raise CZApiError("Честный Знак не вернул идентификатор документа")
+            items[index] = {"pg": pg, "doc_id": external_id, "state": "submitted"}
+            doc.cz_doc_ids = [dict(i) for i in items]
+            await db.commit()
+    except Exception:
+        doc.error_message = (
+            "Отправка списания прервалась. Ранее полученные ID сохранены. "
+            "Проверьте документы в ЧЗ; повторная отправка заблокирована, чтобы избежать дублей."
+        )
+        await db.commit()
+        try:
+            poll_writeoff_status_task.delay(str(doc.id), str(current_user.id))
+        except Exception:
+            logger.warning("writeoff.poll.enqueue_failed", document_id=str(doc.id))
+        raise HTTPException(502, doc.error_message)
+    # Beat also recovers this polling job if the broker is temporarily unavailable.
+    try:
+        poll_writeoff_status_task.delay(str(doc.id), str(current_user.id))
+    except Exception:
+        logger.warning("writeoff.poll.enqueue_failed", document_id=str(doc.id))
+    logger.info("writeoff.submitted", document_id=str(doc.id), docs=len(items))
+    return WriteoffSubmitResponse(doc_ids=[i["doc_id"] for i in items])
 
 
 # ── Проверка марок через ГИС МТ (только чтение, без отгрузки/списания) ───────────

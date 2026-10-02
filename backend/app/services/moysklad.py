@@ -1,4 +1,6 @@
 import asyncio
+from collections import deque
+from typing import Awaitable, Callable
 import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
@@ -48,7 +50,7 @@ class MoySkladService:
 
     # МС ограничивает частоту запросов (429, code 1049). При приёмке идёт много
     # обращений подряд (позиции + trackingCodes), поэтому на 429 ждём и повторяем.
-    _RATE_LIMIT_DELAYS = (0.6, 1.5, 3.0)
+    _RATE_LIMIT_DELAYS = (1.0, 2.0, 5.0, 10.0, 20.0)
 
     async def _request_with_retry(
         self,
@@ -64,6 +66,11 @@ class MoySkladService:
             if resp.status_code != 429 or attempt == len(self._RATE_LIMIT_DELAYS):
                 return resp
             delay = self._RATE_LIMIT_DELAYS[attempt]
+            try:
+                delay = max(delay, min(60.0, float(resp.headers.get("Retry-After", 0))),
+                            min(60.0, float(resp.headers.get("X-Lognex-Retry-After", 0)) / 1000))
+            except ValueError:
+                pass
             logger.warning(
                 "moysklad.rate_limited",
                 method=method,
@@ -290,15 +297,36 @@ class MoySkladService:
 
     async def _load_positions_rows(self, kind: str, doc_id: str) -> List[Dict[str, Any]]:
         self._validate_kind(kind)
-        async with httpx.AsyncClient(timeout=25) as client:
+        rows = []
+        async with httpx.AsyncClient(timeout=30) as client:
+            offset = 0
+            while True:
+                resp = await self._request_with_retry(
+                    client, "GET", f"{self.base_url}/entity/{kind}/{doc_id}/positions",
+                    params={"expand": "assortment", "limit": 100, "offset": offset, "codetype": "gs1"},
+                )
+                resp.raise_for_status()
+                page = resp.json().get("rows", [])
+                rows.extend(page)
+                if len(page) < 100:
+                    return rows
+                offset += len(page)
+
+    async def _load_tracking_codes(self, client, kind, doc_id, position_id):
+        codes = []
+        offset = 0
+        while True:
             resp = await self._request_with_retry(
-                client,
-                "GET",
-                f"{self.base_url}/entity/{kind}/{doc_id}/positions",
-                params={"expand": "assortment", "limit": 1000},
+                client, "GET", f"{self.base_url}/entity/{kind}/{doc_id}/positions/{position_id}/trackingCodes",
+                params={"codetype": "gs1", "limit": 100, "offset": offset},
             )
             resp.raise_for_status()
-            return list(resp.json().get("rows", []))
+            payload = resp.json()
+            page = payload if isinstance(payload, list) else payload.get("rows", [])
+            codes.extend(page)
+            if len(page) < 100:
+                return codes
+            offset += len(page)
 
     @staticmethod
     def _product_id_from_position(pos: Dict[str, Any]) -> Optional[str]:
@@ -438,273 +466,134 @@ class MoySkladService:
 
         return payload
 
+    TRACKING_BATCH_SIZE = 500
+
     async def update_document(
-        self,
-        kind: str,
-        doc_id: str,
-        scans: List[Dict],
+        self, kind: str, doc_id: str, scans: List[Dict],
         position_quantities: Optional[Dict[str, int]] = None,
         position_prices: Optional[Dict[str, Dict[str, Any]]] = None,
         description: Optional[str] = None,
+        on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
     ) -> Dict[str, Any]:
-        """
-        Обновить позиции МС-документа на основе сканов.
-        Сканы группируются по product_id: один товар = одна позиция с quantity
-        и (если не mock сервера) CIS маркировки.
+        """Preserve existing positions; send all codes in bounded, resumable batches.
 
-        Если позиции уже есть в МС (типичный случай), КМ отправляются отдельным
-        ``POST /entity/{kind}/{id}/positions/{positionId}/trackingCodes`` по
-        документации МС; в ``PUT`` документа поле ``trackingCodes`` у позиций
-        не передаётся (избегаем 412 из-за иного пути валидации).
-
-        При HTTP 412 (неверный CIS) на ``PUT`` или ``POST`` trackingCodes **не**
-        бросает исключение: возвращает ``{"__moysklad_412__": True, "body": "..."}``.
-
-        В mock-режиме (`CZ_MOCK_MODE=true`) КМ в МС не шлём.
+        Never repeat an uncertain POST blindly. A subsequent attempt reads every
+        saved code before sending the remainder, including partially saved batches.
         """
         self._validate_kind(kind)
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
-        # Уникальность cis у МС — по всему документу. Копим отправленные cis, чтобы
-        # один и тот же код не ушёл в две позиции/дважды (иначе МС отклонит документ).
-        seen_cis: set = set()
-
-        # Группировка по product_id
-        groups: Dict[str, List[Dict]] = {}
-        for s in scans:
-            product_id = s.get("product_id")
-            if not product_id:
-                continue
-            groups.setdefault(product_id, []).append(s)
-
+        groups = {}
+        for scan in scans:
+            pid = scan.get("product_id")
+            if not pid:
+                raise ValueError("Не все марки сопоставлены с товарами МойСклад")
+            groups.setdefault(pid, []).append(scan)
         if not groups:
-            logger.warning(
-                "moysklad.update_document.no_positions",
-                kind=kind,
-                doc_id=doc_id,
-            )
-            return {}
+            raise ValueError("Нет товаров для отправки в МойСклад")
 
-        pending: Dict[str, List[Dict]] = {pid: list(g) for pid, g in groups.items()}
-        tc_lines = sum(len(v) for v in groups.values())
-        # (position_uuid, [{cis, type}, ...]) — POST на сабресурс trackingCodes
-        post_tracking_batches: list[tuple[str, list[dict[str, str]]]] = []
+        # A read failure must never be treated as an empty document.
+        ms_rows = await self._load_positions_rows(kind, doc_id)
+        pending = {pid: deque(group) for pid, group in groups.items()}
+        last_row = {self._product_id_from_position(row): i for i, row in enumerate(ms_rows)}
+        positions = []
+        allocated = []
+        for i, row in enumerate(ms_rows):
+            pid = self._product_id_from_position(row)
+            payload = self._position_put_payload(row)
+            payload.pop("trackingCodes", None)
+            payload.pop("trackingCodes_1162", None)
+            remaining = pending.get(pid)
+            take = []
+            if remaining:
+                cap = max(1, int(row.get("quantity") or 0))
+                units = 0
+                # The final row of a product receives overflow as well.
+                while remaining and (units < cap or last_row.get(pid) == i):
+                    item = remaining.popleft()
+                    take.append(item)
+                    units += self._scan_units(item)
+                payload["quantity"] = units
+            pp = (position_prices or {}).get(pid) or {}
+            if pp.get("price") is not None:
+                payload["price"] = int(round(float(pp["price"]) * 100))
+            if pp.get("vat") is not None:
+                payload.update(vat=int(pp["vat"]), vatEnabled=True)
+            positions.append(payload)
+            allocated.append((row, take))
 
-        try:
-            ms_rows = await self._load_positions_rows(kind, doc_id)
-        except Exception as exc:
-            logger.warning(
-                "moysklad.update_document.fetch_positions_failed",
-                kind=kind,
-                doc_id=doc_id,
-                error=str(exc),
-            )
-            ms_rows = []
+        new_products = {}
+        for pid, remaining in pending.items():
+            if not remaining:
+                continue
+            group = list(remaining)
+            units = sum(self._scan_units(item) for item in group)
+            qty = max(units, int((position_quantities or {}).get(pid) or 0))
+            payload = {"assortment": {"meta": {
+                "href": f"{self.base_url}/entity/product/{pid}",
+                "type": "product", "mediaType": "application/json",
+            }}, "quantity": qty}
+            pp = (position_prices or {}).get(pid) or {}
+            if pp.get("price") is not None:
+                payload["price"] = int(round(float(pp["price"]) * 100))
+            if pp.get("vat") is not None:
+                payload.update(vat=int(pp["vat"]), vatEnabled=True)
+            positions.append(payload)
+            new_products[pid] = group
+        if len(positions) > 1000:
+            raise ValueError("В документе больше 1000 позиций. Разделите его на несколько документов МойСклад.")
 
-        # Идемпотентность повторной отгрузки: коды, уже записанные в позиции МС прошлой
-        # попыткой, повторно НЕ отправляем — иначе МС «в документе несколько одинаковых
-        # кодов». Засеваем seen_cis каноническими ключами существующих trackingCodes.
-        if write_codes and ms_rows:
-            existing = 0
-            for row in ms_rows:
-                for tc in row.get("trackingCodes") or []:
-                    if not isinstance(tc, dict):
-                        continue
-                    key = self._cis_dedup_key(tc.get("cis") or tc.get("cis_1162"))
-                    if key and key not in seen_cis:
-                        seen_cis.add(key)
-                        existing += 1
-            if existing:
-                logger.info(
-                    "moysklad.update_document.existing_codes_seeded",
-                    kind=kind,
-                    doc_id=doc_id,
-                    count=existing,
-                )
-
-        positions: List[Dict[str, Any]]
-
-        if ms_rows:
-            positions = []
-            for row in ms_rows:
-                pid = self._product_id_from_position(row)
-                payload = self._position_put_payload(row)
-                if write_codes:
-                    payload.pop("trackingCodes", None)
-                    payload.pop("trackingCodes_1162", None)
-                # Цена/НДС из УПД перекрывают то, что стоит в существующей позиции
-                # поступления (обычно 0 у только что созданного/пустого поступления).
-                # Без этого закупочная цена из XML в МС не проставляется — приёмка
-                # связана с уже имеющими позиции поступлениями (ветка ms_rows), а не
-                # с пустым документом (ветка ниже). МС хранит цену в копейках.
-                pp = (position_prices or {}).get(pid) if pid else None
-                if pp:
-                    if pp.get("price") is not None:
-                        try:
-                            payload["price"] = int(round(float(pp["price"]) * 100))
-                        except (TypeError, ValueError):
-                            pass
-                    if pp.get("vat") is not None:
-                        try:
-                            payload["vat"] = int(pp["vat"])
-                            payload["vatEnabled"] = True
-                        except (TypeError, ValueError):
-                            pass
-                remaining = pending.get(pid) if pid else None
-                if remaining:
-                    row_cap_raw = row.get("quantity")
-                    try:
-                        row_cap = int(row_cap_raw) if row_cap_raw is not None else 0
-                    except (TypeError, ValueError):
-                        row_cap = 0
-                    if row_cap < 1:
-                        row_cap = sum(self._scan_units(s) for s in remaining)
-                    # Набираем сканы по единицам (короб атомарен — берём целиком,
-                    # даже если перешагнёт row_cap); quantity позиции = сумма единиц.
-                    take: List[Dict[str, Any]] = []
-                    units = 0
-                    while remaining and units < row_cap:
-                        nxt = remaining.pop(0)
-                        take.append(nxt)
-                        units += self._scan_units(nxt)
-                    if take:
-                        payload["quantity"] = units
-                        if write_codes:
-                            ms_tt = self._moysklad_tracking_type_from_position(row)
-                            # Штрихкод немаркированного товара (is_barcode) даёт только
-                            # quantity позиции — trackingCode для него не пишем.
-                            # Повторяющиеся cis отбрасываем (МС не примет дубль в документе).
-                            tc_batch = self._tracking_batch(take, ms_tt, seen_cis, doc_id)
-                            pos_row_id = row.get("id")
-                            if pos_row_id and tc_batch:
-                                post_tracking_batches.append(
-                                    (str(pos_row_id), tc_batch)
-                                )
-                positions.append(payload)
-
-            leftover = {k: v for k, v in pending.items() if v}
-            if leftover:
-                logger.warning(
-                    "moysklad.update_document.scans_not_placed",
-                    kind=kind,
-                    doc_id=doc_id,
-                    products=list(leftover.keys()),
-                )
-        else:
-            # Нет позиций из МС — старый путь (новый/пустой документ)
-            positions = []
-            for product_id, group in groups.items():
-                # Кол-во позиции: приоритет — КолТов из УПД (position_quantities),
-                # иначе сумма единиц по сканам (fallback на число распознанных кодов).
-                qty = (position_quantities or {}).get(product_id)
-                try:
-                    qty = int(qty) if qty is not None else 0
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty < 1:
-                    qty = sum(self._scan_units(s) for s in group)
-                position: Dict[str, Any] = {
-                    "assortment": {
-                        "meta": {
-                            "href": f"{self.base_url}/entity/product/{product_id}",
-                            "type": "product",
-                            "mediaType": "application/json",
-                        }
-                    },
-                    "quantity": qty,
-                }
-                # Цена (МС хранит в копейках) и НДС из УПД.
-                pp = (position_prices or {}).get(product_id) or {}
-                if pp.get("price") is not None:
-                    try:
-                        position["price"] = int(round(float(pp["price"]) * 100))
-                    except (TypeError, ValueError):
-                        pass
-                if pp.get("vat") is not None:
-                    try:
-                        position["vat"] = int(pp["vat"])
-                        position["vatEnabled"] = True
-                    except (TypeError, ValueError):
-                        pass
-                if write_codes:
-                    # Штрихкод немаркированного товара (is_barcode) не даёт trackingCode.
-                    # Повторяющиеся cis отбрасываем (МС не примет дубль в документе).
-                    tcs = self._tracking_batch(group, None, seen_cis, doc_id)
-                    if tcs:
-                        position["trackingCodes"] = tcs
-                positions.append(position)
-
-        put_body: Dict[str, Any] = {"positions": positions}
+        body = {"positions": positions}
         if description:
-            put_body["description"] = description
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await self._request_with_retry(
-                client,
-                "PUT",
-                f"{self.base_url}/entity/{kind}/{doc_id}",
-                json=put_body,
-            )
-            if resp.status_code >= 400:
-                # raise_for_status() прячет тело ответа МС с реальной причиной.
-                # Логируем body, чтобы не приходилось дёргать diff в проде.
-                logger.error(
-                    "moysklad.update_document.failed",
-                    kind=kind,
-                    doc_id=doc_id,
-                    status=resp.status_code,
-                    body=resp.text[:1000],
-                    sent_codes=write_codes,
-                )
-                # 412 обрабатывает воркер (исключение из Celery доходит до пользователя).
-                if resp.status_code == 412:
-                    return {"__moysklad_412__": True, "body": resp.text}
-                resp.raise_for_status()
+            body["description"] = description
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10)) as client:
+            # Read before mutation: a failed code read also aborts safely.
+            seen = set()
+            if write_codes:
+                for row in ms_rows:
+                    if not row.get("id"):
+                        raise ValueError("МойСклад не вернул идентификатор позиции")
+                    for tc in await self._load_tracking_codes(client, kind, doc_id, row["id"]):
+                        key = self._cis_dedup_key(tc.get("cis") or tc.get("cis_1162"))
+                        if key:
+                            seen.add(key)
+            batches = []
+            for row, group in allocated:
+                codes = self._tracking_batch(group, self._moysklad_tracking_type_from_position(row), seen, doc_id) if write_codes else []
+                if codes:
+                    batches.append((row["id"], codes))
 
-            if write_codes and ms_rows and post_tracking_batches:
-                for pos_id, batch in post_tracking_batches:
-                    tc_url = (
-                        f"{self.base_url}/entity/{kind}/{doc_id}"
-                        f"/positions/{pos_id}/trackingCodes"
-                    )
+            resp = await self._request_with_retry(client, "PUT", f"{self.base_url}/entity/{kind}/{doc_id}", json=body)
+            if resp.status_code == 412:
+                return {"__moysklad_412__": True, "body": resp.text}
+            resp.raise_for_status()
+            # New positions are created without an unbounded embedded code array.
+            if write_codes and new_products:
+                refreshed = await self._load_positions_rows(kind, doc_id)
+                for pid, group in new_products.items():
+                    row = next((r for r in refreshed if self._product_id_from_position(r) == pid), None)
+                    if not row or not row.get("id"):
+                        raise ValueError("Не удалось найти созданную позицию МойСклад. Повторите отправку.")
+                    codes = self._tracking_batch(group, self._moysklad_tracking_type_from_position(row), seen, doc_id)
+                    if codes:
+                        batches.append((row["id"], codes))
+            total = sum(len(codes) for _, codes in batches)
+            sent = 0
+            if on_progress:
+                await on_progress(sent, total)
+            for pos_id, codes in batches:
+                for offset in range(0, len(codes), self.TRACKING_BATCH_SIZE):
+                    batch = codes[offset:offset + self.TRACKING_BATCH_SIZE]
                     tc_resp = await self._request_with_retry(
-                        client,
-                        "POST",
-                        tc_url,
-                        json=batch,
+                        client, "POST", f"{self.base_url}/entity/{kind}/{doc_id}/positions/{pos_id}/trackingCodes", json=batch,
                     )
-                    if tc_resp.status_code >= 400:
-                        logger.error(
-                            "moysklad.post_tracking_codes.failed",
-                            kind=kind,
-                            doc_id=doc_id,
-                            position_id=pos_id,
-                            status=tc_resp.status_code,
-                            body=tc_resp.text[:1000],
-                            batch_size=len(batch),
-                        )
-                        if tc_resp.status_code == 412:
-                            return {
-                                "__moysklad_412__": True,
-                                "body": tc_resp.text,
-                            }
-                        tc_resp.raise_for_status()
-                    logger.info(
-                        "moysklad.post_tracking_codes.ok",
-                        kind=kind,
-                        doc_id=doc_id,
-                        position_id=pos_id,
-                        count=len(batch),
-                    )
-
-            logger.info(
-                "moysklad.update_document.ok",
-                kind=kind,
-                doc_id=doc_id,
-                positions_sent=len(positions),
-                scans_grouped=tc_lines,
-                sent_tracking_codes=write_codes,
-                merged_from_ms=bool(ms_rows),
-                tracking_via_post=bool(post_tracking_batches),
-            )
+                    if tc_resp.status_code == 412:
+                        return {"__moysklad_412__": True, "body": tc_resp.text}
+                    tc_resp.raise_for_status()
+                    sent += len(batch)
+                    if on_progress:
+                        await on_progress(sent, total)
+                    logger.info("moysklad.tracking_batch.sent", kind=kind, doc_id=doc_id, sent=sent, total=total)
+            logger.info("moysklad.update_document.ok", kind=kind, doc_id=doc_id, positions_sent=len(positions), codes_sent=sent)
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:

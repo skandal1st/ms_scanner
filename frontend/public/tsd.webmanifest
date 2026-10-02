@@ -1,0 +1,26 @@
+{
+  "id": "/tsd",
+  "name": "Скандата — ТСД",
+  "short_name": "Скандата ТСД",
+  "description": "Сборка отгрузок и сканирование марок на терминале сбора данных",
+  "lang": "ru",
+  "start_url": "/tsd",
+  "scope": "/tsd",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#17233d",
+  "icons": [
+    {
+      "src": "/tsd-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/tsd-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
