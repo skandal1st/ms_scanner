@@ -77,6 +77,8 @@ export interface MsDocument {
 
 export interface PlanItem {
   gtin: string | null
+  gtins?: string[]
+  pack_gtins?: string[]
   product_id: string | null
   product_name: string
   expected_qty: number

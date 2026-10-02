@@ -1327,13 +1327,15 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             # Используется при создании новых позиций поступления в МС.
             product_qty: dict[str, int] = {}
             product_price: dict[str, dict] = {}
+            from app.services.plan_matching import plan_gtin_keys, unique_plan_product
             for p in doc.plan or []:
                 if not isinstance(p, dict):
                     continue
-                g, pid = p.get("gtin"), p.get("product_id")
-                ng = normalize_gtin_key(g)
-                if ng and pid and isinstance(pid, str):
-                    gtin_to_product_id.setdefault(ng, pid)
+                pid = p.get("product_id")
+                for ng in plan_gtin_keys(p):
+                    matched = unique_plan_product(doc.plan, ng)
+                    if matched:
+                        gtin_to_product_id[ng] = matched["product_id"]
                 if pid and isinstance(pid, str):
                     try:
                         q = int(p.get("expected_qty") or 0)

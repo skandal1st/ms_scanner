@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent 
 import axios from 'axios'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem } from '../api/client'
-import { buildProgress, effectiveGtinKey, normalizeGtinKey } from '../store/scanStore'
+import { buildProgress, effectiveGtinKey, findProgressRowForScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 
@@ -215,10 +215,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   })
   const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
   const last = doc.scans[0]
-  const rowForScan = (value: typeof last) => progress.rows.find((row) =>
-    (value.moysklad_product_id && row.product_id === value.moysklad_product_id) ||
-    (Boolean(effectiveGtinKey(value)) && normalizeGtinKey(row.gtin) === effectiveGtinKey(value)),
-  )
+  const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
   const current = (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
   const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
   const filteredScans = doc.scans.filter((item) => positionFilter === 'all'

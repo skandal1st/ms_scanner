@@ -259,6 +259,11 @@ async def _create_scan_record(
     # уточнит связку. Только для обычных КМ (короб опознаётся своей задачей).
     resolved_pid = moysklad_product_id
     if not is_box and gtin:
+        from app.services.plan_matching import unique_plan_product
+        planned = unique_plan_product(doc_obj.plan, gtin)
+        if resolved_pid is None and planned:
+            resolved_pid = planned["product_id"]
+            initial_name = (planned.get("product_name") or "").strip() or None
         if resolved_pid is None:
             known = await get_gtin_product(db, current_user_id, gtin)
             if known:

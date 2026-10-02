@@ -22,6 +22,7 @@ function isAdded(status: string): boolean {
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
 export interface ProgressRow {
   gtin: string
+  gtins?: string[]
   /** UUID товара в МС из плана (для ручного выбора строки). */
   product_id: string | null
   product_name: string
@@ -179,12 +180,27 @@ function scanMatchesPlanRow(
   scan: Scan,
   planKey: string | null,
   planProductId: string | null | undefined,
+  aliases: string[] = [],
 ): boolean {
   const byPid =
     Boolean(planProductId && scan.moysklad_product_id) &&
     scan.moysklad_product_id === planProductId
-  const byGtin = Boolean(planKey && effectiveGtinKey(scan) === planKey)
+  const scanKey = effectiveGtinKey(scan)
+  const byGtin = Boolean(scanKey && (scanKey === planKey || aliases.includes(scanKey)))
   return byPid || byGtin
+}
+
+export function findProgressRowForScan(scan: Scan, rows: ProgressRow[]): ProgressRow | undefined {
+  const byProduct = scan.moysklad_product_id
+    ? rows.filter((row) => row.product_id === scan.moysklad_product_id) : []
+  if (byProduct.length === 1) return byProduct[0]
+  const byGtin = rows.filter((row) => scanMatchesPlanRow(scan, normalizeGtinKey(row.gtin), null, row.gtins))
+  return byGtin.length === 1 ? byGtin[0] : undefined
+}
+
+function planGtinKeys(item: PlanItem): string[] {
+  return Array.from(new Set([item.gtin, ...(item.gtins || []), ...(item.pack_gtins || [])]
+    .map(normalizeGtinKey).filter((key): key is string => Boolean(key))))
 }
 
 /** Скан принадлежит выбранной позиции (для подсветки кодов). */
@@ -195,7 +211,7 @@ export function selectionMatchesScan(sel: PositionSelection, scan: Scan): boolea
 /** Строка прогресса соответствует выбранной позиции (для подсветки позиции). */
 export function selectionMatchesRow(sel: PositionSelection, row: ProgressRow): boolean {
   const byPid = Boolean(sel.productId && row.product_id) && row.product_id === sel.productId
-  const byGtin = Boolean(sel.gtinKey && normalizeGtinKey(row.gtin) === sel.gtinKey)
+  const byGtin = Boolean(sel.gtinKey && (normalizeGtinKey(row.gtin) === sel.gtinKey || row.gtins?.includes(sel.gtinKey)))
   return byPid || byGtin
 }
 
@@ -217,29 +233,25 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
   if (planItems.length > 0) {
     const rows: ProgressRow[] = planItems.map((p) => {
       const gtin = (p.gtin as string) || ''
-      const planKey = p.gtin ? normalizeGtinKey(p.gtin) : null
+      const aliases = planGtinKeys(p)
       const planProductId = (p.product_id as string) || null
-      const addedTotal = sumUnits(
-        scans.filter(
-          (s) => isAdded(s.status) && scanMatchesPlanRow(s, planKey, planProductId),
-        ),
-      )
-      const scanned = sumUnits(
-        scans.filter(
-          (s) =>
-            s.status === 'valid' && scanMatchesPlanRow(s, planKey, planProductId),
-        ),
-      )
       return {
         gtin: gtin || planProductId || '—',
+        gtins: aliases,
         product_id: planProductId,
         product_name: p.product_name,
         expected: p.expected_qty,
-        scanned,
-        addedTotal,
+        scanned: 0,
+        addedTotal: 0,
         unmarked: p.marked === false,
       }
     })
+    for (const scan of scans) {
+      const row = findProgressRowForScan(scan, rows)
+      if (!row) continue
+      if (isAdded(scan.status)) row.addedTotal += scanUnits(scan)
+      if (scan.status === 'valid') row.scanned += scanUnits(scan)
+    }
     const total = {
       scanned: rows.reduce((a, r) => a + r.scanned, 0),
       expected: rows.reduce((a, r) => a + r.expected, 0),
@@ -248,12 +260,8 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 
     // Позиции не из плана: сканы valid/overflow/pending, чей GTIN/товар не совпал ни
     // с одной строкой плана. unknown_product сюда не берём — это отдельный поток подбора.
-    const planRefs = planItems.map((p) => ({
-      key: p.gtin ? normalizeGtinKey(p.gtin) : null,
-      pid: (p.product_id as string) || null,
-    }))
     const inPlan = (s: Scan): boolean =>
-      planRefs.some((r) => scanMatchesPlanRow(s, r.key, r.pid))
+      Boolean(findProgressRowForScan(s, rows))
     const offGroups = new Map<string, OffPlanRow>()
     for (const s of scans) {
       // ВАЖНО: статус `scanned` (принят локально, ещё НЕ проверен в ЧЗ) сюда не берём.

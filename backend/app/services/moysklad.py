@@ -254,11 +254,12 @@ class MoySkladService:
                 continue
             product_name = asrt.get("name") or ""
             # Ищем GTIN среди штрихкодов базовой единицы товара (поле gtin или ean13).
-            gtin = None
+            gtins: List[str] = []
             for bc in (asrt.get("barcodes") or []):
-                gtin = self._gtin_from_barcode_obj(bc)
-                if gtin:
-                    break
+                value = self._gtin_from_barcode_obj(bc)
+                if value and value not in gtins:
+                    gtins.append(value)
+            gtin = gtins[0] if gtins else None
             # Штрихкоды упаковок товара (раздел «Упаковки» в МС: блок/короб со своим
             # GTIN). Их КМ в УПД должны лечь в тот же товар — индексируем как доп.
             # ключи резолва. Структура МС: packs:[{id, quantity, uom, barcodes:[{...}]}].
@@ -282,6 +283,7 @@ class MoySkladService:
             plan.append(
                 {
                     "gtin": gtin,
+                    "gtins": gtins,
                     # Артикул/код товара МС — для сопоставления коробных (SSCC)
                     # позиций УПД по КодТов, когда у позиции нет своего GTIN.
                     "article": (asrt.get("article") or "").strip() or None,
