@@ -228,7 +228,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
             </div>
             <div className="tsd-shipment-row__progress">
               <time>{item.moment ? new Date(item.moment).toLocaleDateString('ru-RU') : '—'}</time>
-              <b>{item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</b>
+              <b>{item.shipment_count === null ? 'Проверить отгрузки' : item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</b>
             </div><span className="tsd-chevron" aria-hidden>›</span>
           </button>
         ))}

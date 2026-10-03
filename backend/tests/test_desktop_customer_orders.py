@@ -37,6 +37,20 @@ async def test_desktop_reuses_existing_tsd_document_and_scans(monkeypatch):
     assert added == []
 
 
+async def test_desktop_reuses_shipment_linked_through_invoice(monkeypatch):
+    doc = Document(id=uuid4(), user_id=uuid4(), name="166154", kind=DocumentKind.demand,
+        status=DocumentStatus.draft, moysklad_id="ship", plan=[], created_at=datetime.now(timezone.utc))
+    body, user, profile, ms, db, added = setup(monkeypatch, doc)
+    ms.get_document.return_value.pop("customerOrder")
+    ms.get_document.return_value["invoicesOut"] = [{"id": "invoice"}]
+    ms.get_customer_order.return_value.update(name="27370", invoicesOut=[{"id": "invoice"}])
+    result = await documents.resolve_document(body, user, profile, db)
+    assert result.id == doc.id and result.scan_count == 2 and result.customer_order_name == "27370"
+    assert doc.moysklad_customer_order_id == str(body.customer_order_id)
+    ms.build_plan.assert_not_awaited()
+    assert added == []
+
+
 async def test_changed_order_link_is_rejected_before_local_document_query(monkeypatch):
     body, user, profile, ms, db, _ = setup(monkeypatch)
     ms.get_document.return_value["customerOrder"]["id"] = str(uuid4())

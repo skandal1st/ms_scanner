@@ -41,7 +41,8 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.chestnyznak import is_sscc, normalize_sscc
-from app.services.moysklad import MoySkladService, customer_order_links, customer_order_empty_message
+from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
+    customer_order_direct_shipment_count, shipment_matches_customer_order)
 
 router = APIRouter(prefix="/tsd", tags=["tsd"])
 bearer = HTTPBearer()
@@ -386,7 +387,7 @@ async def list_tsd_orders(
         moysklad_id=row["id"], name=row.get("name") or "Без номера",
         agent_name=(row.get("agent") or {}).get("name"), store_name=(row.get("store") or {}).get("name"),
         state_name=(row.get("state") or {}).get("name"), moment=row.get("moment"),
-        shipment_count=len(customer_order_links(row, "demand")),
+        shipment_count=customer_order_direct_shipment_count(row),
         retail_sale_count=len(customer_order_links(row, "retaildemand")),
         in_work=row["id"] in work_orders,
     ) for row in rows]
@@ -578,14 +579,15 @@ async def select_tsd_document(
     order_id = _ms_entity_id((ms_doc or {}).get("customerOrder"))
     order_name = ((ms_doc or {}).get("customerOrder") or {}).get("name")
     if body.customer_order_id:
-        if order_id != str(body.customer_order_id):
-            raise HTTPException(409, "Отгрузка больше не связана с выбранным заказом. Обновите список отгрузок.")
         try:
-            order = await ms.get_customer_order(order_id)
+            order = await ms.get_customer_order(str(body.customer_order_id))
         except Exception as exc:
             raise _order_ms_error(exc) from exc
+        if not shipment_matches_customer_order(ms_doc, order, str(body.customer_order_id)):
+            raise HTTPException(409, "Отгрузка больше не связана с выбранным заказом. Обновите список отгрузок.")
         if profile.moysklad_organization_id and _ms_entity_id(order.get("organization")) != profile.moysklad_organization_id:
             raise HTTPException(403, "Заказ покупателя относится к другому юрлицу")
+        order_id = str(body.customer_order_id)
         order_name = order.get("name")
     if ms_doc:
         org_id = _ms_entity_id(ms_doc.get("organization"))

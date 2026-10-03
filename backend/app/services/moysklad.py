@@ -47,9 +47,31 @@ def customer_order_links(order: dict, kind: str) -> list[dict]:
 def customer_order_empty_message(order: dict) -> str:
     if customer_order_links(order, "demand"):
         return "Связанные отгрузки уже собраны или недоступны для этого рабочего места. Проверьте склад и статус отгрузки."
+    if order.get("invoicesOut"):
+        return "Доступных отгрузок по заказу и связанным счетам не найдено. Проверьте склад, статус и связи документов в МойСкладе."
     if customer_order_links(order, "retaildemand"):
         return "К заказу привязана розничная продажа. Для сборки нужна обычная отгрузка; сборка розничных продаж пока не поддерживается."
     return "В МойСкладе у заказа нет связанной отгрузки. Создайте отгрузку из этого заказа в МойСкладе, затем обновите список."
+
+
+def entity_reference_id(ref: dict) -> str:
+    return str(ref.get("id") or MoySkladService._id_from_href((ref.get("meta") or {}).get("href", "")))
+
+
+def invoice_reference_ids(document: dict) -> set[str]:
+    return {entity_reference_id(ref) for ref in document.get("invoicesOut") or []
+            if isinstance(ref, dict) and entity_reference_id(ref)}
+
+
+def shipment_matches_customer_order(shipment: dict, order: dict, order_id: str) -> bool:
+    return (entity_reference_id(shipment.get("customerOrder") or {}) == order_id
+            or bool(invoice_reference_ids(shipment) & invoice_reference_ids(order)))
+
+
+def customer_order_direct_shipment_count(order: dict) -> Optional[int]:
+    count = len(customer_order_links(order, "demand"))
+    # A zero direct count does not prove absence: the shipment may be linked through an invoice.
+    return count if count or not invoice_reference_ids(order) else None
 
 
 class MoySkladService:
@@ -242,6 +264,30 @@ class MoySkladService:
         ids = [doc_id for doc_id in ids if doc_id]
         rows = []
         async with httpx.AsyncClient(timeout=15) as client:
+            invoice_ids = invoice_reference_ids(order)
+            if invoice_ids:
+                # invoiceout itself needs additional Vendor permissions; demand already exposes
+                # invoicesOut. Scan the customer's shipments with full pagination, not a recent window.
+                filters = []
+                if organization_id:
+                    filters.append(f"organization={self.base_url}/entity/organization/{organization_id}")
+                agent_href = ((order.get("agent") or {}).get("meta") or {}).get("href")
+                if agent_href:
+                    filters.append(f"agent={agent_href}")
+                offset = 0
+                while True:
+                    params = {"limit": 1000, "offset": offset, "order": "moment,desc"}
+                    if filters:
+                        params["filter"] = ";".join(filters)
+                    response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/demand", params=params)
+                    response.raise_for_status()
+                    page = response.json().get("rows", [])
+                    ids.extend(row["id"] for row in page if row.get("id")
+                               and invoice_ids & invoice_reference_ids(row))
+                    if len(page) < 1000:
+                        break
+                    offset += len(page)
+                ids = list(dict.fromkeys(ids))
             for start in range(0, len(ids), 100):
                 filters = [f"id={doc_id}" for doc_id in ids[start:start + 100]]
                 if organization_id:

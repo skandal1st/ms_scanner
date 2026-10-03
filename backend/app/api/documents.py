@@ -10,7 +10,8 @@ import httpx
 from app.db.session import get_db
 from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan
 from app.api.deps import get_current_user, get_active_organization_profile
-from app.services.moysklad import MoySkladService, SUPPORTED_KINDS, customer_order_links, customer_order_empty_message
+from app.services.moysklad import (MoySkladService, SUPPORTED_KINDS, customer_order_links,
+    customer_order_empty_message, customer_order_direct_shipment_count, shipment_matches_customer_order)
 from app.core.security import decrypt_token
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -148,7 +149,7 @@ async def list_customer_orders(
         raise _customer_order_error(exc) from exc
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",
         moment=row.get("moment"), agent_name=(row.get("agent") or {}).get("name"),
-        shipment_count=len(customer_order_links(row, "demand")),
+        shipment_count=customer_order_direct_shipment_count(row),
         retail_sale_count=len(customer_order_links(row, "retaildemand")),
         empty_shipments_message=customer_order_empty_message(row)) for row in rows]
 
@@ -361,7 +362,7 @@ async def resolve_document(
             order = await ms.get_customer_order(str(body.customer_order_id))
         except Exception as exc:
             raise _customer_order_error(exc) from exc
-        if _ref_id(verified_ms_doc, "customerOrder") != str(body.customer_order_id):
+        if not shipment_matches_customer_order(verified_ms_doc, order, str(body.customer_order_id)):
             raise HTTPException(409, "Отгрузка больше не связана с выбранным заказом. Обновите список отгрузок.")
         if profile.moysklad_organization_id and any(_ref_id(item, "organization") != profile.moysklad_organization_id
                                                  for item in (order, verified_ms_doc)):
