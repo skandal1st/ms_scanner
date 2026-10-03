@@ -55,6 +55,9 @@
                 <view/>
                 <update/>
             </demand>
+            <customerOrder>
+                <view/>
+            </customerOrder>
             <good>
                 <view/>
                 <update/>

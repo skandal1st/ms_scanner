@@ -848,6 +848,25 @@ export interface TsdDocumentDetail {
   scans: Scan[]
   session_id: string
   active_on_other_device: boolean
+  customer_order_id?: string | null
+  customer_order_name?: string | null
+}
+
+export interface TsdOrderItem {
+  moysklad_id: string
+  name: string
+  agent_name: string | null
+  store_name: string | null
+  moment: string | null
+  state_name: string | null
+  shipment_count: number | null
+  in_work: boolean
+}
+
+export interface TsdOrderShipments {
+  order_id: string
+  order_name: string
+  shipments: TsdDocumentItem[]
 }
 
 export const tsdApi = {
@@ -860,12 +879,15 @@ export const tsdApi = {
       organization_name: string
     }>('/api/tsd/auth/exchange', { code, device_name }, { timeout: 20_000 }),
   me: () => tsdClient.get<TsdContext>('/tsd/me'),
+  orders: (search?: string, offset = 0) =>
+    tsdClient.get<TsdOrderItem[]>('/tsd/orders', { params: { search: search || undefined, offset } }),
+  orderShipments: (orderId: string) => tsdClient.get<TsdOrderShipments>(`/tsd/orders/${orderId}/shipments`),
   documents: (search?: string) =>
     tsdClient.get<TsdDocumentItem[]>('/tsd/documents', {
       params: search ? { search } : {},
     }),
-  selectDocument: (moysklad_id: string) =>
-    tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id }),
+  selectDocument: (moysklad_id: string, customer_order_id?: string) =>
+    tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id, customer_order_id }),
   getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
   scan: (id: string, code: string, moysklad_product_id?: string) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code, moysklad_product_id }),

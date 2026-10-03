@@ -233,6 +233,8 @@ class Document(Base):
     workplace_id = Column(UUID(as_uuid=True), ForeignKey("workplaces.id"), nullable=True)
     moysklad_organization_id = Column(String(64), nullable=True, index=True)
     moysklad_store_id = Column(String(64), nullable=True)
+    moysklad_customer_order_id = Column(String(64), nullable=True, index=True)
+    customer_order_name = Column(String(500), nullable=True)
     name = Column(String(500), nullable=False)
     kind = Column(
         Enum(DocumentKind),

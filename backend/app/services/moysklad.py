@@ -188,6 +188,42 @@ class MoySkladService:
             )
         return out
 
+    async def get_customer_orders(self, organization_id: Optional[str], search: Optional[str] = None,
+                                  limit: int = 50, offset: int = 0) -> list[dict]:
+        params = {"limit": min(limit, 100), "offset": offset, "order": "moment,desc", "expand": "agent,store,state"}
+        if organization_id:
+            params["filter"] = f"organization={self.base_url}/entity/organization/{organization_id}"
+        if search and search.strip():
+            params["search"] = search.strip()
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder", params=params)
+            response.raise_for_status()
+            return response.json().get("rows", [])
+
+    async def get_customer_order(self, order_id: str) -> dict:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder/{order_id}",
+                                                      params={"expand": "agent,store"})
+            response.raise_for_status()
+            return response.json()
+
+    async def get_customer_order_demands(self, order_id: str, organization_id: Optional[str]) -> list[dict]:
+        filters = [f"customerOrder={self.base_url}/entity/customerorder/{order_id}"]
+        if organization_id:
+            filters.append(f"organization={self.base_url}/entity/organization/{organization_id}")
+        rows = []
+        async with httpx.AsyncClient(timeout=15) as client:
+            while True:
+                response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/demand", params={
+                    "filter": ";".join(filters), "expand": "agent,store", "order": "moment,desc",
+                    "limit": 100, "offset": len(rows),
+                })
+                response.raise_for_status()
+                page = response.json().get("rows", [])
+                rows.extend(page)
+                if len(page) < 100:
+                    return rows
+
     async def get_document(self, kind: str, doc_id: str) -> Dict[str, Any]:
         """Детали МС-документа выбранного типа."""
         self._validate_kind(kind)

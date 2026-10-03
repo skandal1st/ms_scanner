@@ -1,6 +1,7 @@
 """API терминалов сбора данных: QR-привязка, список отгрузок и комплектация."""
 import json
 import secrets
+import httpx
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -10,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_active_organization_profile, get_current_user
@@ -98,6 +99,24 @@ class TsdDocumentItem(BaseModel):
 
 class SelectDocumentRequest(BaseModel):
     moysklad_id: str = Field(min_length=1, max_length=255)
+    customer_order_id: Optional[UUID] = None
+
+
+class TsdOrderItem(BaseModel):
+    moysklad_id: str
+    name: str
+    agent_name: Optional[str] = None
+    store_name: Optional[str] = None
+    moment: Optional[str] = None
+    state_name: Optional[str] = None
+    shipment_count: Optional[int] = None
+    in_work: bool = False
+
+
+class TsdOrderShipments(BaseModel):
+    order_id: str
+    order_name: str
+    shipments: list[TsdDocumentItem]
 
 
 class TsdDocumentDetail(BaseModel):
@@ -108,6 +127,8 @@ class TsdDocumentDetail(BaseModel):
     scans: list[ScanResponse]
     session_id: UUID
     active_on_other_device: bool = False
+    customer_order_name: Optional[str] = None
+    customer_order_id: Optional[str] = None
 
 
 class TsdScanRequest(BaseModel):
@@ -305,6 +326,121 @@ def _scan_units(scan: Scan) -> int:
     return int(scan.box_quantity or 1) if (scan.is_box or scan.is_barcode) else 1
 
 
+def _ms_entity_id(entity: Optional[dict]) -> Optional[str]:
+    entity = entity or {}
+    return entity.get("id") or MoySkladService._id_from_href((entity.get("meta") or {}).get("href", "")) or None
+
+
+def _order_ms_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, httpx.HTTPStatusError):
+        if exc.response.status_code == 403:
+            return HTTPException(403, "Нет доступа к заказам покупателей в МойСкладе. Обновите права решения в МойСкладе.")
+        if exc.response.status_code == 404:
+            return HTTPException(404, "Заказ покупателя не найден в МойСкладе")
+    return HTTPException(502, "Не удалось загрузить заказ или его отгрузки из МойСклада. Повторите попытку.")
+
+
+@router.get("/orders", response_model=list[TsdOrderItem])
+async def list_tsd_orders(
+    search: Optional[str] = None, offset: int = 0,
+    device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db),
+):
+    if offset < 0:
+        raise HTTPException(400, "Некорректная страница списка заказов")
+    _, workplace, profile = await _device_scope(db, device)
+    ms = await _ms_for_user(db, device.user_id)
+    try:
+        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset)
+    except Exception as exc:
+        logger.warning("tsd.orders.moysklad_failed", device_id=str(device.id), error=str(exc))
+        raise _order_ms_error(exc) from exc
+    demand_orders = {_ms_entity_id(demand): row["id"] for row in rows
+                     for demand in (row.get("demands") if isinstance(row.get("demands"), list) else []) if _ms_entity_id(demand)}
+    order_names = {row["id"]: row.get("name") for row in rows}
+    local_docs = (await db.execute(select(Document).where(
+        Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
+        Document.kind == DocumentKind.demand, Document.status != DocumentStatus.accepted,
+        or_(Document.moysklad_customer_order_id.in_([row["id"] for row in rows]),
+            Document.moysklad_id.in_(list(demand_orders))),
+    ))).scalars().all()
+    if workplace.store_ids:
+        local_docs = [doc for doc in local_docs if doc.moysklad_store_id in workplace.store_ids]
+    for doc in local_docs:
+        linked_order = demand_orders.get(doc.moysklad_id)
+        if linked_order:
+            doc.moysklad_customer_order_id = linked_order
+            doc.customer_order_name = order_names.get(linked_order)
+    sessions = (await db.execute(select(TsdDocumentSession).where(
+        TsdDocumentSession.document_id.in_([doc.id for doc in local_docs]),
+        TsdDocumentSession.status == "active",
+    ))).scalars().all() if local_docs else []
+    scans = (await db.execute(select(Scan.document_id).where(
+        Scan.document_id.in_([doc.id for doc in local_docs]),
+    ))).scalars().all() if local_docs else []
+    active_docs = {session.document_id for session in sessions} | set(scans)
+    work_orders = {doc.moysklad_customer_order_id for doc in local_docs if doc.id in active_docs}
+    await db.commit()
+    return [TsdOrderItem(
+        moysklad_id=row["id"], name=row.get("name") or "Без номера",
+        agent_name=(row.get("agent") or {}).get("name"), store_name=(row.get("store") or {}).get("name"),
+        state_name=(row.get("state") or {}).get("name"), moment=row.get("moment"),
+        shipment_count=len(row["demands"]) if isinstance(row.get("demands"), list) else None,
+        in_work=row["id"] in work_orders,
+    ) for row in rows]
+
+
+@router.get("/orders/{order_id}/shipments", response_model=TsdOrderShipments)
+async def get_tsd_order_shipments(
+    order_id: UUID, device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db),
+):
+    _, workplace, profile = await _device_scope(db, device)
+    ms = await _ms_for_user(db, device.user_id)
+    try:
+        order = await ms.get_customer_order(str(order_id))
+        if profile.moysklad_organization_id and _ms_entity_id(order.get("organization")) != profile.moysklad_organization_id:
+            raise HTTPException(403, "Заказ покупателя относится к другому юрлицу")
+        rows = await ms.get_customer_order_demands(str(order_id), profile.moysklad_organization_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("tsd.order_shipments.moysklad_failed", order_id=str(order_id), error=str(exc))
+        raise _order_ms_error(exc) from exc
+    # Validate actual shipment scope, not the optional warehouse on the order header.
+    rows = [row for row in rows if not row.get("deleted")
+            and (not profile.moysklad_organization_id or _ms_entity_id(row.get("organization")) == profile.moysklad_organization_id)
+            and (not workplace.store_ids or _ms_entity_id(row.get("store")) in workplace.store_ids)]
+    local_docs = (await db.execute(select(Document).where(
+        Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
+        Document.kind == DocumentKind.demand, Document.moysklad_id.in_([row["id"] for row in rows]),
+    ))).scalars().all()
+    docs = {doc.moysklad_id: doc for doc in local_docs}
+    scans = (await db.execute(select(Scan).where(Scan.document_id.in_([doc.id for doc in local_docs])))).scalars().all() if local_docs else []
+    sessions = (await db.execute(select(TsdDocumentSession).where(
+        TsdDocumentSession.document_id.in_([doc.id for doc in local_docs]), TsdDocumentSession.status == "active",
+    ))).scalars().all() if local_docs else []
+    shipments = []
+    for row in rows:
+        doc = docs.get(row["id"])
+        if doc and doc.status == DocumentStatus.accepted:
+            continue
+        if doc:
+            doc.moysklad_customer_order_id = str(order_id)
+            doc.customer_order_name = order.get("name")
+        collected = sum(_scan_units(scan) for scan in scans if doc and scan.document_id == doc.id
+                        and scan.status.value in {"scanned", "valid", "overflow"})
+        active = [session for session in sessions if doc and session.document_id == doc.id]
+        shipments.append(TsdDocumentItem(
+            moysklad_id=row["id"], local_document_id=doc.id if doc else None,
+            name=row.get("name") or "Без номера", customer_order_name=order.get("name"),
+            agent_name=(row.get("agent") or {}).get("name"), store_name=(row.get("store") or {}).get("name"),
+            moment=row.get("moment"), collected=collected,
+            expected=sum(int(p.get("expected_qty") or 0) for p in (doc.plan or [])) if doc else 0,
+            in_work=bool(collected or active), active_on_other_device=any(session.device_id != device.id for session in active),
+        ))
+    await db.commit()
+    return TsdOrderShipments(order_id=str(order_id), order_name=order.get("name") or "Без номера", shipments=shipments)
+
+
 @router.get("/documents", response_model=list[TsdDocumentItem])
 async def list_tsd_documents(
     search: Optional[str] = None,
@@ -421,6 +557,7 @@ async def select_tsd_document(
             select(Document)
             .where(
                 Document.user_id == device.user_id,
+                Document.organization_profile_id == profile.id,
                 Document.moysklad_id == body.moysklad_id,
                 Document.kind == DocumentKind.demand,
                 Document.status != DocumentStatus.accepted,
@@ -429,14 +566,31 @@ async def select_tsd_document(
         )
     ).scalars().first()
     ms = await _ms_for_user(db, device.user_id)
-    if doc is None:
-        ms_doc = await ms.get_document("demand", body.moysklad_id)
-        org_id = MoySkladService._id_from_href(((ms_doc.get("organization") or {}).get("meta") or {}).get("href", ""))
-        store_id = MoySkladService._id_from_href(((ms_doc.get("store") or {}).get("meta") or {}).get("href", ""))
+    # Resolve the order by identity, and recheck a saved shipment before opening it from an order.
+    try:
+        ms_doc = await ms.get_document("demand", body.moysklad_id) if doc is None or body.customer_order_id else None
+    except Exception as exc:
+        raise HTTPException(502, "Не удалось загрузить отгрузку из МойСклада. Повторите попытку.") from exc
+    order_id = _ms_entity_id((ms_doc or {}).get("customerOrder"))
+    order_name = ((ms_doc or {}).get("customerOrder") or {}).get("name")
+    if body.customer_order_id:
+        if order_id != str(body.customer_order_id):
+            raise HTTPException(409, "Отгрузка больше не связана с выбранным заказом. Обновите список отгрузок.")
+        try:
+            order = await ms.get_customer_order(order_id)
+        except Exception as exc:
+            raise _order_ms_error(exc) from exc
+        if profile.moysklad_organization_id and _ms_entity_id(order.get("organization")) != profile.moysklad_organization_id:
+            raise HTTPException(403, "Заказ покупателя относится к другому юрлицу")
+        order_name = order.get("name")
+    if ms_doc:
+        org_id = _ms_entity_id(ms_doc.get("organization"))
+        store_id = _ms_entity_id(ms_doc.get("store"))
         if profile.moysklad_organization_id and org_id != profile.moysklad_organization_id:
             raise HTTPException(403, "Отгрузка относится к другому юрлицу")
         if workplace.store_ids and store_id not in workplace.store_ids:
             raise HTTPException(403, "Отгрузка относится к другому складу")
+    if doc is None:
         doc = Document(
             user_id=device.user_id,
             moysklad_id=body.moysklad_id,
@@ -444,6 +598,8 @@ async def select_tsd_document(
             workplace_id=workplace.id,
             moysklad_organization_id=org_id,
             moysklad_store_id=store_id,
+            moysklad_customer_order_id=order_id,
+            customer_order_name=order_name,
             name=ms_doc.get("name") or f"Отгрузка {body.moysklad_id[:8]}",
             kind=DocumentKind.demand,
             plan=await ms.build_plan("demand", body.moysklad_id),
@@ -454,6 +610,9 @@ async def select_tsd_document(
         if workplace.store_ids and doc.moysklad_store_id not in workplace.store_ids:
             raise HTTPException(403, "Отгрузка относится к другому складу")
         doc.workplace_id = workplace.id
+        if body.customer_order_id:
+            doc.moysklad_customer_order_id = order_id
+            doc.customer_order_name = order_name
     session = (
         await db.execute(
             select(TsdDocumentSession).where(
@@ -489,6 +648,8 @@ async def select_tsd_document(
         scans=[ScanResponse.model_validate(s) for s in scans],
         session_id=session.id,
         active_on_other_device=bool(other),
+        customer_order_name=doc.customer_order_name,
+        customer_order_id=doc.moysklad_customer_order_id,
     )
 
 
@@ -525,6 +686,8 @@ async def get_tsd_document(
         id=doc.id, name=doc.name, status=doc.status.value, plan=list(doc.plan or []),
         scans=[ScanResponse.model_validate(s) for s in scans], session_id=session.id,
         active_on_other_device=bool(other),
+        customer_order_name=doc.customer_order_name,
+        customer_order_id=doc.moysklad_customer_order_id,
     )
 
 

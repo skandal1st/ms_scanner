@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import axios from 'axios'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem } from '../api/client'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
@@ -104,10 +104,10 @@ function TsdLogin({ onReady }: { onReady: () => void }) {
   )
 }
 
-function ShipmentRow({ item, onOpen }: { item: TsdDocumentItem; onOpen: () => void }) {
+function ShipmentRow({ item, onOpen, disabled }: { item: TsdDocumentItem; onOpen: () => void; disabled?: boolean }) {
   const progress = item.expected > 0 ? Math.min(100, Math.round(item.collected * 100 / item.expected)) : 0
   return (
-    <button type="button" className="tsd-shipment-row" onClick={onOpen}>
+    <button type="button" className="tsd-shipment-row" onClick={onOpen} disabled={disabled}>
       <div className="tsd-shipment-row__main">
         <strong>{item.name}</strong>
         <span>{item.agent_name || item.customer_order_name || 'Контрагент не указан'}</span>
@@ -124,7 +124,7 @@ function ShipmentRow({ item, onOpen }: { item: TsdDocumentItem; onOpen: () => vo
   )
 }
 
-function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) {
+function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) {
   const online = useTsdOnline()
   const [search, setSearch] = useState('')
   const deferredSearch = useDeferredValue(search)
@@ -132,22 +132,35 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
   const [qrMode, setQrMode] = useState(false)
   const [qrValue, setQrValue] = useState('')
   const [openError, setOpenError] = useState<string | null>(null)
+  const [orderChoice, setOrderChoice] = useState<TsdOrderShipments | null>(null)
   const qrRef = useRef<HTMLInputElement>(null)
   const { data: me } = useQuery({ queryKey: ['tsd-me'], queryFn: () => tsdApi.me().then((r) => r.data) })
-  const { data: documents = [], isLoading, error: listError, refetch } = useQuery({
-    queryKey: ['tsd-documents', deferredSearch],
-    queryFn: () => tsdApi.documents(deferredSearch.trim()).then((r) => r.data),
+  const { data: orderPages, isLoading, error: listError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
+    queryKey: ['tsd-orders', deferredSearch],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => tsdApi.orders(deferredSearch.trim(), pageParam).then((r) => r.data),
+    getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined,
   })
   const select = useMutation({
     networkMode: 'always',
-    mutationFn: (id: string) => tsdApi.selectDocument(id).then((r) => r.data),
+    mutationFn: (value: { id: string; orderId?: string }) => tsdApi.selectDocument(value.id, value.orderId).then((r) => r.data),
     onSuccess: onOpen,
+    onError: (error) => setOpenError(apiMessage(error)),
+  })
+  const chooseOrder = useMutation({
+    networkMode: 'always',
+    mutationFn: (id: string) => tsdApi.orderShipments(id).then((r) => r.data),
+    onMutate: () => { setOpenError(null) },
+    onSuccess: (result) => {
+      if (result.shipments.length === 1) select.mutate({ id: result.shipments[0].moysklad_id, orderId: result.order_id })
+      else setOrderChoice(result)
+    },
     onError: (error) => setOpenError(apiMessage(error)),
   })
   useEffect(() => {
     if (qrMode) qrRef.current?.focus()
   }, [qrMode])
-  const filtered = documents.filter((item) => tab === 'work' ? item.in_work : !item.in_work)
+  const filtered = (orderPages?.pages.flat() || []).filter((item) => tab === 'work' ? item.in_work : !item.in_work)
   const submitQr = (event: FormEvent) => {
     event.preventDefault()
     const id = documentCode(qrValue)
@@ -155,17 +168,28 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
       setOpenError('Это не QR отгрузки Скандаты')
       return
     }
-    if (online && !select.isPending) select.mutate(id)
+    if (online && !select.isPending && !chooseOrder.isPending) select.mutate({ id })
   }
   return (
     <main className="tsd-shell">
       <header className="tsd-header">
         <div>
-          <h1>Отгрузки</h1>
+          <h1>{orderChoice ? `Заказ ${orderChoice.order_name}` : 'Заказы покупателей'}</h1>
           <p>{me?.workplace_name || 'Рабочее место'} · {me?.organization_name || 'Юрлицо'}</p>
         </div>
         <TsdConnection />
       </header>
+      {orderChoice ? <section className="tsd-order-choice">
+        <button type="button" className="tsd-button" disabled={select.isPending || chooseOrder.isPending} onClick={() => { setOrderChoice(null); setOpenError(null) }}>К списку заказов</button>
+        <h2>Выберите отгрузку</h2>
+        {orderChoice.shipments.length === 0 && <p className="tsd-alert tsd-alert--warn">У заказа нет доступных отгрузок для сборки на этом рабочем месте. Создайте или проверьте отгрузку в МойСкладе, затем обновите список.</p>}
+        {orderChoice.shipments.map((item) => <ShipmentRow key={item.moysklad_id} item={item} disabled={!online || select.isPending || chooseOrder.isPending} onOpen={() => {
+          if (online && !select.isPending) { setOpenError(null); select.mutate({ id: item.moysklad_id, orderId: orderChoice.order_id }) }
+        }} />)}
+        <button type="button" className="tsd-button" disabled={!online || select.isPending || chooseOrder.isPending} onClick={() => chooseOrder.mutate(orderChoice.order_id)}>Обновить отгрузки</button>
+        {openError && <div className="tsd-alert tsd-alert--error">{openError}</div>}
+        {select.isPending && <p role="status">Открываем сборку…</p>}
+      </section> : <>
       <div className="tsd-list-controls">
         <label className="tsd-search">
           <span aria-hidden>⌕</span>
@@ -188,17 +212,29 @@ function TsdShipmentList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void 
       {listError ? <div className="tsd-alert tsd-alert--error">{apiMessage(listError)} <button type="button" className="tsd-button" onClick={() => refetch()} disabled={!online}>Повторить</button></div> : null}
       {openError ? <div className="tsd-alert tsd-alert--error">{openError}</div> : null}
       <section className="tsd-shipment-list" aria-live="polite">
-        {isLoading ? <p className="tsd-empty">Загружаем отгрузки…</p> : null}
+        {isLoading ? <p className="tsd-empty">Загружаем заказы покупателей…</p> : null}
+        {chooseOrder.isPending || select.isPending ? <p role="status" className="tsd-empty">Открываем отгрузки заказа…</p> : null}
         {!isLoading && !listError && filtered.length === 0 ? (
           <div className="tsd-empty">
-            <p>{tab === 'work' ? 'Нет начатых сборок' : 'Нет доступных отгрузок'}</p>
+            <p>{tab === 'work' ? 'Нет начатых сборок на этой странице' : 'Нет доступных заказов на этой странице'}</p>
             <button type="button" className="tsd-button" onClick={() => refetch()}>Обновить</button>
           </div>
         ) : null}
         {filtered.map((item) => (
-          <ShipmentRow key={item.moysklad_id} item={item} onOpen={() => { if (online && !select.isPending) select.mutate(item.moysklad_id) }} />
+          <button key={item.moysklad_id} type="button" className="tsd-shipment-row" disabled={!online || select.isPending || chooseOrder.isPending} onClick={() => chooseOrder.mutate(item.moysklad_id)}>
+            <div className="tsd-shipment-row__main">
+              <strong>Заказ {item.name}</strong><span>{item.agent_name || 'Контрагент не указан'}</span>
+              <small>{item.state_name || 'Статус не указан'}{item.store_name ? ` · ${item.store_name}` : ''}</small>
+            </div>
+            <div className="tsd-shipment-row__progress">
+              <time>{item.moment ? new Date(item.moment).toLocaleDateString('ru-RU') : '—'}</time>
+              <b>{item.shipment_count === null ? 'Открыть' : `Отгрузок: ${item.shipment_count}`}</b>
+            </div><span className="tsd-chevron" aria-hidden>›</span>
+          </button>
         ))}
       </section>
+      {hasNextPage && <button type="button" className="tsd-button tsd-more-orders" disabled={!online || isFetchingNextPage} onClick={() => fetchNextPage()}>{isFetchingNextPage ? 'Загружаем…' : 'Показать ещё заказы'}</button>}
+      </>}
     </main>
   )
 }
@@ -356,7 +392,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       </section>
       <header className="tsd-header tsd-header--picking">
         <button type="button" className="tsd-back" onClick={onBack} aria-label="Назад">‹</button>
-        <div><h1>Сборка заказа</h1><p>{doc.name}</p></div>
+        <div><h1>Сборка заказа</h1><p>{doc.customer_order_name ? `Заказ ${doc.customer_order_name} · Отгрузка ${doc.name}` : doc.name}</p></div>
         <TsdConnection />
       </header>
       {doc.active_on_other_device ? <div className="tsd-alert tsd-alert--warn">Отгрузка также открыта на другом ТСД</div> : null}
@@ -486,9 +522,9 @@ export function TsdPage() {
     <h1>Сборка заказа</h1>
     <p>{fromLink.error ? apiMessage(fromLink.error) : restored.error ? apiMessage(restored.error) : requestedId ? 'Открываем отгрузку…' : 'Восстанавливаем документ…'}</p>
     {requestedId && fromLink.error && <button type="button" className="tsd-button" onClick={() => fromLink.mutate(requestedId)}>Повторить</button>}
-    <button type="button" className="tsd-button" disabled={fromLink.isPending} onClick={back}>К списку отгрузок</button>
+    <button type="button" className="tsd-button" disabled={fromLink.isPending} onClick={back}>К списку заказов</button>
   </main>
   else if (current) content = <TsdPicking key={current.id} initial={current} onBack={back} />
-  else content = <TsdShipmentList onOpen={open} />
+  else content = <TsdOrderList onOpen={open} />
   return <><TsdPwaControls />{content}</>
 }
