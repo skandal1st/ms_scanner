@@ -87,6 +87,7 @@ export interface PlanItem {
 }
 
 export interface Document {
+  customer_order_name?: string | null
   id: string
   moysklad_id: string | null
   name: string
@@ -422,6 +423,10 @@ export interface InventoryMatchResult {
 }
 
 export const documentsApi = {
+  customerOrders: (search: string, offset = 0) =>
+    api.get<MsDocument[]>('/documents/customer-orders', { params: { search, offset } }),
+  orderShipments: (orderId: string) =>
+    api.get<MsDocument[]>(`/documents/customer-orders/${orderId}/shipments`),
   listMs: (kind: DocumentKind, search?: string) =>
     api.get<MsDocument[]>(`/documents/moysklad/${kind}`, {
       params: search ? { search } : {},
@@ -431,8 +436,8 @@ export const documentsApi = {
   create: (name: string, kind: DocumentKind, moysklad_id?: string) =>
     api.post<Document>('/documents/', { name, kind, moysklad_id }),
   /** Найти-или-создать наш документ по документу МС (для попапа из кнопки МС). */
-  resolve: (moysklad_id: string, kind: DocumentKind) =>
-    api.post<Document>('/documents/resolve', { moysklad_id, kind }),
+  resolve: (moysklad_id: string, kind: DocumentKind, customer_order_id?: string) =>
+    api.post<Document>('/documents/resolve', { moysklad_id, kind, customer_order_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   verify: (id: string) =>

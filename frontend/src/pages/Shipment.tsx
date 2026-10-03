@@ -4,6 +4,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
+import { CustomerOrderPicker } from '../components/CustomerOrderPicker'
 import { ProgressTable } from '../components/ProgressTable'
 import { FlowWorkspaceTabs, useFlowWorkspaceTab } from '../components/FlowWorkspaceTabs'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
@@ -254,7 +255,7 @@ export function ShipmentPage({
           ) : null}
         </div>
         <span className="acc-header__doc">
-          {document?.name ?? 'Документ не выбран'}
+          {document?.customer_order_name ? `Заказ ${document.customer_order_name} · Отгрузка ${document.name}` : document?.name ?? 'Документ не выбран'}
         </span>
       </header>
 
@@ -295,7 +296,10 @@ export function ShipmentPage({
       <div className="acc-body">
         <div className="acc-left" style={{ width: leftWidth }}>
           {!embedded && (
-            <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+            <>
+              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={sending || bulkBusy || document?.status === 'processing'} />
+              <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+            </>
           )}
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />

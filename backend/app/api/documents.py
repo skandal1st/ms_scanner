@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
+import httpx
 
 from app.db.session import get_db
 from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan
@@ -39,6 +40,7 @@ class DocumentResponse(BaseModel):
     organization_profile_id: Optional[UUID] = None
     moysklad_organization_id: Optional[str] = None
     moysklad_store_id: Optional[str] = None
+    customer_order_name: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -77,6 +79,7 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
         organization_profile_id=doc.organization_profile_id,
         moysklad_organization_id=doc.moysklad_organization_id,
         moysklad_store_id=doc.moysklad_store_id,
+        customer_order_name=getattr(doc, "customer_order_name", None),
         created_at=doc.created_at,
     )
 
@@ -121,6 +124,53 @@ def _ensure_supported_kind(kind: str) -> None:
                 f"{', '.join(sorted(SUPPORTED_KINDS))}"
             ),
         )
+
+
+def _customer_order_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 403:
+        return HTTPException(403, "Нет доступа к заказам покупателей. Обновите права решения в МойСкладе.")
+    return HTTPException(502, "Не удалось загрузить заказ или его отгрузки из МойСклада. Повторите попытку.")
+
+
+@router.get("/customer-orders", response_model=List[MoySkladDocumentItem])
+async def list_customer_orders(
+    search: Optional[str] = None, offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db),
+):
+    ms = await _get_ms_service(current_user, db)
+    try:
+        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset)
+    except Exception as exc:
+        raise _customer_order_error(exc) from exc
+    return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",
+        moment=row.get("moment"), agent_name=(row.get("agent") or {}).get("name")) for row in rows]
+
+
+@router.get("/customer-orders/{order_id}/shipments", response_model=List[MoySkladDocumentItem])
+async def customer_order_shipments(
+    order_id: UUID, current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db),
+):
+    ms = await _get_ms_service(current_user, db)
+    try:
+        order = await ms.get_customer_order(str(order_id))
+        if profile.moysklad_organization_id and _ref_id(order, "organization") != profile.moysklad_organization_id:
+            raise HTTPException(403, "Заказ покупателя относится к другому юрлицу")
+        rows = await ms.get_customer_order_demands(str(order_id), profile.moysklad_organization_id, order=order)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _customer_order_error(exc) from exc
+    completed = set((await db.execute(select(Document.moysklad_id).where(
+        Document.user_id == current_user.id, Document.organization_profile_id == profile.id,
+        Document.kind == DocumentKind.demand, Document.status == DocumentStatus.accepted,
+        Document.moysklad_id.in_([row["id"] for row in rows]),
+    ))).scalars().all())
+    return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера", moment=row.get("moment"),
+        customer_order_name=order.get("name"), agent_name=(row.get("agent") or {}).get("name")) for row in rows
+        if row["id"] not in completed and not row.get("deleted")
+        and (not profile.moysklad_organization_id or _ref_id(row, "organization") == profile.moysklad_organization_id)]
 
 
 @router.get("/moysklad/{kind}", response_model=List[MoySkladDocumentItem])
@@ -277,6 +327,7 @@ async def create_document(
 class ResolveDocRequest(BaseModel):
     moysklad_id: str
     kind: DocumentKind = DocumentKind.demand
+    customer_order_id: Optional[UUID] = None
 
 
 @router.post("/resolve", response_model=DocumentResponse)
@@ -293,15 +344,34 @@ async def resolve_document(
     moysklad_id; если нет — создаём с именем и планом из МС."""
     _ensure_supported_kind(body.kind.value)
 
+    order_name = None
+    verified_ms_doc = None
+    if body.customer_order_id:
+        if body.kind != DocumentKind.demand:
+            raise HTTPException(400, "Из заказа покупателя можно открыть только отгрузку")
+        ms = await _get_ms_service(current_user, db)
+        try:
+            verified_ms_doc = await ms.get_document("demand", body.moysklad_id)
+            order = await ms.get_customer_order(str(body.customer_order_id))
+        except Exception as exc:
+            raise _customer_order_error(exc) from exc
+        if _ref_id(verified_ms_doc, "customerOrder") != str(body.customer_order_id):
+            raise HTTPException(409, "Отгрузка больше не связана с выбранным заказом. Обновите список отгрузок.")
+        if profile.moysklad_organization_id and any(_ref_id(item, "organization") != profile.moysklad_organization_id
+                                                 for item in (order, verified_ms_doc)):
+            raise HTTPException(403, "Заказ или отгрузка относятся к другому юрлицу")
+        order_name = order.get("name")
+
     existing = (
         (
             await db.execute(
                 select(Document)
                 .where(
                     Document.user_id == current_user.id,
+                    *([Document.organization_profile_id == profile.id] if body.customer_order_id else []),
                     Document.moysklad_id == body.moysklad_id,
                     Document.kind == body.kind,
-                    Document.status != DocumentStatus.accepted,
+                    *([] if body.customer_order_id else [Document.status != DocumentStatus.accepted]),
                 )
                 .order_by(Document.created_at.desc())
             )
@@ -310,13 +380,19 @@ async def resolve_document(
         .first()
     )
     if existing is not None:
+        if body.customer_order_id:
+            if existing.status == DocumentStatus.accepted:
+                raise HTTPException(409, "Отгрузка уже собрана. Обновите список отгрузок заказа.")
+            existing.moysklad_customer_order_id = str(body.customer_order_id)
+            existing.customer_order_name = order_name
+            await db.commit()
         return _doc_to_response(existing, await _scan_count(db, existing.id))
 
     ms = await _get_ms_service(current_user, db)
     name: Optional[str] = None
     ms_doc: dict = {}
     try:
-        ms_doc = await ms.get_document(body.kind.value, body.moysklad_id)
+        ms_doc = verified_ms_doc or await ms.get_document(body.kind.value, body.moysklad_id)
         name = ms_doc.get("name")
     except Exception:
         pass  # имя не критично — подставим дефолт
@@ -331,6 +407,8 @@ async def resolve_document(
         # напрямую по kind (в отличие от create_document, где loss сеется из demand).
         plan = await ms.build_plan(body.kind.value, body.moysklad_id)
     except Exception as exc:
+        if body.customer_order_id:
+            raise HTTPException(502, "Не удалось загрузить план отгрузки из МойСклада. Повторите попытку.") from exc
         from app.core.logging import logger as _lg
         _lg.warning(
             "resolve_document.build_plan_failed",
@@ -347,6 +425,8 @@ async def resolve_document(
         organization_profile_id=profile.id,
         moysklad_organization_id=ms_organization_id,
         moysklad_store_id=ms_store_id,
+        moysklad_customer_order_id=str(body.customer_order_id) if body.customer_order_id else None,
+        customer_order_name=order_name,
         plan=plan,
     )
     db.add(doc)

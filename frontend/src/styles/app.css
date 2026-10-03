@@ -927,3 +927,7 @@ html, body, #root { height: 100%; }
 .tsd-order-choice .tsd-shipment-row { padding-left: 0; padding-right: 0; }
 .tsd-more-orders { margin: 16px 18px; min-height: 44px; }
 .tsd-shipment-row:disabled { cursor: default; opacity: .6; }
+.customer-order-picker { margin-bottom: 16px; }
+.customer-order-picker__body { margin-top: 12px; padding: 12px; background: var(--ms-bg); border: 1px solid var(--ms-border-light); border-radius: var(--r-lg); }
+.customer-order-picker__body h3 { margin: 0 0 12px; font-size: 16px; }
+.customer-order-picker__body .doc-list { margin: 8px 0; max-height: 320px; overflow-y: auto; }
