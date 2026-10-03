@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
-import { organizationProfilesApi, tsdAdminApi } from '../api/client'
+import { organizationProfilesApi, tsdAdminApi, type TsdDeviceInfo } from '../api/client'
 
 export function TsdPairingSection() {
   const qc = useQueryClient()
@@ -31,7 +31,10 @@ export function TsdPairingSection() {
   })
   const revoke = useMutation({
     mutationFn: (id: string) => tsdAdminApi.revoke(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['tsd-devices'] }),
+    onSuccess: (_, id) => {
+      qc.setQueryData<TsdDeviceInfo[]>(['tsd-devices'], (items) => items?.filter((device) => device.id !== id))
+      void qc.invalidateQueries({ queryKey: ['tsd-devices'] })
+    },
   })
 
   return (
@@ -104,7 +107,6 @@ export function TsdPairingSection() {
                     : 'ещё не выходил в сеть'}
                 </div>
               </div>
-              {device.is_active ? (
                 <button
                   type="button"
                   className="button button--danger button--sm"
@@ -113,11 +115,10 @@ export function TsdPairingSection() {
                 >
                   Отключить
                 </button>
-              ) : <span className="badge badge--pending">Отключён</span>}
             </div>
           ))}
         </div>
-      ) : null}
+      ) : <p className="hint mt-12">Нет подключённых ТСД.</p>}
     </section>
   )
 }

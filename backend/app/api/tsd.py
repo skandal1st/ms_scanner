@@ -853,7 +853,7 @@ async def list_devices(
         await db.execute(
             select(TsdDevice, Workplace)
             .join(Workplace, Workplace.id == TsdDevice.workplace_id)
-            .where(TsdDevice.user_id == current_user.id)
+            .where(TsdDevice.user_id == current_user.id, TsdDevice.is_active.is_(True))
             .order_by(TsdDevice.created_at.desc())
         )
     ).all()
