@@ -58,6 +58,12 @@
             <customerOrder>
                 <view/>
             </customerOrder>
+            <project>
+                <view/>
+            </project>
+            <customEntity>
+                <view/>
+            </customEntity>
             <good>
                 <view/>
                 <update/>

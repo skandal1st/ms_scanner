@@ -426,8 +426,8 @@ export interface InventoryMatchResult {
 }
 
 export const documentsApi = {
-  customerOrders: (search: string, offset = 0) =>
-    api.get<MsDocument[]>('/documents/customer-orders', { params: { search, offset } }),
+  customerOrders: (search: string, offset = 0, filterId?: string) =>
+    api.get<MsDocument[]>('/documents/customer-orders', { params: { search, offset, filter_id: filterId || undefined } }),
   orderShipments: (orderId: string) =>
     api.get<MsDocument[]>(`/documents/customer-orders/${orderId}/shipments`),
   listMs: (kind: DocumentKind, search?: string) =>
@@ -762,7 +762,30 @@ export interface OrganizationProfile {
   workplaces: Workplace[]
 }
 
+export interface CustomerOrderFilter {
+  id: string
+  name: string
+  project_id: string | null
+  project_name: string | null
+  sale_attribute_id: string | null
+  sale_dictionary_id: string | null
+  sale_value_id: string | null
+  sale_value_name: string | null
+}
+
+export interface CustomerOrderFilterOptions {
+  projects: { id: string; name: string }[]
+  sale_values: { id: string; name: string }[]
+  sale_attribute_id: string | null
+  sale_dictionary_id: string | null
+  warnings: string[]
+}
+
 export const organizationProfilesApi = {
+  orderFilters: () => api.get<CustomerOrderFilter[]>('/organization-profiles/order-filters'),
+  saveOrderFilters: (filters: CustomerOrderFilter[]) =>
+    api.put<CustomerOrderFilter[]>('/organization-profiles/order-filters', { filters }),
+  orderFilterOptions: () => api.get<CustomerOrderFilterOptions>('/organization-profiles/order-filter-options'),
   list: () => api.get<OrganizationProfile[]>('/organization-profiles/'),
   sync: () => api.post<OrganizationProfile[]>('/organization-profiles/sync'),
   update: (
@@ -889,8 +912,9 @@ export const tsdApi = {
       organization_name: string
     }>('/api/tsd/auth/exchange', { code, device_name }, { timeout: 20_000 }),
   me: () => tsdClient.get<TsdContext>('/tsd/me'),
-  orders: (search?: string, offset = 0) =>
-    tsdClient.get<TsdOrderItem[]>('/tsd/orders', { params: { search: search || undefined, offset } }),
+  orderFilters: () => tsdClient.get<CustomerOrderFilter[]>('/tsd/order-filters'),
+  orders: (search?: string, offset = 0, filterId?: string) =>
+    tsdClient.get<TsdOrderItem[]>('/tsd/orders', { params: { search: search || undefined, offset, filter_id: filterId || undefined } }),
   orderShipments: (orderId: string) => tsdClient.get<TsdOrderShipments>(`/tsd/orders/${orderId}/shipments`),
   documents: (search?: string) =>
     tsdClient.get<TsdDocumentItem[]>('/tsd/documents', {

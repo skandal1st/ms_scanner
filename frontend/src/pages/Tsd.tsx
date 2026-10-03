@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent 
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
+import { CustomerOrderFilterSelect } from '../components/CustomerOrderFilterSelect'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
@@ -127,6 +128,9 @@ function ShipmentRow({ item, onOpen, disabled }: { item: TsdDocumentItem; onOpen
 function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) {
   const online = useTsdOnline()
   const [search, setSearch] = useState('')
+  const [filterId, setFilterId] = useState(() => localStorage.getItem('tsd_order_filter_id') || '')
+  const filters = useQuery({ queryKey: ['tsd-order-filters'], queryFn: () => tsdApi.orderFilters().then(r => r.data), refetchInterval: 30_000 })
+  const activeFilterId = filters.data?.some(f => f.id === filterId) ? filterId : ''
   const deferredSearch = useDeferredValue(search)
   const [tab, setTab] = useState<'available' | 'work'>('available')
   const [qrMode, setQrMode] = useState(false)
@@ -136,9 +140,9 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
   const qrRef = useRef<HTMLInputElement>(null)
   const { data: me } = useQuery({ queryKey: ['tsd-me'], queryFn: () => tsdApi.me().then((r) => r.data) })
   const { data: orderPages, isLoading, error: listError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ['tsd-orders', deferredSearch],
+    queryKey: ['tsd-orders', deferredSearch, activeFilterId], enabled: !filters.isLoading,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => tsdApi.orders(deferredSearch.trim(), pageParam).then((r) => r.data),
+    queryFn: ({ pageParam }) => tsdApi.orders(deferredSearch.trim(), pageParam, activeFilterId).then((r) => r.data),
     getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined,
   })
   const select = useMutation({
@@ -191,6 +195,8 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
         {select.isPending && <p role="status">Открываем сборку…</p>}
       </section> : <>
       <div className="tsd-list-controls">
+        <CustomerOrderFilterSelect tsd filters={filters.data || []} value={activeFilterId} onChange={id => { setFilterId(id); localStorage.setItem('tsd_order_filter_id', id) }} disabled={!online || filters.isLoading || select.isPending || chooseOrder.isPending || !!filters.error} />
+        {filters.error && <div className="tsd-alert tsd-alert--error">Не удалось загрузить фильтры. <button type="button" className="tsd-button" disabled={!online} onClick={() => filters.refetch()}>Повторить</button></div>}
         <label className="tsd-search">
           <span aria-hidden>⌕</span>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Найти номер или контрагента" />

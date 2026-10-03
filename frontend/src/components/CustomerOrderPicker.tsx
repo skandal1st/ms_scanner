@@ -1,6 +1,7 @@
 import { useDeferredValue, useState } from 'react'
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { documentsApi } from '../api/client'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { documentsApi, organizationProfilesApi } from '../api/client'
+import { CustomerOrderFilterSelect } from './CustomerOrderFilterSelect'
 import type { Document, MsDocument } from '../api/client'
 import { getOrganizationProfileId } from '../lib/organizationProfile'
 
@@ -13,13 +14,18 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const filterStorageKey = `customer_order_filter:${getOrganizationProfileId() || 'default'}`
+  const [filterId, setFilterId] = useState(() => localStorage.getItem(filterStorageKey) || '')
+  const filters = useQuery({ queryKey: ['customer-order-filters', getOrganizationProfileId()], enabled: open,
+    queryFn: () => organizationProfilesApi.orderFilters().then(r => r.data), refetchInterval: open ? 30_000 : false })
+  const activeFilterId = filters.data?.some(f => f.id === filterId) ? filterId : ''
   const deferredSearch = useDeferredValue(search.trim())
   const [choice, setChoice] = useState<{ order: MsDocument; shipments: MsDocument[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const orders = useInfiniteQuery({
-    queryKey: ['customer-orders', getOrganizationProfileId(), deferredSearch], enabled: open,
+    queryKey: ['customer-orders', getOrganizationProfileId(), deferredSearch, activeFilterId], enabled: open && !filters.isLoading,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => documentsApi.customerOrders(deferredSearch, pageParam).then(r => r.data),
+    queryFn: ({ pageParam }) => documentsApi.customerOrders(deferredSearch, pageParam, activeFilterId).then(r => r.data),
     getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined,
   })
   const resolve = useMutation({
@@ -54,6 +60,8 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
         </button>)}</div>
         <button type="button" className="button button--sm" disabled={busy} onClick={() => choose.mutate(choice.order)}>Обновить отгрузки</button>
       </> : <>
+        <CustomerOrderFilterSelect filters={filters.data || []} value={activeFilterId} onChange={id => { setFilterId(id); localStorage.setItem(filterStorageKey, id) }} disabled={busy || filters.isLoading || !!filters.error} />
+        {filters.error && <div className="alert alert--error">Не удалось загрузить фильтры. <button type="button" className="button button--sm" onClick={() => filters.refetch()}>Повторить</button></div>}
         <input className="ui-input ui-input--block" aria-label="Поиск заказа покупателя" placeholder="Номер заказа или контрагент"
           value={search} disabled={busy} onChange={event => setSearch(event.target.value)} />
         {orders.isLoading && <p role="status" className="hint">Загружаем заказы…</p>}

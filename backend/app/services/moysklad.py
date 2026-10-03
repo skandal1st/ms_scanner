@@ -5,6 +5,7 @@ import httpx
 from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.customer_order_filters import moysklad_order_filter_conditions
 from app.services.chestnyznak import (
     cis_string_for_moysklad_api,
     normalize_gtin_key,
@@ -236,16 +237,62 @@ class MoySkladService:
         return out
 
     async def get_customer_orders(self, organization_id: Optional[str], search: Optional[str] = None,
-                                  limit: int = 50, offset: int = 0) -> list[dict]:
+                                  limit: int = 50, offset: int = 0, *, order_filter: Optional[dict] = None) -> list[dict]:
         params = {"limit": min(limit, 100), "offset": offset, "order": "moment,desc", "expand": "agent,store,state"}
+        filters = []
         if organization_id:
-            params["filter"] = f"organization={self.base_url}/entity/organization/{organization_id}"
+            filters.append(f"organization={self.base_url}/entity/organization/{organization_id}")
+        if order_filter:
+            filters.extend(moysklad_order_filter_conditions(self.base_url, order_filter))
+        if filters:
+            params["filter"] = ";".join(filters)
         if search and search.strip():
             params["search"] = search.strip()
         async with httpx.AsyncClient(timeout=15) as client:
             response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder", params=params)
             response.raise_for_status()
             return response.json().get("rows", [])
+
+    async def get_customer_order_filter_options(self) -> dict:
+        result = {"projects": [], "sale_values": [], "sale_attribute_id": None,
+                  "sale_dictionary_id": None, "warnings": []}
+        async with httpx.AsyncClient(timeout=15) as client:
+            async def dictionary(path):
+                rows, offset = [], 0
+                while True:
+                    response = await self._request_with_retry(client, "GET", f"{self.base_url}/{path}",
+                                                              params={"limit": 1000, "offset": offset})
+                    response.raise_for_status()
+                    page = response.json().get("rows", [])
+                    rows.extend(page)
+                    if len(page) < 1000:
+                        return rows
+                    offset += len(page)
+            try:
+                result["projects"] = [{"id": row["id"], "name": row["name"]}
+                                      for row in await dictionary("entity/project") if not row.get("archived")]
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 403:
+                    raise
+                result["warnings"].append("Нет прав на просмотр проектов. Обновите XML решения и переустановите его в МойСкладе.")
+            attrs = await dictionary("entity/customerorder/metadata/attributes")
+            matches = [row for row in attrs if (row.get("name") or "").strip().casefold() == "где продажа"]
+            if len(matches) != 1 or matches[0].get("type") != "customentity":
+                result["warnings"].append("В заказах покупателей нужно одно поле «Где продажа» типа «Пользовательский справочник».")
+                return result
+            attr = matches[0]
+            dictionary_id = self._id_from_href((attr.get("customEntityMeta") or {}).get("href", ""))
+            result["sale_attribute_id"] = attr["id"]
+            result["sale_dictionary_id"] = dictionary_id
+            try:
+                result["sale_values"] = [{"id": row["id"], "name": row["name"]}
+                                         for row in await dictionary(f"entity/customentity/{dictionary_id}")
+                                         if not row.get("archived")]
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 403:
+                    raise
+                result["warnings"].append("Нет прав на справочник «Где продажа». Обновите XML решения и переустановите его в МойСкладе.")
+        return result
 
     async def get_customer_order(self, order_id: str) -> dict:
         async with httpx.AsyncClient(timeout=15) as client:

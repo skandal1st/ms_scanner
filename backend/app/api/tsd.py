@@ -43,6 +43,7 @@ from app.db.session import get_db
 from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
     customer_order_direct_shipment_count, shipment_matches_customer_order)
+from app.services.customer_order_filters import CustomerOrderFilter, profile_order_filters, resolve_order_filter
 
 router = APIRouter(prefix="/tsd", tags=["tsd"])
 bearer = HTTPBearer()
@@ -343,17 +344,26 @@ def _order_ms_error(exc: Exception) -> HTTPException:
     return HTTPException(502, "Не удалось загрузить заказ или его отгрузки из МойСклада. Повторите попытку.")
 
 
+@router.get("/order-filters", response_model=list[CustomerOrderFilter])
+async def get_tsd_order_filters(device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db)):
+    _, _, profile = await _device_scope(db, device)
+    return profile_order_filters(profile)
+
+
 @router.get("/orders", response_model=list[TsdOrderItem])
 async def list_tsd_orders(
     search: Optional[str] = None, offset: int = 0,
     device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db),
+    filter_id: Optional[UUID] = None,
 ):
     if offset < 0:
         raise HTTPException(400, "Некорректная страница списка заказов")
     _, workplace, profile = await _device_scope(db, device)
+    selected_filter = resolve_order_filter(profile, filter_id)
     ms = await _ms_for_user(db, device.user_id)
     try:
-        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset)
+        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset,
+                                            **({"order_filter": selected_filter} if selected_filter else {}))
     except Exception as exc:
         logger.warning("tsd.orders.moysklad_failed", device_id=str(device.id), error=str(exc))
         raise _order_ms_error(exc) from exc

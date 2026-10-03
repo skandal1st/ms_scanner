@@ -6,6 +6,7 @@ import { useModal } from '../components/ModalProvider'
 import { isWebSerialSupported } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
+import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFiltersSettings'
 
 const TsdPairingSection = lazy(() =>
   import('../components/TsdPairingSection').then((module) => ({ default: module.TsdPairingSection })),
@@ -289,6 +290,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         <Suspense fallback={<p className="hint">Загружаем подключение ТСД…</p>}>
           <TsdPairingSection />
         </Suspense>
+        <CustomerOrderFiltersSettings />
         <ScannerSection embedded={embedded} />
       </div>
     </div>

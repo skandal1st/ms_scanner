@@ -12,6 +12,7 @@ from app.db.models import User, Document, DocumentKind, DocumentStatus, Integrat
 from app.api.deps import get_current_user, get_active_organization_profile
 from app.services.moysklad import (MoySkladService, SUPPORTED_KINDS, customer_order_links,
     customer_order_empty_message, customer_order_direct_shipment_count, shipment_matches_customer_order)
+from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -141,10 +142,13 @@ async def list_customer_orders(
     search: Optional[str] = None, offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db),
+    filter_id: Optional[UUID] = None,
 ):
+    selected_filter = resolve_order_filter(profile, filter_id)
     ms = await _get_ms_service(current_user, db)
     try:
-        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset)
+        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset,
+                                            **({"order_filter": selected_filter} if selected_filter else {}))
     except Exception as exc:
         raise _customer_order_error(exc) from exc
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",

@@ -7,6 +7,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
+from app.api.deps import get_active_organization_profile
+from app.services.customer_order_filters import CustomerOrderFilter, CustomerOrderFilterList, profile_order_filters
 from app.core.security import decrypt_token
 from app.db.models import Integration, OrganizationProfile, User, Workplace
 from app.db.session import get_db
@@ -85,6 +87,30 @@ async def list_profiles(
     db: AsyncSession = Depends(get_db),
 ):
     return await _list(db, current_user.id)
+
+
+@router.get("/order-filters", response_model=list[CustomerOrderFilter])
+async def get_order_filters(profile: OrganizationProfile = Depends(get_active_organization_profile)):
+    return profile_order_filters(profile)
+
+
+@router.put("/order-filters", response_model=list[CustomerOrderFilter])
+async def save_order_filters(body: CustomerOrderFilterList,
+    profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db)):
+    profile.customer_order_filters = [item.model_dump(mode="json") for item in body.filters]
+    await db.commit()
+    return profile.customer_order_filters
+
+
+@router.get("/order-filter-options")
+async def get_order_filter_options(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    integration = (await db.execute(select(Integration).where(Integration.user_id == current_user.id))).scalar_one_or_none()
+    if not integration or not integration.moysklad_token:
+        raise HTTPException(400, "МойСклад не подключён")
+    try:
+        return await MoySkladService(decrypt_token(integration.moysklad_token)).get_customer_order_filter_options()
+    except Exception as exc:
+        raise HTTPException(502, "Не удалось загрузить проекты и поле «Где продажа» из МойСклада. Повторите попытку.") from exc
 
 
 @router.post("/sync", response_model=list[ProfileResponse])
