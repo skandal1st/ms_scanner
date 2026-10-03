@@ -9,6 +9,7 @@ from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
 from app.services.chestnyznak import (
+    ChestnyZnakService,
     cis_compare_forms_for_ms,
     extract_gtin,
     is_sscc,
@@ -60,7 +61,7 @@ def _build_moysklad_scans_data(
                 else None
             )
         )
-        send_whole_box = kind == "demand" and bool(scan.is_box)
+        send_whole_box = kind == "demand" and bool(scan.is_box or getattr(scan, "keep_aggregate", False))
         if scan.child_codes and not send_whole_box:
             # Развёрнутый агрегат: в МС пишем КМ вложенных пачек поштучно.
             for child_code in scan.child_codes:
@@ -353,6 +354,61 @@ def verify_code_task(self, scan_id: str, _code: str, user_id: str):
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=3, name="unpack_scan")
+def unpack_scan_task(self, scan_id: str, user_id: str, old_status: str):
+    try:
+        _run(_unpack_scan_async(scan_id, user_id, old_status))
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
+async def _unpack_scan_async(scan_id, user_id, old_status):
+    from app.db.session import AsyncSessionLocal
+    from app.db.models import Scan, ScanStatus, Document, DocumentStatus
+    from app.services.scan_packaging import package_type
+    from sqlalchemy import select
+    async with AsyncSessionLocal() as db:
+        scan = (await db.execute(select(Scan).join(Document).where(
+            Scan.id == scan_id, Document.user_id == user_id))).scalar_one_or_none()
+        if not scan or scan.status != ScanStatus.pending:
+            return
+        children, kind, error = [], None, None
+        document_id = scan.document_id
+        try:
+            token = await _get_cz_token(db, user_id, scan.document_id)
+            if not token:
+                raise ValueError("Войдите в Честный Знак для получения состава блока")
+            groups = await _get_cz_product_groups(db, user_id, scan.document_id)
+            info = await ChestnyZnakService(token=token, mock=False, product_groups=groups).get_code_info(scan.code)
+            if not info or not info.children:
+                raise ValueError("Честный Знак не вернул состав упаковки. Блок сохранён целиком.")
+            children = list(dict.fromkeys(info.children))
+            kind = package_type(info.package_type)
+        except Exception as exc:
+            logger.warning('scan.unpack_failed', scan_id=scan_id, error=str(exc))
+            error = str(exc) if isinstance(exc, ValueError) else "Не удалось получить состав упаковки. Повторите попытку."
+        await db.rollback()
+        doc = (await db.execute(select(Document).where(Document.id == document_id).with_for_update())).scalar_one_or_none()
+        if not doc or doc.status != DocumentStatus.draft:
+            return
+        scan = (await db.execute(select(Scan).where(Scan.id == scan_id).with_for_update())).scalar_one_or_none()
+        if not scan or scan.status != ScanStatus.pending:
+            return
+        scan.status = ScanStatus(old_status)
+        scan.error_message = error
+        if children:
+            scan.child_codes = children
+            scan.box_quantity = len(children)
+            scan.package_type = kind or 'GROUP'
+            scan.keep_aggregate = False
+        await db.commit()
+        await _push_ws_update(user_id, scan_id, scan.status.value, scan.product_name,
+                              scan.error_message, gtin=scan.gtin,
+                              moysklad_product_id=scan.moysklad_product_id, is_box=scan.is_box,
+                              box_quantity=scan.box_quantity, child_codes=scan.child_codes,
+                              package_type=scan.package_type, keep_aggregate=scan.keep_aggregate)
+
+
 async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
     from app.db.session import AsyncSessionLocal
     from app.db.models import Scan, ScanStatus, Document, Integration
@@ -400,10 +456,12 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             scan.producer_name = precheck.producer_name
             scan.withdrawn = bool(precheck.mark_withdraw)
             scan.withdraw_reason = precheck.withdraw_reason
+            from app.services.scan_packaging import package_type
+            scan.package_type = package_type(getattr(precheck, "package_type", None)) or scan.package_type
             out_gtin = precheck.gtin or scan.gtin
             name_override = precheck.product_name
             # Агрегат (блок/короб): развернуть в листовые КМ — отдельный запрос (редко).
-            if valid and precheck.child_count and not scan.child_codes:
+            if valid and (precheck.child_count or scan.package_type in {"GROUP", "BOX"}) and not scan.child_codes:
                 tok = await _get_cz_token(db, user_id, scan.document_id)
                 if tok:
                     grp = await _get_cz_product_groups(db, user_id, scan.document_id)
@@ -541,6 +599,8 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
                         "verify_code.code_info_failed", scan_id=scan_id, error=str(exc)
                     )
                 if info:
+                    from app.services.scan_packaging import package_type
+                    scan.package_type = package_type(info.package_type) or scan.package_type
                     scan.owner_name = info.owner_name
                     scan.producer_name = info.producer_name
                     scan.owner_inn = info.owner_inn
@@ -937,6 +997,8 @@ async def _push_ws_update(
     withdrawn: Optional[bool] = None,
     withdraw_reason: Optional[str] = None,
     child_codes: Optional[list] = None,
+    package_type: Optional[str] = None,
+    keep_aggregate: Optional[bool] = None,
 ):
     import redis.asyncio as aioredis
     import json
@@ -959,6 +1021,8 @@ async def _push_ws_update(
         "withdrawn": withdrawn,
         "withdraw_reason": withdraw_reason,
         "child_codes": child_codes,
+        "package_type": package_type,
+        "keep_aggregate": keep_aggregate,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()

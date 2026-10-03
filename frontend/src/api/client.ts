@@ -478,6 +478,8 @@ export interface Scan {
   scanned_at: string
   /** Короб SSCC, сохранённый целиком (transportpack). */
   is_box?: boolean
+  package_type?: 'UNIT' | 'GROUP' | 'BOX' | null
+  keep_aggregate?: boolean
   /** Скан обычного штрихкода немаркированного товара (не КМ): box_quantity — кол-во. */
   is_barcode?: boolean
   /** Число SGTIN внутри короба/блока (из ЧЗ) либо кол-во для штрихкодового скана. */
@@ -542,6 +544,7 @@ export const scansApi = {
     api.post<Scan[]>('/scans/bulk', { document_id, codes, unpack_boxes }),
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
+  packMode: (scan_id: string, unpack: boolean) => api.post<Scan>(`/scans/item/${scan_id}/pack-mode`, { unpack }),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
   /** Удалить пачку сканов по id (напр. позицию не из плана целиком). */
@@ -930,6 +933,8 @@ export const tsdApi = {
   deleteScan: (id: string, scanId: string) =>
     tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/${scanId}`),
   complete: (id: string) => tsdClient.post(`/tsd/documents/${id}/complete`),
+  packMode: (id: string, scanId: string, unpack: boolean) =>
+    tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/pack-mode`, { unpack }),
 }
 
 export interface ProductGroup {

@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_active_organization_profile, get_current_user
 from app.api.scans import (
     ScanResponse,
+    PackModeRequest, set_scan_pack_mode,
     _classify_barcode,
     _create_or_increment_barcode_scan,
     _create_scan_record,
@@ -625,6 +626,8 @@ async def select_tsd_document(
     else:
         if workplace.store_ids and doc.moysklad_store_id not in workplace.store_ids:
             raise HTTPException(403, "Отгрузка относится к другому складу")
+        from app.services.legacy_pack_plan import refresh_legacy_pack_plan
+        await refresh_legacy_pack_plan(db, doc, ms)
         doc.workplace_id = workplace.id
         if body.customer_order_id:
             doc.moysklad_customer_order_id = order_id
@@ -676,6 +679,9 @@ async def get_tsd_document(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
+    from app.services.legacy_pack_plan import refresh_legacy_pack_plan
+    if doc.status == DocumentStatus.draft and any('pack_quantities' not in p for p in doc.plan or []):
+        await refresh_legacy_pack_plan(db, doc, await _ms_for_user(db, device.user_id))
     session = (
         await db.execute(
             select(TsdDocumentSession).where(
@@ -705,6 +711,16 @@ async def get_tsd_document(
         customer_order_name=doc.customer_order_name,
         customer_order_id=doc.moysklad_customer_order_id,
     )
+
+
+@router.post("/documents/{document_id}/scans/{scan_id}/pack-mode", response_model=ScanResponse)
+async def change_tsd_pack_mode(document_id: UUID, scan_id: UUID, body: PackModeRequest,
+                               device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db)):
+    await _owned_tsd_document(db, device, document_id)
+    scan = (await db.execute(select(Scan).where(Scan.id == scan_id, Scan.document_id == document_id))).scalar_one_or_none()
+    if not scan:
+        raise HTTPException(404, "Марка не найдена")
+    return await set_scan_pack_mode(db, scan, device.user_id, body.unpack)
 
 
 @router.post("/documents/{document_id}/scans", response_model=ScanResponse)

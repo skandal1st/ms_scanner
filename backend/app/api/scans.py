@@ -45,6 +45,8 @@ class ScanResponse(BaseModel):
     error_message: Optional[str] = None
     scanned_at: datetime
     is_box: bool = False
+    package_type: Optional[str] = None
+    keep_aggregate: bool = False
     box_quantity: Optional[int] = None
     # Скан обычного штрихкода немаркированного товара (не КМ): box_quantity — кол-во.
     is_barcode: bool = False
@@ -102,6 +104,48 @@ class CreateScanRequest(BaseModel):
 
 class PatchScanBody(BaseModel):
     moysklad_product_id: Optional[str] = None
+
+
+class PackModeRequest(BaseModel):
+    unpack: bool
+
+
+async def set_scan_pack_mode(db, scan, user_id, unpack):
+    await editable_document(db, scan.document_id, user_id)
+    await db.refresh(scan)
+    from app.services.scan_packaging import scan_package_type
+    if scan.is_box or scan.is_barcode or scan_package_type(scan) not in {"GROUP", "BOX"}:
+        raise HTTPException(400, "Выберите блок или групповую упаковку")
+    if scan.status in {ScanStatus.pending, ScanStatus.invalid, ScanStatus.used_in_other_doc}:
+        raise HTTPException(409, "Дождитесь проверки упаковки или устраните ошибку марки")
+    if unpack and not scan.child_codes:
+        from app.worker.tasks import unpack_scan_task
+        old_status = scan.status.value
+        scan.status = ScanStatus.pending
+        scan.error_message = None
+        await db.commit()
+        try:
+            unpack_scan_task.delay(str(scan.id), str(user_id), old_status)
+        except Exception as exc:
+            scan.status = ScanStatus(old_status)
+            await db.commit()
+            raise HTTPException(503, "Не удалось запустить раскрытие упаковки. Повторите попытку.") from exc
+    else:
+        scan.keep_aggregate = not unpack
+        scan.error_message = None
+        await db.commit()
+    await db.refresh(scan)
+    return ScanResponse.model_validate(scan)
+
+
+@router.post("/item/{scan_id}/pack-mode", response_model=ScanResponse)
+async def change_scan_pack_mode(scan_id: UUID, body: PackModeRequest,
+                                current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    scan = (await db.execute(select(Scan).join(Document).where(
+        Scan.id == scan_id, Document.user_id == current_user.id))).scalar_one_or_none()
+    if not scan:
+        raise HTTPException(404, "Марка не найдена")
+    return await set_scan_pack_mode(db, scan, current_user.id, body.unpack)
 
 
 class CreateBoxRequest(BaseModel):
@@ -297,6 +341,8 @@ async def _create_scan_record(
         error_message=local_error,
         is_box=is_box,
         box_quantity=box_quantity,
+        package_type="BOX" if is_sscc(code) else ("GROUP" if is_box or (box_quantity and box_quantity > 1) else "UNIT"),
+        keep_aggregate=bool(not is_box and box_quantity and box_quantity > 1),
     )
     db.add(scan)
     try:

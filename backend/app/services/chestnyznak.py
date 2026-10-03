@@ -911,7 +911,7 @@ class ChestnyZnakService:
 
             # Для агрегата (есть вложения) забираем ВСЕ листовые КМ рекурсивно.
             children: list[str] = []
-            if first_layer:
+            if first_layer or (ci.get("generalPackageType") or ci.get("packageType")) in {"GROUP", "LEVEL1", "BOX", "LEVEL2"}:
                 try:
                     async with httpx.AsyncClient(timeout=15) as client:
                         ar = await client.post(
@@ -930,8 +930,8 @@ class ChestnyZnakService:
                         children = _flatten_aggregate_leaves(abody[cis])
                 except (httpx.TimeoutException, httpx.HTTPError) as exc:
                     logger.warning("cz.aggregated_list.http_error", pg=pg, error=str(exc))
-                if not children:
-                    children = first_layer  # фолбэк: хотя бы первый слой
+                # A box's first layer may contain blocks, not individual marks.
+                # Never replace a complete composition with that partial layer.
 
             info = CodeInfo(
                 cis=ci.get("cis") or cis,

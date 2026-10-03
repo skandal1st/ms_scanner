@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import { scansApi, isSscc } from '../api/client'
+import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { useModal } from '../components/ModalProvider'
 import { decodeJwtSub } from '../lib/jwt'
@@ -114,6 +114,8 @@ export function useScanner(documentId: string | null) {
             ? { moysklad_product_id: data.moysklad_product_id as string }
             : {}),
           ...(typeof data.is_box === 'boolean' ? { is_box: data.is_box } : {}),
+          ...(data.package_type ? { package_type: data.package_type as Scan['package_type'] } : {}),
+          ...(typeof data.keep_aggregate === 'boolean' ? { keep_aggregate: data.keep_aggregate } : {}),
           ...(data.box_quantity != null
             ? { box_quantity: data.box_quantity as number }
             : {}),

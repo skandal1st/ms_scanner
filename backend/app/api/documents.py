@@ -392,6 +392,9 @@ async def resolve_document(
         .first()
     )
     if existing is not None:
+        from app.services.legacy_pack_plan import refresh_legacy_pack_plan
+        if existing.status == DocumentStatus.draft and any('pack_quantities' not in p for p in existing.plan or []):
+            await refresh_legacy_pack_plan(db, existing, await _get_ms_service(current_user, db), body.kind.value)
         if body.customer_order_id:
             if existing.status == DocumentStatus.accepted:
                 raise HTTPException(409, "Отгрузка уже собрана. Обновите список отгрузок заказа.")
@@ -483,6 +486,9 @@ async def get_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     _ensure_supported_kind(doc.kind.value)
+    from app.services.legacy_pack_plan import refresh_legacy_pack_plan
+    if doc.moysklad_id and doc.status == DocumentStatus.draft and any('pack_quantities' not in p for p in doc.plan or []):
+        await refresh_legacy_pack_plan(db, doc, await _get_ms_service(current_user, db), _plan_source_kind(doc.kind.value))
     return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
@@ -527,7 +533,7 @@ async def export_document_xlsx(
     rows: List[tuple] = []
     for s in scans:
         name = s.product_name or "—"
-        if s.child_codes:  # короб/блок развёрнут — по строке на марку пачки
+        if s.child_codes and not (s.is_box or s.keep_aggregate):
             for cc in s.child_codes:
                 rows.append((name, cc, 1))
         elif s.is_barcode:  # немаркированный товар — марка пустая, кол-во из скана
@@ -535,7 +541,7 @@ async def export_document_xlsx(
         elif s.is_box:  # SSCC «целиком» — код короба + кол-во внутри
             rows.append((name, s.code, int(s.box_quantity or 1)))
         else:
-            rows.append((name, s.code, 1))
+            rows.append((name, s.code, int(s.box_quantity or 1)))
     rows.sort(key=lambda r: (r[0], r[1]))
 
     wb = Workbook()

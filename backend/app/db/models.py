@@ -286,6 +286,9 @@ class Scan(Base):
     # В МС такой скан пишется одним trackingCode type=transportpack с quantity=box_quantity.
     is_box = Column(Boolean, nullable=False, default=False, server_default="false")
     box_quantity = Column(Integer, nullable=True)
+    package_type = Column(String(16), nullable=True)
+    # GROUP/BOX aggregate can be sent intact without becoming an SSCC transportpack.
+    keep_aggregate = Column(Boolean, nullable=False, default=False, server_default="false")
     # Немаркированный товар: скан обычного штрихкода (EAN-13), не КМ. ЧЗ не вызывается,
     # box_quantity хранит накопленное кол-во (скан = +1). В МС пишется только quantity
     # позиции без trackingCode.

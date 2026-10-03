@@ -7,6 +7,7 @@ import {
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 import { Icon } from './Icon'
+import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
@@ -153,6 +154,19 @@ function ScanRow({
   onDelete: () => void
 }) {
   const cfg = STATUS_CONFIG[scan.status]
+  const [changingPack, setChangingPack] = useState(false)
+  const [packError, setPackError] = useState('')
+  const document = useScanStore((state) => state.document)
+  const changePack = async () => {
+    setChangingPack(true)
+    setPackError('')
+    try {
+      const { data } = await scansApi.packMode(scan.id, Boolean(scan.keep_aggregate || !scan.child_codes?.length))
+      useScanStore.getState().updateScan(scan.id, data)
+    } catch (error: any) {
+      setPackError(String(error.response?.data?.detail || 'Не удалось изменить обработку блока'))
+    } finally { setChangingPack(false) }
+  }
   // Сверка владельца марки с владельцем подписи (только отгрузка). Подсветка, не блокировка.
   const owner = ownerCheckState(scan, signatureInn)
   const ownerCls =
@@ -163,7 +177,7 @@ function ScanRow({
   // Штрихкод немаркированного товара (is_barcode) — не агрегат: box_quantity = кол-во.
   const childCount = scan.child_codes?.length ?? 0
   const isAggregate =
-    !scan.is_box && !scan.is_barcode && (childCount > 0 || scan.box_quantity != null)
+    !scan.is_box && !scan.is_barcode && scanPackageType(scan) !== 'UNIT'
 
   return (
     <>
@@ -188,12 +202,12 @@ function ScanRow({
           )}
           {scan.is_box ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
-              Короб · {scan.box_quantity ?? '?'} шт.
+              {scanPackageLabel(scan)}
             </div>
           ) : null}
           {isAggregate ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
-              Упаковка · {scan.box_quantity ?? childCount} шт.
+              {scanPackageLabel(scan)}
             </div>
           ) : null}
           {scan.is_barcode ? (
@@ -256,6 +270,14 @@ function ScanRow({
       {isExpanded && (
         <tr>
           <td colSpan={4} className="scans-expanded">
+            {!scan.is_box && !scan.is_barcode && scanPackageType(scan) !== 'UNIT' && <div className="scans-expanded__row">
+              <span>{scanPackageLabel(scan)}</span>
+              <button type="button" className="button" disabled={changingPack || scan.status === 'pending' || document?.status !== 'draft'}
+                onClick={() => void changePack()}>
+                {changingPack || scan.status === 'pending' ? 'Получаем состав…' : scan.keep_aggregate || !childCount ? 'Раскрыть блок на вложенные марки' : 'Сохранить блок целиком'}
+              </button>
+              {packError && <span role="alert">{packError}</span>}
+            </div>}
             <div className="scans-expanded__row">
               <span className="scans-expanded__label">Полный код:</span>
               <code>{scan.code}</code>
