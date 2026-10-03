@@ -72,6 +72,18 @@ class FakeScan:
     child_codes: list[str] | None
 
 
+def test_gtin_pack_quantity_survives_tsd_progress_and_ms_payload():
+    from app.services.moysklad import MoySkladService
+    from app.api.tsd import _scan_units
+    scan = FakeScan("010466051533035921TEST000000001\x1d93TEST", "04660515330359",
+                    "flavor", False, False, 10, None)
+    rows = _build_moysklad_scans_data([scan], "demand", {})
+    assert _scan_units(scan) == 10
+    assert rows[0]["quantity"] == 10 and rows[0]["code"] == scan.code
+    assert MoySkladService._scan_units(rows[0]) == 10
+    assert MoySkladService("fake")._tracking_code_entry(rows[0], "TOBACCO")["type"] == "trackingcode"
+
+
 def test_demand_whole_sscc_stays_transport_pack_even_with_known_children():
     scan = FakeScan(
         code="00046402759700334510",

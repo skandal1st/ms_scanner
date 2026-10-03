@@ -86,11 +86,7 @@ def _build_moysklad_scans_data(
                 "product_id": pid_default,
                 "is_box": scan.is_box,
                 "is_barcode": scan.is_barcode,
-                "quantity": (
-                    (int(scan.box_quantity or 0) or 1)
-                    if (scan.is_box or scan.is_barcode)
-                    else 1
-                ),
+                "quantity": int(scan.box_quantity or 0) or 1,
             })
     return rows
 

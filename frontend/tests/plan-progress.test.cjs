@@ -12,6 +12,26 @@ const compiled = ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKi
 const exposed = {};
 vm.runInNewContext(compiled, {exports:exposed,require:requireFrontend,setTimeout});
 const {buildProgress,findProgressRowForScan} = exposed;
+
+test('viewing positions leaves scanner automatic and preserves explicit manual mode',()=>{
+  const store=exposed.useScanStore;
+  store.getState().setTargetProductId(null);
+  store.getState().togglePositionSelection({productId:'flavor-1',gtinKey:'04660515330359'});
+  assert.equal(store.getState().targetProductId,null);
+  store.getState().setTargetProductId('manual-flavor');
+  store.getState().togglePositionSelection({productId:'flavor-2',gtinKey:'04660515330496'});
+  assert.equal(store.getState().targetProductId,'manual-flavor');
+  store.getState().setTargetProductId(null);
+});
+
+test('three flavor packs contribute ten units each',()=>{
+  const gtins=['04660515330359','04660515330496','04660515330571'];
+  const plan=gtins.map((gtin,i)=>({product_id:'p'+i,gtin:null,pack_gtins:[gtin],product_name:'p'+i,expected_qty:10}));
+  const scans=gtins.map((gtin,i)=>({id:'s'+i,gtin,moysklad_product_id:'p'+i,status:'scanned',box_quantity:10}));
+  const result=buildProgress(plan,scans);
+  assert.equal(result.total.addedTotal,30);
+  assert.deepEqual(Array.from(result.rows,row=>row.addedTotal),[10,10,10]);
+});
 const item = (pid, gtins) => ({product_id:pid,gtin:'02000000091327',gtins,product_name:pid,expected_qty:2});
 const scan = (gtin,pid=null,status='scanned') => ({id:gtin,code:'01'+gtin+'21TEST',gtin,moysklad_product_id:pid,status});
 

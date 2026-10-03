@@ -76,7 +76,7 @@ interface ScanStore {
   /** Явный товар МС для следующих сканов (UUID); null = только авто по GTIN/плану. */
   targetProductId: string | null
   setTargetProductId: (id: string | null) => void
-  /** Активная позиция для взаимной подсветки позиция↔коды; объединена с targetProductId. */
+  /** Активная позиция для просмотра кодов; не меняет привязку сканера. */
   selection: PositionSelection | null
   setSelection: (sel: PositionSelection | null) => void
   /** Переключить выбор позиции: повторный клик по той же позиции снимает подсветку. */
@@ -368,8 +368,8 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   togglePositionSelection: (sel) =>
     set((state) =>
       sameSelection(state.selection, sel)
-        ? { selection: null, targetProductId: null }
-        : { selection: sel, targetProductId: sel.productId },
+        ? { selection: null }
+        : { selection: sel },
     ),
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),

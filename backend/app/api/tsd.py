@@ -327,7 +327,7 @@ async def device_me(
 
 
 def _scan_units(scan: Scan) -> int:
-    return int(scan.box_quantity or 1) if (scan.is_box or scan.is_barcode) else 1
+    return int(scan.box_quantity or 1)
 
 
 def _ms_entity_id(entity: Optional[dict]) -> Optional[str]:

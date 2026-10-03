@@ -22,6 +22,7 @@ class PlanItem(BaseModel):
     gtin: Optional[str]
     gtins: List[str] = []
     pack_gtins: List[str] = []
+    pack_quantities: dict[str, int] = {}
     product_id: Optional[str]
     product_name: str
     expected_qty: int

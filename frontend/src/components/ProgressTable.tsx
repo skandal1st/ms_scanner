@@ -159,6 +159,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableP
           >
             Авто (по GTIN / плану)
           </button>
+          {targetProductId && <span>Ручная привязка: {progress.rows.find((row) => row.product_id === targetProductId)?.product_name || targetProductId}</span>}
         </div>
       )}
       {!isCollapsed && <div style={{ ...styles.list, ...(tabbed ? styles.tabbedList : { maxHeight: listHeight }) }}>
@@ -239,6 +240,13 @@ export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableP
               <div style={styles.barWrap}>
                 <div style={{ ...styles.bar, width: `${pct}%`, background: color }} />
               </div>
+              {canPickProduct && item.product_id && isSelected && (
+                <button type="button" className="button" aria-pressed={isTarget}
+                  onClick={(e) => { e.stopPropagation(); setTargetProductId(isTarget ? null : item.product_id) }}
+                  onKeyDown={(e) => e.stopPropagation()}>
+                  {isTarget ? 'Вернуть распознавание по GTIN' : 'Сканировать в эту позицию'}
+                </button>
+              )}
               {overLine && (
                 <div style={styles.rowOver}>
                   Вкл. сверх плана: {item.addedTotal - item.expected}

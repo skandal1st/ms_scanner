@@ -423,11 +423,21 @@ class MoySkladService:
             # GTIN). Их КМ в УПД должны лечь в тот же товар — индексируем как доп.
             # ключи резолва. Структура МС: packs:[{id, quantity, uom, barcodes:[{...}]}].
             pack_gtins: List[str] = []
+            pack_quantities: Dict[str, int] = {}
             for pk in (asrt.get("packs") or []):
+                try:
+                    pack_qty = float(pk.get("quantity") or 0)
+                except (ValueError, TypeError):
+                    pack_qty = 0
                 for bc in (pk.get("barcodes") or []):
                     g = self._gtin_from_barcode_obj(bc)
                     if g and g != gtin and g not in pack_gtins:
                         pack_gtins.append(g)
+                    if g and g not in gtins and pack_qty > 1 and pack_qty.is_integer():
+                        if g in pack_quantities and pack_quantities[g] != int(pack_qty):
+                            pack_quantities[g] = 0  # conflicting packaging metadata
+                        else:
+                            pack_quantities[g] = int(pack_qty)
             qty = pos.get("quantity") or 0
             try:
                 expected_qty = int(qty)
@@ -451,6 +461,7 @@ class MoySkladService:
                     "product_name": product_name,
                     "expected_qty": expected_qty,
                     "pack_gtins": pack_gtins,
+                    "pack_quantities": pack_quantities,
                     "marked": marked,
                 }
             )
@@ -509,9 +520,7 @@ class MoySkladService:
     @staticmethod
     def _scan_units(s: Dict[str, Any]) -> int:
         """Сколько единиц товара представляет скан: короб/штрихкод = quantity, иначе 1."""
-        if s.get("is_box") or s.get("is_barcode"):
-            return int(s.get("quantity") or 0) or 1
-        return 1
+        return int(s.get("quantity") or 0) or 1
 
     def _tracking_code_entry(
         self, s: Dict[str, Any], ms_tracking_type: Optional[str]
