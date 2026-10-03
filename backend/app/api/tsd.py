@@ -399,7 +399,7 @@ async def get_tsd_order_shipments(
         order = await ms.get_customer_order(str(order_id))
         if profile.moysklad_organization_id and _ms_entity_id(order.get("organization")) != profile.moysklad_organization_id:
             raise HTTPException(403, "Заказ покупателя относится к другому юрлицу")
-        rows = await ms.get_customer_order_demands(str(order_id), profile.moysklad_organization_id)
+        rows = await ms.get_customer_order_demands(str(order_id), profile.moysklad_organization_id, order=order)
     except HTTPException:
         raise
     except Exception as exc:

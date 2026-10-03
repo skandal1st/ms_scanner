@@ -37,7 +37,7 @@ async def test_order_shipments_exclude_other_warehouses_organizations_and_comple
     result = await tsd.get_tsd_order_shipments(order_id, device, db)
     assert [s.moysklad_id for s in result.shipments] == ["ship"]
     assert result.order_name == "42"
-    ms.get_customer_order_demands.assert_awaited_once_with(str(order_id), "org")
+    ms.get_customer_order_demands.assert_awaited_once_with(str(order_id), "org", order=ms.get_customer_order.return_value)
 
 
 async def test_order_without_shipments_does_not_create_any_document(monkeypatch):
@@ -112,7 +112,7 @@ async def test_new_session_uses_selected_demand_plan_and_keeps_parent_order(monk
     assert len(added) == 2  # local document and session, no remote creation
 
 
-async def test_order_demand_search_is_scoped_paginated_and_read_only():
+async def test_order_demand_search_is_scoped_batched_and_read_only():
     ms = MoySkladService("fake")
     calls = []
     async def request(client, method, url, **kwargs):
@@ -120,6 +120,9 @@ async def test_order_demand_search_is_scoped_paginated_and_read_only():
         rows = [demand(str(i)) for i in range(100)] if len(calls) == 1 else [demand("last")]
         return httpx.Response(200, json={"rows": rows}, request=httpx.Request(method, url))
     ms._request_with_retry = request
-    assert len(await ms.get_customer_order_demands("order", "org")) == 101
-    assert [c[2]["offset"] for c in calls] == [0, 100]
-    assert all(c[0] == "GET" and "customerOrder=" in c[2]["filter"] and "organization=" in c[2]["filter"] for c in calls)
+    ids = [str(uuid4()) for _ in range(101)]
+    order = {"demands": [{"meta": {"href": f"{ms.base_url}/entity/demand/{did}"}} for did in ids]}
+    assert len(await ms.get_customer_order_demands("order", "org", order=order)) == 101
+    assert [c[2]["filter"].count("id=") for c in calls] == [100, 1]
+    assert ids[-1] in calls[-1][2]["filter"]
+    assert all(c[0] == "GET" and "customerOrder=" not in c[2]["filter"] and "organization=" in c[2]["filter"] for c in calls)

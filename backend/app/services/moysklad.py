@@ -207,22 +207,27 @@ class MoySkladService:
             response.raise_for_status()
             return response.json()
 
-    async def get_customer_order_demands(self, order_id: str, organization_id: Optional[str]) -> list[dict]:
-        filters = [f"customerOrder={self.base_url}/entity/customerorder/{order_id}"]
-        if organization_id:
-            filters.append(f"organization={self.base_url}/entity/organization/{organization_id}")
+    async def get_customer_order_demands(self, order_id: str, organization_id: Optional[str],
+                                        *, order: Optional[dict] = None) -> list[dict]:
+        # Remap does not support demand?filter=customerOrder=... . Use the order's linked demand IDs.
+        order = order if order is not None else await self.get_customer_order(order_id)
+        references = order.get("demands") or []
+        ids = list(dict.fromkeys(ref.get("id") or self._id_from_href((ref.get("meta") or {}).get("href", ""))
+                                 for ref in references if isinstance(ref, dict)))
+        ids = [doc_id for doc_id in ids if doc_id]
         rows = []
         async with httpx.AsyncClient(timeout=15) as client:
-            while True:
+            for start in range(0, len(ids), 100):
+                filters = [f"id={doc_id}" for doc_id in ids[start:start + 100]]
+                if organization_id:
+                    filters.append(f"organization={self.base_url}/entity/organization/{organization_id}")
                 response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/demand", params={
                     "filter": ";".join(filters), "expand": "agent,store", "order": "moment,desc",
-                    "limit": 100, "offset": len(rows),
+                    "limit": 100,
                 })
                 response.raise_for_status()
-                page = response.json().get("rows", [])
-                rows.extend(page)
-                if len(page) < 100:
-                    return rows
+                rows.extend(response.json().get("rows", []))
+        return sorted(rows, key=lambda row: row.get("moment") or "", reverse=True)
 
     async def get_document(self, kind: str, doc_id: str) -> Dict[str, Any]:
         """Детали МС-документа выбранного типа."""
