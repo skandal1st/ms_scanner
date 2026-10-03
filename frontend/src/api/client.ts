@@ -766,6 +766,8 @@ export interface OrganizationProfile {
 }
 
 export interface CustomerOrderFilter {
+  projects: { id: string; name: string }[]
+  sale_values: { id: string; name: string }[]
   id: string
   name: string
   project_id: string | null

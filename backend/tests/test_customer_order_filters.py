@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.api import documents, organization_profiles, tsd
-from app.services.customer_order_filters import CustomerOrderFilter, CustomerOrderFilterList, resolve_order_filter
+from app.services.customer_order_filters import CustomerOrderFilter, CustomerOrderFilterList, resolve_order_filter, moysklad_order_filter_conditions
 from app.services.moysklad import MoySkladService
 from tests.test_release_processing import Result
 from tests.test_tsd_orders import context
@@ -17,6 +17,37 @@ from tests.test_tsd_orders import context
 def preset():
     return dict(id=str(uuid4()), name="Хорека · Питер", project_id=str(uuid4()), project_name="Хорека",
                 sale_attribute_id=str(uuid4()), sale_dictionary_id=str(uuid4()), sale_value_id=str(uuid4()), sale_value_name="Питер")
+
+
+def multi_preset():
+    item = preset()
+    return {**item, "projects": [{"id": item["project_id"], "name": "Хорека"}, {"id": str(uuid4()), "name": "Розница"}],
+            "sale_values": [{"id": item["sale_value_id"], "name": "Питер"}, {"id": str(uuid4()), "name": "Москва"}]}
+
+
+def test_legacy_values_migrate_and_explicit_empty_arrays_clear_old_selections():
+    item = preset()
+    migrated = CustomerOrderFilter.model_validate(item)
+    assert str(migrated.projects[0].id) == item["project_id"]
+    assert str(migrated.sale_values[0].id) == item["sale_value_id"]
+    cleared = CustomerOrderFilter.model_validate({**item, "projects": []})
+    assert cleared.project_id is None and cleared.project_name is None
+    conditions = moysklad_order_filter_conditions("https://ms", cleared.model_dump(mode="json"))
+    assert len(conditions) == 1 and not conditions[0].startswith("project=")
+    with pytest.raises(ValidationError):
+        CustomerOrderFilter.model_validate({**item, "projects": [], "sale_values": [], "sale_attribute_id": None, "sale_dictionary_id": None})
+
+
+def test_multiple_values_repeat_same_field_without_cross_product():
+    item = multi_preset()
+    conditions = moysklad_order_filter_conditions("https://ms", item)
+    assert conditions == [f"project=https://ms/entity/project/{value['id']}" for value in item["projects"]] + [
+        f"https://ms/entity/customerorder/metadata/attributes/{item['sale_attribute_id']}=https://ms/entity/customentity/{item['sale_dictionary_id']}/{value['id']}"
+        for value in item["sale_values"]]
+    with pytest.raises(ValidationError):
+        CustomerOrderFilter.model_validate({**item, "projects": [item["projects"][0]] * 2})
+    with pytest.raises(ValidationError):
+        CustomerOrderFilter.model_validate({**item, "sale_dictionary_id": None})
 
 
 def test_presets_validate_names_conditions_and_unique_ids():
@@ -33,7 +64,7 @@ def test_presets_validate_names_conditions_and_unique_ids():
 
 
 async def test_saved_presets_are_shared_with_tsd_but_isolated_by_profile(monkeypatch):
-    item = preset()
+    item = multi_preset()
     profile = NS(customer_order_filters=[])
     db = NS(commit=AsyncMock())
     saved = await organization_profiles.save_order_filters(CustomerOrderFilterList(filters=[item]), profile, db)
@@ -62,17 +93,19 @@ async def test_combined_filter_is_applied_before_pagination_and_preserves_search
         calls.append(kwargs["params"])
         return httpx.Response(200, json={"rows": [{"id": "matching"}]}, request=httpx.Request(method, url))
     ms._request_with_retry = request
-    item = preset()
+    item = multi_preset()
     assert await ms.get_customer_orders("org", "27370", offset=50, order_filter=item) == [{"id": "matching"}]
     params = calls[0]
     assert params["offset"] == 50 and params["limit"] == 50 and params["search"] == "27370"
     assert f"organization={ms.base_url}/entity/organization/org" in params["filter"]
     assert f"project={ms.base_url}/entity/project/{item['project_id']}" in params["filter"]
     assert f"metadata/attributes/{item['sale_attribute_id']}={ms.base_url}/entity/customentity/{item['sale_dictionary_id']}/{item['sale_value_id']}" in params["filter"]
+    assert f"project={ms.base_url}/entity/project/{item['projects'][1]['id']}" in params["filter"]
+    assert f"/{item['sale_values'][1]['id']}" in params["filter"]
 
 
 async def test_pc_and_tsd_pass_identical_saved_conditions(monkeypatch):
-    item = preset()
+    item = multi_preset()
     device, _, profile, ms, db = context(monkeypatch, ([],))
     profile.customer_order_filters = [item]
     ms.get_customer_orders.return_value = []

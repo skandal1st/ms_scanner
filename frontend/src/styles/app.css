@@ -939,3 +939,9 @@ html, body, #root { height: 100%; }
 .order-filters-settings__list p { margin: 5px 0 0; }
 .order-filters-settings__form { display: grid; gap: 12px; }
 .order-filters-settings__form .field-label { display: grid; gap: 6px; }
+.order-filter-choices { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border, #ddd); border-radius: 8px; }
+.order-filter-choices legend { padding: 0 6px; font-weight: 600; }
+.order-filter-choices__head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+.order-filter-choices__values { max-height: 220px; overflow-y: auto; margin-top: 8px; }
+.order-filter-choices__values label { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 6px; cursor: pointer; overflow-wrap: anywhere; }
+.order-filter-choices__values input { flex-shrink: 0; width: 18px; height: 18px; }
