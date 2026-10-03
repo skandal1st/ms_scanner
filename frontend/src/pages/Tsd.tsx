@@ -6,6 +6,7 @@ import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits } fr
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
+import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
 import { Icon } from '../components/Icon'
 
 function progressState(added: number, expected: number) {
@@ -208,7 +209,6 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const qc = useQueryClient()
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [code, setCode] = useState('')
-  const [manualInput, setManualInput] = useState(false)
   const [lastCode, setLastCode] = useState('')
   const [reviewing, setReviewing] = useState(false)
   const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
@@ -264,14 +264,14 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       refresh()
       sound.play(errorFeedback ? 'error' : 'ok')
       window.navigator.vibrate?.(errorFeedback ? [80, 60, 80] : 60)
-      inputRef.current?.focus()
+      inputRef.current?.focus({ preventScroll: true })
     },
     onError: (error) => {
       setMessage({ kind: 'error', text: apiMessage(error) })
       setCode('')
       window.navigator.vibrate?.([120, 80, 120])
       sound.play('error')
-      inputRef.current?.focus()
+      inputRef.current?.focus({ preventScroll: true })
     },
     onSettled: () => { submitting.current = false },
   })
@@ -303,13 +303,15 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => {
     // Android scanners may inject through the IME and need an editable, focused input.
     // Restore focus after React applies mode changes or removes readOnly after a request.
-    if (!reviewing && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending) {
-      inputRef.current?.focus()
+    if (!scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending) {
+      inputRef.current?.focus({ preventScroll: true })
     }
-  }, [manualInput, targetProductId, reviewing, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
+  }, [targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
+  const scannerBlocked = scan.isPending || undo.isPending || complete.isPending || remove.isPending
+  useTsdScannerFocus(inputRef, scannerBlocked, (value) => setCode((previous) => previous + value))
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
-    if (!normalized || reviewing || submitting.current || scan.isPending || complete.isPending || undo.isPending || remove.isPending) return
+    if (!normalized || submitting.current || scan.isPending || complete.isPending || undo.isPending || remove.isPending) return
     if (!online) {
       setMessage({ kind: 'error', text: 'Нет сети. Подключитесь к Wi-Fi и повторите скан.' })
       sound.play('error')
@@ -329,14 +331,29 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   acceptRef.current = acceptCode
   useEffect(() => {
     // Keyboard-wedge scanners may paste an entire code without an Enter suffix.
-    // Manual typing is submitted explicitly; no offline or pending scan queue.
-    if (!code.trim() || reviewing || manualInput || !online || scan.isPending || undo.isPending || complete.isPending || remove.isPending) return
+    // No offline or pending scan queue; the positions list never blocks the scanner.
+    if (!code.trim() || !online || scan.isPending || undo.isPending || complete.isPending || remove.isPending) return
     const timer = window.setTimeout(() => acceptRef.current(), 500)
     return () => window.clearTimeout(timer)
-  }, [code, reviewing, manualInput, online, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
+  }, [code, online, scan.isPending, undo.isPending, complete.isPending, remove.isPending])
   const submit = (event: FormEvent) => { event.preventDefault(); acceptCode() }
   return (
     <main className="tsd-shell tsd-picking">
+      <section className="tsd-scanner-dock" aria-label="Сканер маркировки">
+        <form className={`tsd-scan-box tsd-scan-box--compact ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
+          <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} /><span className="tsd-visually-hidden">Сканируйте штрихкод</span></label>
+          <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
+            readOnly={scannerBlocked} inputMode="text" placeholder={scan.isPending ? 'Записываем скан…' : 'Сканируйте марку'}
+            autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
+          <button type="submit" className="tsd-button" aria-label="Принять код" disabled={!online || !code.trim() || scannerBlocked}><Icon name="check" size={20} /></button>
+        </form>
+        <div className="tsd-dock-meta">
+          <span title={target?.product_name}>{targetProductId ? `Марки → ${target?.product_name || 'Позиция недоступна'}` : 'Авто по GTIN'}</span>
+          {targetProductId && <button type="button" className="tsd-button" disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
+          <button type="button" data-tsd-sound className="tsd-button" aria-label={sound.active ? 'Отключить звук' : 'Включить звук'} aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук вкл.' : 'Звук выкл.'}</button>
+        </div>
+        {message && <div role="status" aria-live="polite" className={`tsd-dock-message tsd-dock-message--${message.kind}`}>{message.text}</div>}
+      </section>
       <header className="tsd-header tsd-header--picking">
         <button type="button" className="tsd-back" onClick={onBack} aria-label="Назад">‹</button>
         <div><h1>Сборка заказа</h1><p>{doc.name}</p></div>
@@ -376,8 +393,6 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
               setTargetProductId(progress.rows[positionFilter].product_id!)
               setSelectedScanId(null)
               setMessage(null)
-              if (reviewRef.current) reviewRef.current.open = false
-              setReviewing(false)
             }}>Сканировать в выбранную позицию</button>}
           <div className="tsd-input-actions">
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>
@@ -405,33 +420,6 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           </div>}
         </>}
       </details>
-      <div className="tsd-scan-options">
-        <span>{targetProductId ? 'Ручная привязка' : 'Авто по GTIN'}</span>
-        <button type="button" data-tsd-sound className="tsd-button" aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук включён' : 'Включить звук'}</button>
-      </div>
-      {targetProductId && <div className="tsd-target">
-        <span>Следующие марки → <strong>{target?.product_name || 'Позиция недоступна'}</strong></span>
-        <button type="button" className="tsd-button" disabled={scan.isPending || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто по GTIN</button>
-      </div>}
-      <form className={`tsd-scan-box ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
-        <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} />Сканируйте штрихкод</label>
-        <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
-          readOnly={reviewing || scan.isPending || undo.isPending || complete.isPending || remove.isPending} inputMode="text"
-          autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
-        <p className="hint">{reviewing ? 'Закройте список позиций, чтобы продолжить сканирование.' : scan.isPending ? 'Записываем скан…' : manualInput ? 'Введите код и нажмите «Принять код».' : 'Код принимается автоматически, Enter не обязателен.'}</p>
-        <div className="tsd-input-actions">
-          <button type="button" className="tsd-button" onClick={() => setManualInput((value) => !value)}>
-            {manualInput ? 'Режим сканера' : 'Ввести вручную'}
-          </button>
-          <button type="submit" className="tsd-button tsd-button--primary" disabled={reviewing || !online || !code.trim() || scan.isPending || undo.isPending || complete.isPending || remove.isPending}>Принять код</button>
-        </div>
-      </form>
-      {message || last ? (
-        <div role="status" aria-live="polite" className={`tsd-last ${message?.kind === 'error' ? 'tsd-last--error' : ''}`}>
-          <b>{message?.kind === 'error' ? 'Ошибка сканирования' : 'Последний скан принят'}</b>
-          <span>{message?.text || last?.product_name || last?.code}</span>
-        </div>
-      ) : null}
       {lastCode && <details className="tsd-code-debug"><summary>Показать последний код</summary><code>{lastCode}</code></details>}
       <footer className="tsd-actions">
         <button type="button" className="tsd-button tsd-button--danger" disabled={!online || remove.isPending || undo.isPending || scan.isPending || complete.isPending || !last} onClick={() => undo.mutate()}>

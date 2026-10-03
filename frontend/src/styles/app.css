@@ -907,3 +907,18 @@ html, body, #root { height: 100%; }
 .tsd-position.tsd-progress--partial b { color: var(--st-warn-fg); }
 .tsd-position.tsd-progress--done b { color: var(--st-ok-fg); }
 .tsd-position.tsd-progress--overflow b { color: var(--st-err-fg); }
+
+.tsd-scanner-dock { position: sticky; top: 0; z-index: 5; padding: 4px 12px; background: #fff; border-bottom: 1px solid var(--tsd-line); }
+.tsd-scanner-dock .tsd-scan-box--compact { display: grid; grid-template-columns: 20px minmax(0, 1fr) 44px; gap: 8px; margin: 0; padding: 0 4px; border-style: solid; border-width: 1px; border-radius: 6px; }
+.tsd-scan-box--compact input { height: 36px; min-width: 0; padding: 0 4px; }
+.tsd-scan-box--compact input:focus-visible { outline-offset: 0; }
+.tsd-scanner-dock .tsd-button { min-height: 44px; padding: 4px 8px; font-size: 12px; }
+.tsd-scan-box--compact button { display: grid; place-items: center; width: 44px; border: 0; }
+.tsd-dock-meta { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 12px; color: var(--tsd-muted); }
+.tsd-dock-meta > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tsd-dock-meta [aria-pressed="true"] { color: var(--st-ok-fg); }
+.tsd-dock-message { font-size: 12px; line-height: 1.4; padding: 4px 6px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.tsd-dock-message--ok { background: var(--st-ok-bg); color: var(--st-ok-fg); }
+.tsd-dock-message--error { background: var(--st-err-bg); color: var(--st-err-fg); }
+.tsd-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.tsd-position, .tsd-mark, .tsd-order-review summary { scroll-margin-top: 160px; }
