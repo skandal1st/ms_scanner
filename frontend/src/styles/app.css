@@ -608,6 +608,15 @@ html, body, #root { height: 100%; }
   padding: 28px;
   box-shadow: var(--shadow-1);
 }
+.settings-page--embedded {
+  min-height: 0;
+  padding: 0;
+}
+.settings-page--embedded .settings-card {
+  max-width: none;
+  margin: 0;
+  padding: clamp(16px, 2vw, 28px);
+}
 .settings-status {
   background: var(--surface-2);
   border: 1px solid var(--ms-border-light);

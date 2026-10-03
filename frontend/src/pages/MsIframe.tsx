@@ -1,9 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
-import { Icon } from '../components/Icon'
-import { SerialIframeDiag } from '../components/SerialIframeDiag'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
-import { getOrganizationProfileId } from '../lib/organizationProfile'
 
 interface LaunchPayload {
   launch_token: string
@@ -56,29 +53,6 @@ export function MsIframePage() {
       })
   }, [])
 
-  const openInNewTab = async (mode: 'shipment' | 'acceptance') => {
-    if (state.kind !== 'ready') return
-    // Окно открываем СРАЗУ в обработчике клика (иначе popup-блокер), затем
-    // подставляем адрес. launch_token одноразовый — берём свежий на каждый клик
-    // через /auth/relaunch (по JWT iframe), чтобы отгрузка и приёмка открывались
-    // независимо. Без noopener — чтобы новая вкладка потом смогла window.close().
-    const win = window.open('', '_blank')
-    try {
-      const resp = await fetch('/api/auth/relaunch', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${state.payload.access_token}` },
-      })
-      const data = await resp.json().catch(() => ({}))
-      if (!resp.ok || !data.launch_token) throw new Error('relaunch failed')
-      const t = encodeURIComponent(data.launch_token)
-      const profile = getOrganizationProfileId()
-      const profileParam = profile ? `&profile=${encodeURIComponent(profile)}` : ''
-      if (win) win.location.href = `/launch?t=${t}&mode=${mode}${profileParam}`
-    } catch {
-      if (win) win.close()
-    }
-  }
-
   if (state.kind === 'loading') {
     return (
       <div style={styles.centered}>
@@ -109,25 +83,12 @@ export function MsIframePage() {
             </div>
           )}
         </div>
-        <div style={styles.ctaGroup}>
-          <button type="button" style={styles.cta} onClick={() => void openInNewTab('acceptance')}>
-            <Icon name="acceptance" size={17} /> Начать приёмку
-          </button>
-          <button type="button" style={styles.cta} onClick={() => void openInNewTab('shipment')}>
-            <Icon name="shipment" size={17} /> Начать отгрузку
-          </button>
-        </div>
       </header>
 
       <main style={styles.main}>
         <SettingsPage embedded />
       </main>
 
-      <SerialIframeDiag />
-
-      <footer style={styles.footer}>
-        Приёмка и отгрузка откроются в новой вкладке, чтобы USB-сканер оставался в фокусе.
-      </footer>
     </div>
   )
 }
@@ -153,12 +114,6 @@ const styles: Record<string, CSSProperties> = {
     top: 0,
     zIndex: 10,
   },
-  brand: {
-    fontSize: 17,
-    fontWeight: 700,
-    color: 'var(--ms-text)',
-    letterSpacing: '-0.01em',
-  },
   brandLogo: {
     height: 40,
     width: 'auto',
@@ -169,38 +124,11 @@ const styles: Record<string, CSSProperties> = {
     color: 'var(--ms-text-muted)',
     marginTop: 2,
   },
-  ctaGroup: {
-    display: 'flex',
-    gap: 8,
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
-  },
-  cta: {
-    background: 'var(--brand)',
-    color: '#fff',
-    border: 'none',
-    borderRadius: 'var(--r-md)',
-    padding: '11px 20px',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    boxShadow: 'var(--shadow-1)',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 8,
-  },
   main: {
     flex: 1,
     minHeight: 0,
     overflowY: 'auto',
     padding: '16px 20px',
-  },
-  footer: {
-    padding: '10px 20px 14px',
-    fontSize: 11,
-    color: 'var(--ms-text-subtle)',
-    textAlign: 'center',
   },
   centered: {
     minHeight: '100vh',

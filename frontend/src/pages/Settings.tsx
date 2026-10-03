@@ -115,7 +115,7 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
       {supported && embedded && (
         <div className="alert alert--info mt-12">
           Подключение COM-порта выполняется в <b>окне сканирования</b> — оно откроется
-          отдельной вкладкой при нажатии «Начать приёмку/отгрузку» или кнопки на документе
+          отдельной вкладкой со страницы приёмок, отгрузок или документа
           МойСклад. В самом окне МойСклад браузер не даёт доступ к COM-порту. Там нажмите
           «Подключить COM-порт» и выберите сканер.
         </div>
@@ -193,7 +193,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   })
 
   return (
-    <div className="settings-page">
+    <div className={`settings-page${embedded ? ' settings-page--embedded' : ''}`}>
       <div className="settings-card">
         <h1>Настройки интеграции</h1>
 
