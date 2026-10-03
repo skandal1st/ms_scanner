@@ -2,7 +2,8 @@ import { useEffect, useRef, useCallback } from 'react'
 import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { useModal } from '../components/ModalProvider'
-import { decodeJwtSub } from '../lib/jwt'
+import { useDocumentLive, type DocumentEvent } from './useDocumentLive'
+import { applyScanEvent } from '../lib/scanEvents'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
 
@@ -37,23 +38,11 @@ function playBeep(type: 'ok' | 'error' | 'unknown') {
   }
 }
 
-function resolveWsUserId(): string | null {
-  const cached = localStorage.getItem('user_id')
-  if (cached) return cached
-  const token = localStorage.getItem('access_token')
-  if (!token) return null
-  const sub = decodeJwtSub(token)
-  if (sub) {
-    localStorage.setItem('user_id', sub)
-    return sub
-  }
-  return null
-}
-
 export function useScanner(documentId: string | null) {
   const modal = useModal()
-  const { addScan, updateScan, flashScan } = useScanStore()
-  const wsRef = useRef<WebSocket | null>(null)
+  const { addScan, flashScan } = useScanStore()
+  const syncing = useRef(false)
+  const inflightEvents = useRef<DocumentEvent[]>([])
 
   const hasPending = useScanStore((s) => {
     if (!documentId) return false
@@ -63,20 +52,25 @@ export function useScanner(documentId: string | null) {
   // scan_update потерялись (статусы scanned→valid приходят по WS, но подстрахуемся).
   const verifying = useScanStore((s) => s.verifying)
 
-  // WebSocket — обновления статусов от Celery
-  useEffect(() => {
-    const userId = resolveWsUserId()
-    const token = localStorage.getItem('access_token')
-    if (!userId || !token) return
-
-    // Токен уходит в query-параметре: браузер не даёт слать заголовки при открытии
-    // WebSocket. Бэк валидирует его и сверяет sub с userId (см. main.py).
-    const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/${userId}?token=${encodeURIComponent(token)}`
-    const ws = new WebSocket(wsUrl)
-    wsRef.current = ws
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data)
+  const reconcile = async () => {
+    if (!documentId || syncing.current) return
+    syncing.current = true
+    inflightEvents.current = []
+    try {
+      const { data } = await scansApi.list(documentId)
+      const store = useScanStore.getState()
+      if (store.document?.id === documentId) store.setScans(inflightEvents.current.reduce(applyScanEvent, data))
+    } catch { /* Retry on reconnect or the periodic recovery snapshot. */ }
+    finally { syncing.current = false }
+  }
+  useDocumentLive(documentId, false, (data) => {
+      if (syncing.current) inflightEvents.current.push(data)
+      if (['scan_upsert', 'scan_removed', 'scans_reset'].includes(data.type)) {
+        const store = useScanStore.getState()
+        if (store.document?.id === documentId) store.setScans(applyScanEvent(store.scans, data))
+        return
+      }
+      if (data.type === 'scans_changed') { void reconcile(); return }
       // Один пользователь может одновременно работать в нескольких браузерах и
       // юрлицах. Канал WS общий для аккаунта, поэтому события другой операции
       // никогда не должны менять локальную сессию.
@@ -101,52 +95,15 @@ export function useScanner(documentId: string | null) {
         return
       }
       if (data.type === 'scan_update') {
-        // ЧЗ вернул данные (владелец) → токен рабочий, снимаем баннер.
-        if (data.owner_name) useScanStore.getState().setCzTokenExpired(false)
-        updateScan(data.scan_id, {
-          status: data.status,
-          product_name: data.product_name,
-          error_message: data.error_message,
-          ...(data.gtin != null && data.gtin !== ''
-            ? { gtin: data.gtin as string }
-            : {}),
-          ...(data.moysklad_product_id != null && data.moysklad_product_id !== ''
-            ? { moysklad_product_id: data.moysklad_product_id as string }
-            : {}),
-          ...(typeof data.is_box === 'boolean' ? { is_box: data.is_box } : {}),
-          ...(data.package_type ? { package_type: data.package_type as Scan['package_type'] } : {}),
-          ...(typeof data.keep_aggregate === 'boolean' ? { keep_aggregate: data.keep_aggregate } : {}),
-          ...(data.box_quantity != null
-            ? { box_quantity: data.box_quantity as number }
-            : {}),
-          ...(data.owner_name != null ? { owner_name: data.owner_name as string } : {}),
-          ...(data.producer_name != null
-            ? { producer_name: data.producer_name as string }
-            : {}),
-          ...(data.owner_inn != null ? { owner_inn: data.owner_inn as string } : {}),
-          ...(typeof data.withdrawn === 'boolean' ? { withdrawn: data.withdrawn } : {}),
-          ...(data.withdraw_reason != null
-            ? { withdraw_reason: data.withdraw_reason as string }
-            : {}),
-          ...(Array.isArray(data.child_codes)
-            ? { child_codes: data.child_codes as string[] }
-            : {}),
-        })
+        const store = useScanStore.getState()
+        if (!store.scans.some(scan => scan.id === data.scan_id)) { void reconcile(); return }
+        if (data.owner_name) store.setCzTokenExpired(false)
+        store.setScans(applyScanEvent(store.scans, data))
         // Бип на скане теперь играется сразу по ответу /scans/ (локальная проверка).
         // WS scan_update приходит из пакетной проверки — обновляем только визуально,
         // без звука на каждый код (иначе при проверке пачки — какофония).
       }
-    }
-
-    const ping = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) ws.send('ping')
-    }, 30000)
-
-    return () => {
-      clearInterval(ping)
-      ws.close()
-    }
-  }, [documentId, updateScan])
+  }, () => { void reconcile() })
 
   // Если WS недоступен — опрашиваем список сканов, пока есть pending либо идёт проверка
   useEffect(() => {
@@ -154,25 +111,9 @@ export function useScanner(documentId: string | null) {
     const docId = documentId
 
     async function poll() {
-      try {
-        const { data } = await scansApi.list(docId)
-        const store = useScanStore.getState()
-        // Документ мог смениться, пока запрос был в полёте: не перетираем сессию
-        // новой отгрузки сканами предыдущей (иначе старые коды «возвращаются» после
-        // переключения и держатся до F5).
-        if (store.document?.id !== docId) return
-        store.setScans(data)
-        // Подстраховка на случай потерянного WS-события verify_done: если проверка
-        // шла и непроверенных марок больше не осталось — снимаем флаг.
-        if (
-          store.verifying &&
-          !data.some((s) => s.document_id === docId && s.status === 'scanned')
-        ) {
-          store.setVerifying(false)
-        }
-      } catch {
-        /* сеть / 401 обработает axios */
-      }
+      await reconcile()
+      const store = useScanStore.getState()
+      if (store.document?.id === docId && store.verifying && !store.scans.some(s => s.status === 'scanned' || s.status === 'pending')) store.setVerifying(false)
     }
 
     void poll()

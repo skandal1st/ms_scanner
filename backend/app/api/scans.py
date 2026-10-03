@@ -8,7 +8,8 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.services.document_guard import editable_document
-from app.db.models import DocumentStatus
+from app.db.models import DocumentStatus, TsdScanAction
+from app.services.scan_events import publish_scan, publish_removed, publish_event
 from app.db.session import get_db
 from app.db.models import User, Scan, Document, ScanStatus, DocumentKind, Integration, OrganizationProfile, GtinNameMap, EdoDocument, EdoMark
 from app.api.deps import get_current_user
@@ -135,6 +136,7 @@ async def set_scan_pack_mode(db, scan, user_id, unpack):
         scan.error_message = None
         await db.commit()
     await db.refresh(scan)
+    await publish_scan(user_id, scan)
     return ScanResponse.model_validate(scan)
 
 
@@ -207,6 +209,7 @@ async def _create_scan_record(
     is_box: bool = False,
     box_quantity: Optional[int] = None,
     gtin_override: Optional[str] = None,
+    device_id: Optional[UUID] = None,
 ) -> tuple[Scan, bool]:
     """
     Создаёт скан. Возвращает (scan, is_duplicate).
@@ -345,6 +348,8 @@ async def _create_scan_record(
         keep_aggregate=bool(not is_box and box_quantity and box_quantity > 1),
     )
     db.add(scan)
+    if device_id:
+        db.add(TsdScanAction(device_id=device_id, document_id=document_id, scan=scan))
     try:
         await db.commit()
     except IntegrityError:
@@ -367,6 +372,7 @@ async def _create_scan_record(
         return existing, True
 
     await db.refresh(scan)
+    await publish_scan(current_user_id, scan)
 
     # Код-конфликт уже в финальном статусе used_in_other_doc — проверять в ЧЗ/МС
     # не нужно (в документ при проведении он всё равно не уйдёт).
@@ -435,6 +441,7 @@ async def _create_or_increment_barcode_scan(
     document_id: UUID,
     code: str,
     plan_entry: dict,
+    *, device_id: Optional[UUID] = None,
 ) -> tuple[Scan, bool]:
     """Штрихкодовый скан немаркированного товара: скан = +1 единица.
 
@@ -459,8 +466,11 @@ async def _create_or_increment_barcode_scan(
         if not existing.is_barcode:
             return existing, True
         existing.box_quantity = (existing.box_quantity or 0) + 1
+        if device_id:
+            db.add(TsdScanAction(device_id=device_id, document_id=document_id, scan=existing))
         await db.commit()
         await db.refresh(existing)
+        await publish_scan(owner, existing)
         return existing, False
 
     scan = Scan(
@@ -474,8 +484,11 @@ async def _create_or_increment_barcode_scan(
         box_quantity=1,
     )
     db.add(scan)
+    if device_id:
+        db.add(TsdScanAction(device_id=device_id, document_id=document_id, scan=scan))
     await db.commit()
     await db.refresh(scan)
+    await publish_scan(owner, scan)
     return scan, False
 
 
@@ -595,6 +608,7 @@ async def _create_box_scans_core(
     unpack: bool,
     current_user_id: UUID,
     cz: ChestnyZnakService,
+    device_id: Optional[UUID] = None,
 ) -> List[ScanResponse]:
     """Ядро создания сканов из SSCC-короба (целиком или с раскрытием на штучные КМ).
 
@@ -618,6 +632,7 @@ async def _create_box_scans_core(
             is_box=True,
             box_quantity=info.quantity,
             gtin_override=info.gtin,
+            device_id=device_id,
         )
         resp = ScanResponse.model_validate(scan)
         resp.duplicate = is_dup
@@ -631,7 +646,7 @@ async def _create_box_scans_core(
 
     responses: List[ScanResponse] = []
     for code in member_codes:
-        scan, is_dup = await _create_scan_record(db, document_id, code, current_user_id)
+        scan, is_dup = await _create_scan_record(db, document_id, code, current_user_id, device_id=device_id)
         resp = ScanResponse.model_validate(scan)
         resp.duplicate = is_dup
         responses.append(resp)
@@ -811,6 +826,7 @@ async def patch_scan_product(
 
     await db.commit()
     await db.refresh(scan)
+    await publish_scan(current_user.id, scan)
     return ScanResponse.model_validate(scan)
 
 
@@ -919,6 +935,7 @@ async def delete_document_scans(
         delete(Scan).where(Scan.document_id == document_id)
     )
     await db.commit()
+    await publish_event(current_user.id, {"type": "scans_reset", "document_id": str(document_id)})
     logger.info(
         "scans.cleared",
         document_id=str(document_id),
@@ -953,6 +970,7 @@ async def delete_scans_bulk(
         document_id=str(body.document_id),
         count=result.rowcount,
     )
+    await publish_event(current_user.id, {"type": "scans_changed", "document_id": str(body.document_id)})
     return {"deleted": result.rowcount}
 
 
@@ -976,3 +994,4 @@ async def delete_scan(
     await editable_document(db, scan.document_id, current_user.id)
     await db.delete(scan)
     await db.commit()
+    await publish_removed(current_user.id, scan.document_id, scan.id)

@@ -292,6 +292,15 @@ async def create_document(
     db: AsyncSession = Depends(get_db),
 ):
     _ensure_supported_kind(body.kind.value)
+    if body.moysklad_id and body.kind == DocumentKind.demand:
+        from app.services.document_guard import lock_ms_document
+        await lock_ms_document(db, current_user.id, body.kind, body.moysklad_id)
+        existing = (await db.execute(select(Document).where(
+            Document.user_id == current_user.id, Document.moysklad_id == body.moysklad_id,
+            Document.kind == DocumentKind.demand, Document.status != DocumentStatus.accepted,
+        ).order_by(Document.created_at.desc()))).scalars().first()
+        if existing is not None:
+            return _doc_to_response(existing, await _scan_count(db, existing.id))
     plan: list = []
     ms_organization_id: Optional[str] = None
     ms_store_id: Optional[str] = None
@@ -357,6 +366,8 @@ async def resolve_document(
     _ensure_supported_kind(body.kind.value)
 
     order_name = None
+    from app.services.document_guard import lock_ms_document
+    await lock_ms_document(db, current_user.id, body.kind, body.moysklad_id)
     verified_ms_doc = None
     if body.customer_order_id:
         if body.kind != DocumentKind.demand:

@@ -8,6 +8,8 @@ import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
 import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
+import { useDocumentLive, type DocumentEvent } from '../hooks/useDocumentLive'
+import { applyScanEvent } from '../lib/scanEvents'
 import { Icon } from '../components/Icon'
 import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
 
@@ -261,11 +263,19 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const submitting = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const reviewRef = useRef<HTMLDetailsElement>(null)
+  const liveDuringFetch = useRef<DocumentEvent[] | null>(null)
   const { data: doc = initial } = useQuery({
     queryKey: ['tsd-document', initial.id],
-    queryFn: () => tsdApi.getDocument(initial.id).then((r) => r.data),
+    queryFn: async () => {
+      const events: DocumentEvent[] = []
+      liveDuringFetch.current = events
+      try {
+        const { data } = await tsdApi.getDocument(initial.id)
+        return { ...data, scans: events.reduce(applyScanEvent, data.scans) }
+      } finally { if (liveDuringFetch.current === events) liveDuringFetch.current = null }
+    },
     initialData: initial,
-    refetchInterval: (query) => query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : 10_000,
+    refetchInterval: (query) => query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
   const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
   const last = doc.scans[0]
@@ -284,6 +294,15 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     ? Math.min(100, Math.round(progress.total.addedTotal * 100 / progress.total.expected))
     : 0
   const refresh = () => qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] })
+  useDocumentLive(initial.id, true, (event) => {
+    liveDuringFetch.current?.push(event)
+    if (event.type === 'scans_changed' || (event.type === 'scan_update' && !qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id])?.scans.some(item => item.id === event.scan_id))) {
+      void refresh(); return
+    }
+    if (!['scan_upsert', 'scan_removed', 'scans_reset', 'scan_update'].includes(event.type)) return
+    qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], previous => previous
+      ? { ...previous, scans: applyScanEvent(previous.scans, event) } : previous)
+  }, () => { void refresh() })
   const scan = useMutation({
     networkMode: 'always',
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
@@ -484,7 +503,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       {lastCode && <details className="tsd-code-debug"><summary>Показать последний код</summary><code>{lastCode}</code></details>}
       <footer className="tsd-actions">
         <button type="button" className="tsd-button tsd-button--danger" disabled={!online || remove.isPending || undo.isPending || scan.isPending || complete.isPending || !last} onClick={() => undo.mutate()}>
-          Отменить скан
+          Отменить свой скан
         </button>
         <button type="button" className="tsd-button tsd-button--primary" disabled={!online || scannerBlocked || Boolean(code.trim())} onClick={() => complete.mutate()}>
           Завершить сборку

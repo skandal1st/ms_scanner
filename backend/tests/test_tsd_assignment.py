@@ -28,7 +28,7 @@ async def test_assignment_is_forwarded_to_shared_scan_flow(monkeypatch, target):
     doc, device, db, create = setup(monkeypatch)
     body = tsd.TsdScanRequest(code="010462054308050321TEST", moysklad_product_id=target)
     await tsd.create_tsd_scan(doc.id, body, device, db)
-    assert create.await_args.kwargs == {"moysklad_product_id": target}
+    assert create.await_args.kwargs == {"moysklad_product_id": target, "device_id": device.id}
     assert create.await_args.args[2] == body.code
 
 

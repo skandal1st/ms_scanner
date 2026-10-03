@@ -4,7 +4,7 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Column, String, DateTime, Boolean, Integer, Numeric, Text, Enum,
-    ForeignKey, JSON, UniqueConstraint, func,
+    ForeignKey, JSON, UniqueConstraint, Index, text, func,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -209,6 +209,20 @@ class TsdDocumentSession(Base):
     started_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     last_seen_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class TsdScanAction(Base):
+    """Successful scan input by a terminal; barcode inputs are separate quantity increments."""
+    __tablename__ = "tsd_scan_actions"
+    __table_args__ = (Index("ix_tsd_scan_actions_undo", "device_id", "document_id", "created_at", "id",
+                           postgresql_where=text("undone_at IS NULL AND scan_id IS NOT NULL")),)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("tsd_devices.id"), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    scan_id = Column(UUID(as_uuid=True), ForeignKey("scans.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    undone_at = Column(DateTime(timezone=True), nullable=True)
+    scan = relationship("Scan")
 
 
 class OAuthState(Base):

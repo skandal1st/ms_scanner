@@ -403,7 +403,7 @@ async def _unpack_scan_async(scan_id, user_id, old_status):
             scan.keep_aggregate = False
         await db.commit()
         await _push_ws_update(user_id, scan_id, scan.status.value, scan.product_name,
-                              scan.error_message, gtin=scan.gtin,
+                              scan.error_message, document_id=str(scan.document_id), gtin=scan.gtin,
                               moysklad_product_id=scan.moysklad_product_id, is_box=scan.is_box,
                               box_quantity=scan.box_quantity, child_codes=scan.child_codes,
                               package_type=scan.package_type, keep_aggregate=scan.keep_aggregate)
@@ -437,7 +437,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
                 await db.commit()
                 await _push_ws_update(
                     user_id, scan_id, scan.status, scan.product_name,
-                    scan.error_message, gtin=scan.gtin,
+                    scan.error_message, document_id=str(scan.document_id), gtin=scan.gtin,
                     moysklad_product_id=scan.moysklad_product_id, is_box=scan.is_box,
                     box_quantity=scan.box_quantity, owner_name=scan.owner_name,
                     producer_name=scan.producer_name, owner_inn=scan.owner_inn,
@@ -717,6 +717,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             scan.status,
             scan.product_name,
             scan.error_message,
+            document_id=str(scan.document_id),
             gtin=scan.gtin,
             moysklad_product_id=scan.moysklad_product_id,
             is_box=scan.is_box,
@@ -973,6 +974,7 @@ async def _verify_box_async(scan_id: str, user_id: str):
             scan.status,
             scan.product_name,
             scan.error_message,
+            document_id=str(scan.document_id),
             gtin=scan.gtin,
             moysklad_product_id=scan.moysklad_product_id,
             is_box=scan.is_box,
@@ -987,6 +989,7 @@ async def _push_ws_update(
     product_name: Optional[str],
     error: Optional[str],
     *,
+    document_id: Optional[str] = None,
     gtin: Optional[str] = None,
     moysklad_product_id: Optional[str] = None,
     is_box: Optional[bool] = None,
@@ -1008,6 +1011,7 @@ async def _push_ws_update(
     message = json.dumps({
         "type": "scan_update",
         "scan_id": scan_id,
+        "document_id": document_id,
         "status": status,
         "product_name": product_name,
         "error_message": error,

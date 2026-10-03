@@ -37,10 +37,13 @@ from app.db.models import (
     Scan,
     TsdDevice,
     TsdDocumentSession,
+    TsdScanAction,
     User,
     Workplace,
 )
 from app.db.session import get_db
+from app.services.document_guard import lock_ms_document
+from app.services.scan_events import publish_scan, publish_removed, publish_event
 from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
     customer_order_direct_shipment_count, shipment_matches_customer_order)
@@ -568,6 +571,7 @@ async def select_tsd_document(
     db: AsyncSession = Depends(get_db),
 ):
     _, workplace, profile = await _device_scope(db, device)
+    await lock_ms_document(db, device.user_id, DocumentKind.demand, body.moysklad_id)
     doc = (
         await db.execute(
             select(Document)
@@ -730,6 +734,7 @@ async def create_tsd_scan(
     device: TsdDevice = Depends(get_tsd_device),
     db: AsyncSession = Depends(get_db),
 ):
+    device_id = device.id
     doc = await _owned_tsd_document(db, device, document_id)
     from app.services.document_guard import editable_document
     doc = await editable_document(db, document_id, device.user_id)
@@ -745,7 +750,7 @@ async def create_tsd_scan(
             raise HTTPException(400, "Для короба включите автоматический выбор позиции. Ручная привязка доступна для отдельных марок.")
         cz = await _resolve_cz_for_boxes(user, db, doc.id)
         responses = await _create_box_scans_core(
-            db, doc.id, _plan_gtins(doc.plan), code, False, device.user_id, cz
+            db, doc.id, _plan_gtins(doc.plan), code, False, device.user_id, cz, device_id=device.id
         )
         return responses[0]
     unmarked, marked = _classify_barcode(doc.plan, code)
@@ -754,17 +759,17 @@ async def create_tsd_scan(
     if unmarked is not None:
         if target and target.get("product_id") != unmarked.get("product_id"):
             raise HTTPException(400, "Штрихкод относится к другой позиции. Включите автоматический выбор или выберите нужный товар.")
-        scan, duplicate = await _create_or_increment_barcode_scan(db, doc.id, code, unmarked)
+        scan, duplicate = await _create_or_increment_barcode_scan(db, doc.id, code, unmarked, device_id=device.id)
     else:
         if target and target.get("marked") is False:
             raise HTTPException(400, "Выбрана немаркированная позиция. Сканируйте её обычный штрихкод.")
         scan, duplicate = await _create_scan_record(
-            db, doc.id, code, device.user_id, moysklad_product_id=body.moysklad_product_id
+            db, doc.id, code, device.user_id, moysklad_product_id=body.moysklad_product_id, device_id=device.id
         )
     response = ScanResponse.model_validate(scan)
     response.duplicate = duplicate
     logger.info(
-        "tsd.scan.created", device_id=str(device.id), document_id=str(doc.id), scan_id=str(scan.id)
+        "tsd.scan.created", device_id=str(device_id), document_id=str(document_id), scan_id=str(scan.id)
     )
     return response
 
@@ -778,16 +783,29 @@ async def delete_last_tsd_scan(
     doc = await _owned_tsd_document(db, device, document_id)
     from app.services.document_guard import editable_document
     doc = await editable_document(db, document_id, device.user_id)
-    scan = (
+    action_and_scan = (
         await db.execute(
-            select(Scan).where(Scan.document_id == doc.id).order_by(Scan.scanned_at.desc()).limit(1)
+            select(TsdScanAction, Scan).join(Scan, Scan.id == TsdScanAction.scan_id).where(
+                TsdScanAction.document_id == doc.id, TsdScanAction.device_id == device.id,
+                TsdScanAction.undone_at.is_(None), TsdScanAction.scan_id.is_not(None), Scan.document_id == doc.id,
+            ).order_by(TsdScanAction.created_at.desc(), TsdScanAction.id.desc()).limit(1).with_for_update()
         )
-    ).scalar_one_or_none()
-    if not scan:
-        raise HTTPException(404, "В документе ещё нет сканов")
+    ).first()
+    if not action_and_scan:
+        raise HTTPException(404, "У этого ТСД нет сканов для отмены. Старые марки можно удалить выбором в списке.")
+    action, scan = action_and_scan
+    action.undone_at = datetime.now(timezone.utc)
+    decrease_quantity = scan.is_barcode and (scan.box_quantity or 1) > 1
+    if decrease_quantity:
+        scan.box_quantity -= 1
     response = ScanResponse.model_validate(scan)
-    await db.delete(scan)
+    if not decrease_quantity:
+        await db.delete(scan)
     await db.commit()
+    if decrease_quantity:
+        await publish_scan(device.user_id, scan)
+    else:
+        await publish_removed(device.user_id, doc.id, scan.id)
     logger.info(
         "tsd.scan.undone", device_id=str(device.id), document_id=str(doc.id), scan_id=str(scan.id)
     )
@@ -812,6 +830,7 @@ async def delete_tsd_scan(
     response = ScanResponse.model_validate(scan)
     await db.delete(scan)
     await db.commit()
+    await publish_removed(device.user_id, doc.id, scan.id)
     logger.info(
         "tsd.scan.deleted", device_id=str(device.id), document_id=str(doc.id), scan_id=str(scan.id)
     )
@@ -885,3 +904,4 @@ async def revoke_device(
         TsdDocumentSession.status == "active",
     ).values(status="revoked", completed_at=datetime.now(timezone.utc)))
     await db.commit()
+    await publish_event(current_user.id, {"type": "tsd_device_revoked", "device_id": str(device.id)})

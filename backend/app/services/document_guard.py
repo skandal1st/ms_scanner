@@ -19,6 +19,13 @@ async def editable_document(db, document_id, user_id):
     return doc
 
 
+async def lock_ms_document(db, user_id, kind, moysklad_id):
+    # All find-or-create entry points share this transaction lock, including PC and TSD.
+    # No profile in the key: PC may resolve the profile from the MS organization later.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                     {"key": f"document:{user_id}:{getattr(kind, 'value', kind)}:{moysklad_id}"})
+
+
 @asynccontextmanager
 async def processing_lock(key):
     # Session-level PostgreSQL lock survives per-batch commits and disappears on
