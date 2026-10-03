@@ -27,6 +27,31 @@ WRITE_TRACKING_CODES_KINDS = {"demand", "supply"}
 SUPPORTED_KINDS = {"demand", "loss", "supply"}
 
 
+def customer_order_links(order: dict, kind: str) -> list[dict]:
+    # CustomerOrder.demands also contains retaildemand references.
+    links = []
+    for ref in order.get("demands") or []:
+        if not isinstance(ref, dict):
+            continue
+        meta = ref.get("meta") or {}
+        ref_kind = meta.get("type")
+        if not ref_kind:
+            href = meta.get("href") or ""
+            ref_kind = next((value for value in ("retaildemand", "demand")
+                             if f"/entity/{value}/" in href), "demand" if not href else None)
+        if ref_kind == kind:
+            links.append(ref)
+    return links
+
+
+def customer_order_empty_message(order: dict) -> str:
+    if customer_order_links(order, "demand"):
+        return "Связанные отгрузки уже собраны или недоступны для этого рабочего места. Проверьте склад и статус отгрузки."
+    if customer_order_links(order, "retaildemand"):
+        return "К заказу привязана розничная продажа. Для сборки нужна обычная отгрузка; сборка розничных продаж пока не поддерживается."
+    return "В МойСкладе у заказа нет связанной отгрузки. Создайте отгрузку из этого заказа в МойСкладе, затем обновите список."
+
+
 class MoySkladService:
     # Ширина свежего окна для локального поиска по контрагенту/заказу (МС `search`
     # их не индексирует). Найдём совпадения среди последних N документов.
@@ -211,7 +236,7 @@ class MoySkladService:
                                         *, order: Optional[dict] = None) -> list[dict]:
         # Remap does not support demand?filter=customerOrder=... . Use the order's linked demand IDs.
         order = order if order is not None else await self.get_customer_order(order_id)
-        references = order.get("demands") or []
+        references = customer_order_links(order, "demand")
         ids = list(dict.fromkeys(ref.get("id") or self._id_from_href((ref.get("meta") or {}).get("href", ""))
                                  for ref in references if isinstance(ref, dict)))
         ids = [doc_id for doc_id in ids if doc_id]

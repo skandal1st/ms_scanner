@@ -41,7 +41,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.chestnyznak import is_sscc, normalize_sscc
-from app.services.moysklad import MoySkladService
+from app.services.moysklad import MoySkladService, customer_order_links, customer_order_empty_message
 
 router = APIRouter(prefix="/tsd", tags=["tsd"])
 bearer = HTTPBearer()
@@ -110,6 +110,7 @@ class TsdOrderItem(BaseModel):
     moment: Optional[str] = None
     state_name: Optional[str] = None
     shipment_count: Optional[int] = None
+    retail_sale_count: int = 0
     in_work: bool = False
 
 
@@ -117,6 +118,7 @@ class TsdOrderShipments(BaseModel):
     order_id: str
     order_name: str
     shipments: list[TsdDocumentItem]
+    empty_shipments_message: Optional[str] = None
 
 
 class TsdDocumentDetail(BaseModel):
@@ -355,7 +357,7 @@ async def list_tsd_orders(
         logger.warning("tsd.orders.moysklad_failed", device_id=str(device.id), error=str(exc))
         raise _order_ms_error(exc) from exc
     demand_orders = {_ms_entity_id(demand): row["id"] for row in rows
-                     for demand in (row.get("demands") if isinstance(row.get("demands"), list) else []) if _ms_entity_id(demand)}
+                     for demand in customer_order_links(row, "demand") if _ms_entity_id(demand)}
     order_names = {row["id"]: row.get("name") for row in rows}
     local_docs = (await db.execute(select(Document).where(
         Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
@@ -384,7 +386,8 @@ async def list_tsd_orders(
         moysklad_id=row["id"], name=row.get("name") or "Без номера",
         agent_name=(row.get("agent") or {}).get("name"), store_name=(row.get("store") or {}).get("name"),
         state_name=(row.get("state") or {}).get("name"), moment=row.get("moment"),
-        shipment_count=len(row["demands"]) if isinstance(row.get("demands"), list) else None,
+        shipment_count=len(customer_order_links(row, "demand")),
+        retail_sale_count=len(customer_order_links(row, "retaildemand")),
         in_work=row["id"] in work_orders,
     ) for row in rows]
 
@@ -438,7 +441,8 @@ async def get_tsd_order_shipments(
             in_work=bool(collected or active), active_on_other_device=any(session.device_id != device.id for session in active),
         ))
     await db.commit()
-    return TsdOrderShipments(order_id=str(order_id), order_name=order.get("name") or "Без номера", shipments=shipments)
+    return TsdOrderShipments(order_id=str(order_id), order_name=order.get("name") or "Без номера", shipments=shipments,
+                             empty_shipments_message=customer_order_empty_message(order) if not shipments else None)
 
 
 @router.get("/documents", response_model=list[TsdDocumentItem])

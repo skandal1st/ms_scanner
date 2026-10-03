@@ -182,7 +182,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
       {orderChoice ? <section className="tsd-order-choice">
         <button type="button" className="tsd-button" disabled={select.isPending || chooseOrder.isPending} onClick={() => { setOrderChoice(null); setOpenError(null) }}>К списку заказов</button>
         <h2>Выберите отгрузку</h2>
-        {orderChoice.shipments.length === 0 && <p className="tsd-alert tsd-alert--warn">У заказа нет доступных отгрузок для сборки на этом рабочем месте. Создайте или проверьте отгрузку в МойСкладе, затем обновите список.</p>}
+        {orderChoice.shipments.length === 0 && <p className="tsd-alert tsd-alert--warn">{orderChoice.empty_shipments_message || 'Нет доступных отгрузок. Проверьте связанные документы в МойСкладе.'}</p>}
         {orderChoice.shipments.map((item) => <ShipmentRow key={item.moysklad_id} item={item} disabled={!online || select.isPending || chooseOrder.isPending} onOpen={() => {
           if (online && !select.isPending) { setOpenError(null); select.mutate({ id: item.moysklad_id, orderId: orderChoice.order_id }) }
         }} />)}
@@ -228,7 +228,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
             </div>
             <div className="tsd-shipment-row__progress">
               <time>{item.moment ? new Date(item.moment).toLocaleDateString('ru-RU') : '—'}</time>
-              <b>{item.shipment_count === null ? 'Открыть' : `Отгрузок: ${item.shipment_count}`}</b>
+              <b>{item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</b>
             </div><span className="tsd-chevron" aria-hidden>›</span>
           </button>
         ))}

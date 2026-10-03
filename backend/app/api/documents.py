@@ -10,7 +10,7 @@ import httpx
 from app.db.session import get_db
 from app.db.models import User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan
 from app.api.deps import get_current_user, get_active_organization_profile
-from app.services.moysklad import MoySkladService, SUPPORTED_KINDS
+from app.services.moysklad import MoySkladService, SUPPORTED_KINDS, customer_order_links, customer_order_empty_message
 from app.core.security import decrypt_token
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -58,6 +58,9 @@ class MoySkladDocumentItem(BaseModel):
     moment: Optional[str]
     customer_order_name: Optional[str] = None
     agent_name: Optional[str] = None
+    shipment_count: Optional[int] = None
+    retail_sale_count: int = 0
+    empty_shipments_message: Optional[str] = None
 
 
 def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
@@ -144,7 +147,10 @@ async def list_customer_orders(
     except Exception as exc:
         raise _customer_order_error(exc) from exc
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",
-        moment=row.get("moment"), agent_name=(row.get("agent") or {}).get("name")) for row in rows]
+        moment=row.get("moment"), agent_name=(row.get("agent") or {}).get("name"),
+        shipment_count=len(customer_order_links(row, "demand")),
+        retail_sale_count=len(customer_order_links(row, "retaildemand")),
+        empty_shipments_message=customer_order_empty_message(row)) for row in rows]
 
 
 @router.get("/customer-orders/{order_id}/shipments", response_model=List[MoySkladDocumentItem])

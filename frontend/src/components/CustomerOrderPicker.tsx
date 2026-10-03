@@ -47,7 +47,7 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
       <h3>{choice ? `Заказ ${choice.order.name}: отгрузки` : 'Заказы покупателей'}</h3>
       {choice ? <>
         <button type="button" className="button button--sm" disabled={busy} onClick={() => { setChoice(null); setError(null) }}>К списку заказов</button>
-        {choice.shipments.length === 0 && <p className="hint">У заказа нет доступных отгрузок для сборки. Создайте или проверьте отгрузку в МойСкладе.</p>}
+        {choice.shipments.length === 0 && <p className="hint">{choice.order.empty_shipments_message || 'Нет доступных отгрузок. Проверьте связанные документы в МойСкладе.'}</p>}
         <div className="doc-list">{choice.shipments.map(shipment => <button key={shipment.id} type="button" className="doc-list__item" disabled={busy}
           onClick={() => { setError(null); resolve.mutate({ shipment, order: choice.order }) }}>
           <span>Отгрузка {shipment.name}</span><span className="doc-list__item-count">{shipment.agent_name || 'Открыть'}</span>
@@ -60,7 +60,7 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
         {orders.error && <div className="alert alert--error">{errorMessage(orders.error)} <button type="button" className="button button--sm" onClick={() => orders.refetch()}>Повторить</button></div>}
         {!orders.isLoading && !orders.error && orders.data?.pages.flat().length === 0 && <p className="hint">Заказы не найдены.</p>}
         <div className="doc-list">{orders.data?.pages.flat().map(order => <button key={order.id} type="button" className="doc-list__item" disabled={busy}
-          onClick={() => choose.mutate(order)}><span>Заказ {order.name}</span><span className="doc-list__item-count">{order.agent_name || 'Контрагент не указан'}</span></button>)}</div>
+          onClick={() => choose.mutate(order)}><span>Заказ {order.name}<small style={{ display: 'block' }}>{order.agent_name || 'Контрагент не указан'}</small></span><span className="doc-list__item-count">{order.shipment_count ? `Отгрузок: ${order.shipment_count}` : order.retail_sale_count ? 'Розничная продажа' : order.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</span></button>)}</div>
         {orders.hasNextPage && <button type="button" className="button button--sm" disabled={busy || orders.isFetchingNextPage} onClick={() => orders.fetchNextPage()}>Показать ещё заказы</button>}
       </>}
       {(choose.isPending || resolve.isPending) && <p className="hint" role="status">Открываем отгрузку…</p>}

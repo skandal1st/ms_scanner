@@ -73,6 +73,9 @@ export interface MsDocument {
   moment: string | null
   customer_order_name: string | null
   agent_name: string | null
+  shipment_count?: number | null
+  retail_sale_count?: number
+  empty_shipments_message?: string | null
 }
 
 export interface PlanItem {
@@ -865,6 +868,7 @@ export interface TsdOrderItem {
   moment: string | null
   state_name: string | null
   shipment_count: number | null
+  retail_sale_count?: number
   in_work: boolean
 }
 
@@ -872,6 +876,7 @@ export interface TsdOrderShipments {
   order_id: string
   order_name: string
   shipments: TsdDocumentItem[]
+  empty_shipments_message?: string | null
 }
 
 export const tsdApi = {

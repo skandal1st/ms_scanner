@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from app.api import tsd
 from app.db.models import DocumentStatus
-from app.services.moysklad import MoySkladService
+from app.services.moysklad import MoySkladService, customer_order_links, customer_order_empty_message
 from tests.test_release_processing import Result
 
 
@@ -126,3 +126,31 @@ async def test_order_demand_search_is_scoped_batched_and_read_only():
     assert [c[2]["filter"].count("id=") for c in calls] == [100, 1]
     assert ids[-1] in calls[-1][2]["filter"]
     assert all(c[0] == "GET" and "customerOrder=" not in c[2]["filter"] and "organization=" in c[2]["filter"] for c in calls)
+
+
+async def test_retail_sales_are_never_queried_as_demands():
+    ms = MoySkladService("fake")
+    ms._request_with_retry = AsyncMock(return_value=httpx.Response(
+        200, json={"rows": [demand("ordinary")]}, request=httpx.Request("GET", ms.base_url)))
+    retail = {"id": "retail", "meta": {"type": "retaildemand", "href": f"{ms.base_url}/entity/retaildemand/retail"}}
+    retail_href_only = {"meta": {"href": f"{ms.base_url}/entity/retaildemand/retail2"}}
+    order = {"demands": [retail, retail_href_only, {"id": "ordinary", "meta": {"type": "demand"}}]}
+    assert len(await ms.get_customer_order_demands("order", "org", order=order)) == 1
+    assert ms._request_with_retry.call_args.kwargs["params"]["filter"].startswith("id=ordinary;")
+    assert len(customer_order_links(order, "demand")) == 1
+    assert len(customer_order_links(order, "retaildemand")) == 2
+    ms._request_with_retry.reset_mock()
+    assert await ms.get_customer_order_demands("order", "org", order={"demands": [retail]}) == []
+    ms._request_with_retry.assert_not_awaited()
+    assert "розничная продажа" in customer_order_empty_message({"demands": [retail]})
+    assert "нет связанной отгрузки" in customer_order_empty_message({})
+
+
+async def test_tsd_order_counts_distinguish_retail_and_ordinary(monkeypatch):
+    device, _, _, ms, db = context(monkeypatch, ([],))
+    ms.get_customer_orders.return_value = [dict(id="order", name="27367", demands=[
+        {"id": "retail", "meta": {"type": "retaildemand"}},
+    ]), dict(id="empty", name="27370")]
+    rows = await tsd.list_tsd_orders(device=device, db=db)
+    assert rows[0].shipment_count == 0 and rows[0].retail_sale_count == 1
+    assert rows[1].shipment_count == 0 and rows[1].retail_sale_count == 0
