@@ -19,6 +19,7 @@ import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
 import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
+import { useScanUpdates } from '../hooks/useScanUpdates'
 
 const TsdDocumentQr = lazy(() =>
   import('../components/TsdDocumentQr').then((module) => ({ default: module.TsdDocumentQr })),
@@ -28,18 +29,21 @@ interface ShipmentPageProps {
   /** Встроенный режим (попап МС): документ задан заранее, без выбора; после
    *  успешной отправки вызывается onSent (попап закрывает окно МС). */
   embedded?: boolean
+  terminalMode?: boolean
   presetDocument?: Document | null
   onSent?: () => void
 }
 
 export function ShipmentPage({
   embedded = false,
+  terminalMode = false,
   presetDocument = null,
   onSent,
 }: ShipmentPageProps = {}) {
   const modal = useModal()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
+  useScanUpdates(terminalMode ? document?.id ?? null : null)
   const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('shipment_workspace_tab')
   const workspaceIssueCount = stats.invalid + stats.duplicate + stats.unknown_product + stats.used_in_other_doc
   const summaryCount = progress.hasPlan
@@ -233,7 +237,7 @@ export function ShipmentPage({
     document?.status === 'processing' ? 'Обрабатывается' : 'В процессе'
 
   return (
-    <div className="acc-page">
+    <div className="acc-page" style={terminalMode ? {height:'100%'} : undefined}>
       <header className="acc-header">
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
@@ -248,7 +252,7 @@ export function ShipmentPage({
               <Icon name="close" size={14} /> Отвязаться
             </button>
           )}
-          {document?.moysklad_id && !embedded ? (
+          {document?.moysklad_id && (!embedded || terminalMode) ? (
             <Suspense fallback={null}>
               <TsdDocumentQr moyskladId={document.moysklad_id} name={document.name} />
             </Suspense>
@@ -293,7 +297,12 @@ export function ShipmentPage({
         </div>
       )}
 
+      {terminalMode && <div style={{padding:'12px 18px'}}>
+        <p className="hint">Режим ТСД: сканируйте марки на терминале. Изменения сборки отображаются здесь автоматически.</p>
+        <StatsPanel />
+      </div>}
       <div className="acc-body">
+        {!terminalMode && <>
         <div className="acc-left" style={{ width: leftWidth }}>
           {!embedded && (
             <>
@@ -322,6 +331,7 @@ export function ShipmentPage({
           aria-orientation="vertical"
           title="Потяните, чтобы изменить ширину панелей"
         />
+        </>}
 
         <div className="acc-right">
           <UnknownProductsPicker />
@@ -335,7 +345,7 @@ export function ShipmentPage({
             onChange={setWorkspaceTab}
             summary={
               progress.hasSummary ? (
-                <ProgressTable tabbed onInspectMarks={() => setWorkspaceTab('marks')} />
+                <ProgressTable tabbed showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
               ) : (
                 <div className="flow-tabs__empty">
                   Выберите отгрузку и начните сканирование — здесь появится состав сборки.
@@ -399,7 +409,7 @@ export function ShipmentPage({
           <button
             type="button"
             className="button"
-            disabled={!document || verifying}
+            disabled={!document || document.status !== 'draft' || sending || verifying}
             onClick={handleVerify}
             style={{ marginRight: 8 }}
           >
@@ -437,6 +447,7 @@ export function ShipmentPage({
               ? `Проверьте марки (${stats.scanned})`
               : stats.unknown_product > 0
                 ? `Сопоставьте товары (${stats.unknown_product})`
+                : terminalMode ? `Отправить в МС (${progress.hasPlan ? `${progress.total.scanned}/${progress.total.expected}` : progress.total.addedTotal})`
                 : progress.hasPlan
                 ? stats.overflow > 0
                   ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`

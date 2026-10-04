@@ -4,7 +4,7 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Column, String, DateTime, Boolean, Integer, Numeric, Text, Enum,
-    ForeignKey, JSON, UniqueConstraint, Index, text, func,
+    ForeignKey, JSON, UniqueConstraint, CheckConstraint, Index, text, func,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
@@ -159,6 +159,7 @@ class Workplace(Base):
     """Физическое рабочее место: юрлицо + разрешённые склады."""
 
     __tablename__ = "workplaces"
+    __table_args__ = (CheckConstraint("scan_mode IN ('com', 'tsd')", name="ck_workplace_scan_mode"),)
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
@@ -167,6 +168,7 @@ class Workplace(Base):
     )
     name = Column(String(255), nullable=False)
     store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
+    scan_mode = Column(String(8), nullable=False, default="com", server_default="com")
     is_default = Column(Boolean, nullable=False, default=False, server_default="false")
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

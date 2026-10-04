@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -21,6 +21,7 @@ class WorkplaceResponse(BaseModel):
     id: UUID
     organization_profile_id: UUID
     name: str
+    scan_mode: Literal['com', 'tsd'] = 'com'
     store_ids: list[str] = Field(default_factory=list)
     is_default: bool
     is_active: bool
@@ -49,6 +50,11 @@ class WorkplaceRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     store_ids: list[str] = Field(default_factory=list)
     is_default: bool = False
+    scan_mode: Literal['com', 'tsd'] = 'com'
+
+
+class WorkplaceModeRequest(BaseModel):
+    scan_mode: Literal['com', 'tsd']
 
 
 def _profile_response(profile: OrganizationProfile, workplaces: list[Workplace]) -> ProfileResponse:
@@ -223,10 +229,25 @@ async def create_workplace(
         user_id=current_user.id,
         organization_profile_id=profile.id,
         name=body.name.strip(),
+        scan_mode=body.scan_mode,
         store_ids=list(dict.fromkeys(body.store_ids)),
         is_default=body.is_default,
     )
     db.add(workplace)
+    await db.commit()
+    await db.refresh(workplace)
+    return WorkplaceResponse.model_validate(workplace)
+
+
+@router.patch("/workplaces/{workplace_id}/scan-mode", response_model=WorkplaceResponse)
+async def update_workplace_mode(workplace_id: UUID, body: WorkplaceModeRequest,
+    current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    workplace = (await db.execute(select(Workplace).where(
+        Workplace.id == workplace_id, Workplace.user_id == current_user.id,
+        Workplace.is_active.is_(True)))).scalar_one_or_none()
+    if workplace is None:
+        raise HTTPException(404, "Рабочее место не найдено")
+    workplace.scan_mode = body.scan_mode
     await db.commit()
     await db.refresh(workplace)
     return WorkplaceResponse.model_validate(workplace)

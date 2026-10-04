@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { AcceptancePage } from './Acceptance'
-import { documentsApi, type Document, type DocumentKind } from '../api/client'
+import { ShipmentPage } from './Shipment'
+import { documentsApi, organizationProfilesApi, type Document, type DocumentKind, type Workplace } from '../api/client'
+import { documentWorkplaces, preferredWorkplace } from '../lib/workplaceMode'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 import { useScanStore } from '../store/scanStore'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
@@ -18,9 +20,9 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
  *
  * Web Serial (COM-сканер) внутри окна МС заблокирован Permissions-Policy. А
  * клавиатурный режим для марок нерабочий: клавиатурный поток теряет разделитель GS
- * (0x1D). Поэтому маркированное сканирование (отгрузка/списание) не встраивается в это окно, а
- * открывается в отдельной top-level вкладке (`/launch`), где Web Serial разрешён
- * и GS сохраняется. Вкладка/порт живут всю смену (autoCloseTab=false в COM).
+ * (0x1D). В COM-режиме сканирование открывается в отдельной top-level вкладке
+ * (`/launch`), где Web Serial разрешён. В режиме ТСД отгрузка остаётся здесь:
+ * терминалы сканируют, а оператор видит прогресс, проверяет и отправляет марки.
  */
 
 interface OpenParams {
@@ -31,7 +33,7 @@ interface OpenParams {
 
 type State =
   | { kind: 'loading'; note: string; sessionId: number }
-  | { kind: 'shipment'; doc: Document; sessionId: number }
+  | { kind: 'shipment'; doc: Document; workplaces: Workplace[]; sessionId: number }
   | { kind: 'acceptance'; msObjectId: string; sessionId: number }
   | { kind: 'writeoff'; doc: Document; sessionId: number }
   | { kind: 'error'; message: string; sessionId: number }
@@ -61,6 +63,7 @@ export function PopupPage() {
   // открыли» и текст ошибки открытия — для экрана-лаунчера ниже.
   const [extScanOpened, setExtScanOpened] = useState(false)
   const [extScanError, setExtScanError] = useState<string | null>(null)
+  const [workplaceId, setWorkplaceId] = useState('')
 
   // Закрыть окно: сообщаем хост-окну МС. Для попапа из кнопки ответ не нужен.
   const closePopup = () => {
@@ -142,12 +145,14 @@ export function PopupPage() {
     setState({ kind: 'loading', note: 'Загружаем документ…', sessionId })
     try {
       const { data: doc } = await documentsApi.resolve(msObjectId, kind)
+      const workplaces = kind === 'demand'
+        ? documentWorkplaces((await organizationProfilesApi.list()).data, doc) : []
       // Ответ прошлого открытия не должен заменить уже открытый следующий документ.
       if (paramsRef.current?.sessionId !== sessionId) return
       setOrganizationProfileId(doc.organization_profile_id)
       setState(
         kind === 'demand'
-          ? { kind: 'shipment', doc, sessionId }
+          ? { kind: 'shipment', doc, workplaces, sessionId }
           : { kind: 'writeoff', doc, sessionId },
       )
     } catch (e) {
@@ -213,6 +218,7 @@ export function PopupPage() {
         useScanStore.getState().reset()
         setExtScanOpened(false)
         setExtScanError(null)
+        setWorkplaceId('')
         setState({ kind: 'loading', note: 'Загружаем документ…', sessionId })
         void tryResolve()
       }
@@ -252,13 +258,28 @@ export function PopupPage() {
     )
   }
 
-  // Сканирование выполняется только через COM/Web Serial. В iframe МойСклада Web
-  // Serial заблокирован Permissions-Policy, поэтому всегда открываем отдельную вкладку.
+  const workplaces = state.kind === 'shipment' ? state.workplaces : []
+  const workplace = workplaces.find(item => item.id === workplaceId) ?? preferredWorkplace(workplaces)
+  const workplaceSelector = workplaces.length > 1 ? <div style={{padding:'10px 18px'}}>
+    <label>Рабочее место <select className="ui-input" value={workplace?.id ?? ''} onChange={event=>setWorkplaceId(event.target.value)}>
+      <option value="" disabled>Выберите рабочее место</option>
+      {workplaces.map(item=><option key={item.id} value={item.id}>{item.name} · {item.scan_mode === 'tsd' ? 'ТСД' : 'COM'}</option>)}
+    </select></label>
+  </div> : null
+  if (state.kind === 'shipment' && workplaces.length > 1 && !workplace) return <>
+    {workplaceSelector}<p style={{padding:18}}>Выберите рабочее место для сборки этой отгрузки.</p>
+  </>
+  if (state.kind === 'shipment' && workplace?.scan_mode === 'tsd') return <div style={{height:'100vh',display:'flex',flexDirection:'column'}}>
+    {workplaceSelector}
+    <div style={{flex:1,minHeight:0}}><ShipmentPage key={state.sessionId} embedded terminalMode presetDocument={state.doc} onSent={closePopup} /></div>
+  </div>
+
+  // Only the COM path opens a separate window; TSD monitoring never touches Serial.
   if (state.kind === 'shipment' || state.kind === 'writeoff') {
     const doc = state.doc
     const label = state.kind === 'shipment' ? 'отгрузку' : 'списание'
     return (
-      <div style={styles.centered}>
+      <div style={{height:'100vh',display:'flex',flexDirection:'column'}}>{workplaceSelector}<div style={{...styles.centered,minHeight:0,flex:1}}>
         <div style={styles.launcher}>
           <div style={styles.launcherTitle}>COM-сканер: сканирование в отдельном окне</div>
           <div style={styles.muted}>
@@ -292,7 +313,7 @@ export function PopupPage() {
           )}
           {extScanError && <div style={styles.errorBox}>{extScanError}</div>}
         </div>
-      </div>
+      </div></div>
     )
   }
 

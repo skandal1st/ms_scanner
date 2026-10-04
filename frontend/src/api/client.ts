@@ -752,6 +752,7 @@ export interface Workplace {
   store_ids: string[]
   is_default: boolean
   is_active: boolean
+  scan_mode: 'com' | 'tsd'
 }
 
 export interface OrganizationProfile {
@@ -802,7 +803,10 @@ export const organizationProfilesApi = {
     name: string
     store_ids?: string[]
     is_default?: boolean
+    scan_mode?: 'com' | 'tsd'
   }) => api.post<Workplace>('/organization-profiles/workplaces', data),
+  updateWorkplaceMode: (id: string, scan_mode: 'com' | 'tsd') =>
+    api.patch<Workplace>(`/organization-profiles/workplaces/${id}/scan-mode`, { scan_mode }),
 }
 
 export interface TsdPairing {

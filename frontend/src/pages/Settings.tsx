@@ -7,6 +7,7 @@ import { isWebSerialSupported } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
 import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFiltersSettings'
+import { WorkplaceScannerSettings } from '../components/WorkplaceScannerSettings'
 
 const TsdPairingSection = lazy(() =>
   import('../components/TsdPairingSection').then((module) => ({ default: module.TsdPairingSection })),
@@ -287,6 +288,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         </section>
 
         <ChestnyZnakSection integration={integration} />
+        <WorkplaceScannerSettings />
         <Suspense fallback={<p className="hint">Загружаем подключение ТСД…</p>}>
           <TsdPairingSection />
         </Suspense>

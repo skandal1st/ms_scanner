@@ -17,9 +17,10 @@ const COLLAPSE_KEY = 'progress_collapsed'
 interface ProgressTableProps {
   tabbed?: boolean
   onInspectMarks?: () => void
+  showScanTarget?: boolean
 }
 
-export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableProps = {}) {
+export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget = true }: ProgressTableProps = {}) {
   const modal = useModal()
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
@@ -140,7 +141,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableP
           />
         </div>
       )}
-      {!isCollapsed && canPickProduct && (
+      {!isCollapsed && canPickProduct && showScanTarget && (
         <div style={styles.targetBar}>
           <span style={styles.targetLabel}>Сканировать в товар:</span>
           <button
@@ -240,7 +241,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks }: ProgressTableP
               <div style={styles.barWrap}>
                 <div style={{ ...styles.bar, width: `${pct}%`, background: color }} />
               </div>
-              {canPickProduct && item.product_id && isSelected && (
+              {canPickProduct && showScanTarget && item.product_id && isSelected && (
                 <button type="button" className="button" aria-pressed={isTarget}
                   onClick={(e) => { e.stopPropagation(); setTargetProductId(isTarget ? null : item.product_id) }}
                   onKeyDown={(e) => e.stopPropagation()}>

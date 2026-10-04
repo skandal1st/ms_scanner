@@ -51,6 +51,24 @@ async def open_terminal(factory, device, ms_id):
         return await tsd.select_tsd_document(tsd.SelectDocumentRequest(moysklad_id=ms_id), device, db)
 
 
+async def test_workplace_mode_persists_and_other_user_cannot_change_it(monkeypatch):
+    from app.api.organization_profiles import WorkplaceModeRequest, update_workplace_mode
+    engine, factory, user, profile, devices, _ = await context(monkeypatch)
+    workplace_id = devices[0].workplace_id
+    try:
+        async with factory() as db:
+            assert (await db.get(Workplace, workplace_id)).scan_mode == "com"
+            await update_workplace_mode(workplace_id, WorkplaceModeRequest(scan_mode="tsd"), user, db)
+        async with factory() as db:
+            assert (await db.get(Workplace, workplace_id)).scan_mode == "tsd"
+            with pytest.raises(HTTPException) as error:
+                await update_workplace_mode(workplace_id, WorkplaceModeRequest(scan_mode="com"), NS(id=uuid4()), db)
+            assert error.value.status_code == 404
+            assert (await db.get(Workplace, workplace_id)).scan_mode == "tsd"
+    finally:
+        await engine.dispose()
+
+
 async def test_two_terminals_and_desktop_first_open_reuse_one_document(monkeypatch):
     engine, factory, user, profile, devices, ms_id = await context(monkeypatch)
     async def desktop():
