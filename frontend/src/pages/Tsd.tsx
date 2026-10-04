@@ -10,6 +10,7 @@ import { useTsdSound } from '../hooks/useTsdSound'
 import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
 import { useDocumentLive, type DocumentEvent } from '../hooks/useDocumentLive'
 import { applyScanEvent } from '../lib/scanEvents'
+import { parseTsdDocumentCode } from '../lib/tsdLinks'
 import { Icon } from '../components/Icon'
 import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
 
@@ -39,15 +40,7 @@ function normalizePairingCode(raw: string): string {
 }
 
 function documentCode(raw: string): string | null {
-  const value = raw.trim()
-  if (value.startsWith('SKANDATA:DOCUMENT:')) {
-    return value.slice('SKANDATA:DOCUMENT:'.length)
-  }
-  try {
-    return new URL(value).searchParams.get('document')
-  } catch {
-    return null
-  }
+  return parseTsdDocumentCode(raw)
 }
 
 function TsdLogin({ onReady }: { onReady: () => void }) {

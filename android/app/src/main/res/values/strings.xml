@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Скандата ТСД</string>
+    <string name="connection_error">Не удалось открыть Скандату. Проверьте Wi-Fi или мобильный интернет и повторите загрузку.</string>
+    <string name="retry">Повторить</string>
+    <string name="close_title">Закрыть приложение?</string>
+    <string name="close_message">Сохранённые сканы останутся в заказе. Для возврата к списку используйте кнопку внутри приложения.</string>
+    <string name="continue_picking">Продолжить сборку</string>
+    <string name="close">Закрыть</string>
+</resources>

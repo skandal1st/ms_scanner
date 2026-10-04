@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
 import { organizationProfilesApi, tsdAdminApi, type TsdDeviceInfo } from '../api/client'
+import { TSD_APK_PATH } from '../lib/tsdLinks'
 
 export function TsdPairingSection() {
   const qc = useQueryClient()
@@ -48,10 +49,21 @@ export function TsdPairingSection() {
         используется только один раз.
       </p>
       <p className="hint">
-        Для тестов на Android откройте <a href="/tsd" target="_blank" rel="noopener noreferrer">мобильную версию ТСД</a>
-        {' '}в Chrome и установите её на главный экран. Затем откройте приложение
-        и подключите устройство свежим QR. Сканер: ввод с клавиатуры и Enter.
+        Установите приложение на Android 8.0 или новее и подключите устройство свежим QR.
+        Сканер: ввод с клавиатуры и Enter. Для работы требуется интернет.
       </p>
+      <div className="tsd-pairing-card">
+        <div className="tsd-pairing-card__qr">
+          <QRCodeSVG value={`${window.location.origin}${TSD_APK_PATH}`} size={180} level="M" />
+        </div>
+        <div>
+          <h3>Скачать приложение для ТСД</h3>
+          <p className="hint">Отсканируйте QR камерой терминала, скачайте APK и установите его. Тестовая версия 0.1.1.</p>
+          <a className="button button--primary" href={TSD_APK_PATH} download>Скачать APK</a>
+          <p className="hint mt-8">После установки откройте «Скандата ТСД» и отсканируйте QR подключения ниже. Привязка Chrome/PWA в APK не переносится.</p>
+          <a href="/tsd" target="_blank" rel="noopener noreferrer">Открыть PWA в браузере</a>
+        </div>
+      </div>
       {workplaces.length > 0 ? (
         <label className="field mt-8" style={{ maxWidth: 420 }}>
           <span>Рабочее место ТСД</span>
@@ -87,7 +99,7 @@ export function TsdPairingSection() {
           <div>
             <h3>Отсканируйте QR на ТСД</h3>
             <p><b>{pairing.data.workplace_name}</b></p>
-            <p className="hint">Отсканируйте QR камерой терминала — откроется PWA и устройство подключится автоматически. Можно также считать QR в поле подключения установленной PWA.</p>
+            <p className="hint">Откройте установленное приложение «Скандата ТСД» и считайте QR аппаратным сканером в поле подключения. Для PWA можно открыть QR камерой терминала.</p>
             <button type="button" className="button" onClick={() => setPairingOpen(false)}>
               Закрыть
             </button>

@@ -49,6 +49,12 @@ redis_data/
 dist/
 build/
 *.tsbuildinfo
+android/.gradle/
+android/local.properties
+*.apk
+downloads/
+*.keystore
+*.jks
 
 # CryptoPro plugin (поставляется отдельно)
 frontend/public/cadesplugin_api.js

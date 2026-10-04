@@ -1,0 +1,18 @@
+plugins { id 'com.android.application' }
+dependencies { testImplementation 'junit:junit:4.13.2' }
+
+android {
+    namespace 'ru.skandata.tsd'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'ru.skandata.tsd'
+        minSdk 26
+        targetSdk 34
+        versionCode 2
+        versionName '0.1.1'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

@@ -1,6 +1,14 @@
 {$DOMAIN} {
     encode gzip
 
+    handle /downloads/* {
+        root * /srv
+        header Content-Type application/vnd.android.package-archive
+        header Content-Disposition attachment
+        header Cache-Control "no-cache"
+        file_server
+    }
+
     @ws path /ws/*
     handle @ws {
         reverse_proxy backend:8000
