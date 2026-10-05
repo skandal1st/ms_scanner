@@ -79,6 +79,14 @@ async def test_legacy_started_shipment_is_matched_to_order_by_id(monkeypatch):
     assert result[0].in_work and doc.moysklad_customer_order_id == oid
 
 
+async def test_order_status_color_is_preserved_for_tsd(monkeypatch):
+    device, _, _, ms, db = context(monkeypatch, ([],))
+    ms.get_customer_orders.return_value = [dict(id=str(uuid4()), name='42', state={'name': '1 Приоритет', 'color': 40931})]
+    result = await tsd.list_tsd_orders(device=device, db=db)
+    assert result[0].state_name == '1 Приоритет'
+    assert result[0].state_color == 40931
+
+
 async def test_existing_shipment_link_is_rechecked_before_opening(monkeypatch):
     doc = NS(id=uuid4())
     device, _, _, ms, db = context(monkeypatch, (doc,))

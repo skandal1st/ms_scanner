@@ -799,7 +799,8 @@ html, body, #root { height: 100%; }
 .tsd-order-row__heading time { color: #465670; font-size: 14px; line-height: 1.6; white-space: nowrap; }
 .tsd-order-row__details { grid-template-columns: minmax(0, 1fr) minmax(0, 35%); }
 .tsd-order-row__agent { color: #243854; font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
-.tsd-order-row__status { color: #465670; font-size: 14px; line-height: 1.5; text-align: right; overflow-wrap: anywhere; }
+.order-status-badge { display: inline-block; align-self: start; background: #e8edf4; color: #465670; border-radius: 4px; padding: 3px 8px; font-size: 13px; font-weight: 600; line-height: 1.4; text-align: center; overflow-wrap: anywhere; max-width: 100%; }
+.customer-order-picker__summary { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 .tsd-order-row__shipments { color: var(--tsd-muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .tsd-shipment-row__main { display: grid; gap: 3px; min-width: 0; }
 .tsd-shipment-row__main strong { overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }

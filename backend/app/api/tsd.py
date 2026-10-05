@@ -115,6 +115,7 @@ class TsdOrderItem(BaseModel):
     store_name: Optional[str] = None
     moment: Optional[str] = None
     state_name: Optional[str] = None
+    state_color: Optional[int] = None
     shipment_count: Optional[int] = None
     retail_sale_count: int = 0
     in_work: bool = False
@@ -400,7 +401,7 @@ async def list_tsd_orders(
     return [TsdOrderItem(
         moysklad_id=row["id"], name=row.get("name") or "Без номера",
         agent_name=(row.get("agent") or {}).get("name"), store_name=(row.get("store") or {}).get("name"),
-        state_name=(row.get("state") or {}).get("name"), moment=row.get("moment"),
+        state_name=(row.get("state") or {}).get("name"), state_color=(row.get("state") or {}).get("color"), moment=row.get("moment"),
         shipment_count=customer_order_direct_shipment_count(row),
         retail_sale_count=len(customer_order_links(row, "retaildemand")),
         in_work=row["id"] in work_orders,

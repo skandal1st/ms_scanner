@@ -110,3 +110,12 @@ async def test_shipment_list_omits_completed_deleted_and_foreign_documents(monke
     result = await documents.customer_order_shipments(body.customer_order_id, user, profile, db)
     assert [row.id for row in result] == ["partial"]
     assert result[0].customer_order_name == "42"
+
+
+async def test_order_status_color_is_preserved_for_desktop(monkeypatch):
+    _, user, profile, ms, db, _ = setup(monkeypatch)
+    ms.get_customer_orders = AsyncMock(return_value=[{'id': 'order', 'name': '42',
+                                                    'state': {'name': 'Формируется', 'color': 15491487}}])
+    result = await documents.list_customer_orders(current_user=user, profile=profile, db=db, filter_id=None, offset=0)
+    assert result[0].state_name == 'Формируется'
+    assert result[0].state_color == 15491487

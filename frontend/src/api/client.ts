@@ -68,6 +68,8 @@ export default api
 export type DocumentKind = 'demand' | 'loss' | 'supply'
 
 export interface MsDocument {
+  state_name?: string | null
+  state_color?: number | null
   id: string
   name: string
   moment: string | null
@@ -895,6 +897,7 @@ export interface TsdDocumentDetail {
 }
 
 export interface TsdOrderItem {
+  state_color?: number | null
   moysklad_id: string
   name: string
   agent_name: string | null
