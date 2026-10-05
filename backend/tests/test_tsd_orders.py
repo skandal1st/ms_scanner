@@ -92,7 +92,7 @@ async def test_existing_shipment_link_is_rechecked_before_opening(monkeypatch):
 
 
 async def test_new_session_uses_selected_demand_plan_and_keeps_parent_order(monkeypatch):
-    device, _, _, ms, db = context(monkeypatch, (None, None, [], 0))
+    device, _, _, ms, db = context(monkeypatch, (None, [], None, [], 0))
     order_id = uuid4()
     ms.get_document.return_value = {**demand(), "customerOrder": {"id": str(order_id)}}
     ms.get_customer_order.return_value = dict(name="42", organization={"id": "org"}, positions="not-used")
@@ -115,7 +115,7 @@ async def test_new_session_uses_selected_demand_plan_and_keeps_parent_order(monk
 
 
 async def test_tsd_opens_shipment_linked_through_invoice(monkeypatch):
-    device, _, _, ms, db = context(monkeypatch, (None, None, [], 0))
+    device, _, _, ms, db = context(monkeypatch, (None, [], None, [], 0))
     oid = uuid4()
     invoice = {"meta": {"href": "https://example/entity/invoiceout/invoice"}}
     ms.get_document.return_value = {**demand(), "invoicesOut": [invoice]}

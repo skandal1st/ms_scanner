@@ -725,6 +725,11 @@ class MoySkladService:
         if description:
             body["description"] = description
         async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10)) as client:
+            if kind == 'demand':
+                from app.services.shipment_guard import ensure_active_shipment
+                response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/{doc_id}')
+                response.raise_for_status()
+                ensure_active_shipment(response.json())
             # Read before mutation: a failed code read also aborts safely.
             seen = set()
             if write_codes:

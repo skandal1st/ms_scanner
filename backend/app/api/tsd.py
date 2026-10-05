@@ -491,6 +491,7 @@ async def list_tsd_documents(
     ).scalars().all()
     if allowed_stores:
         local_docs = [d for d in local_docs if d.moysklad_store_id in allowed_stores]
+    local_docs = [d for d in local_docs if not (getattr(d, 'upd_meta', None) or {}).get('superseded_by_document_id')]
     by_ms = {d.moysklad_id: d for d in local_docs}
     listed_ids = {r["id"] for r in rows}
     query = (search or "").strip().casefold()
@@ -561,6 +562,8 @@ async def _owned_tsd_document(
     ).scalar_one_or_none()
     if not doc or ((workplace.store_ids or []) and doc.moysklad_store_id not in workplace.store_ids):
         raise HTTPException(404, "Отгрузка недоступна на этом рабочем месте")
+    if (getattr(doc, 'upd_meta', None) or {}).get('superseded_by_document_id'):
+        raise HTTPException(409, 'Марки перенесены в действующую отгрузку. Откройте её заново из заказа покупателя.')
     return doc
 
 
@@ -588,9 +591,14 @@ async def select_tsd_document(
     ms = await _ms_for_user(db, device.user_id)
     # Resolve the order by identity, and recheck a saved shipment before opening it from an order.
     try:
-        ms_doc = await ms.get_document("demand", body.moysklad_id) if doc is None or body.customer_order_id else None
+        ms_doc = await ms.get_document("demand", body.moysklad_id)
     except Exception as exc:
         raise HTTPException(502, "Не удалось загрузить отгрузку из МойСклада. Повторите попытку.") from exc
+    from app.services.shipment_guard import ensure_active_shipment, ensure_no_stranded_scans
+    try:
+        ensure_active_shipment(ms_doc)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     order_id = _ms_entity_id((ms_doc or {}).get("customerOrder"))
     order_name = ((ms_doc or {}).get("customerOrder") or {}).get("name")
     if body.customer_order_id:
@@ -611,6 +619,7 @@ async def select_tsd_document(
             raise HTTPException(403, "Отгрузка относится к другому юрлицу")
         if workplace.store_ids and store_id not in workplace.store_ids:
             raise HTTPException(403, "Отгрузка относится к другому складу")
+    await ensure_no_stranded_scans(db, ms, device.user_id, profile.id, order_id, body.moysklad_id)
     if doc is None:
         doc = Document(
             user_id=device.user_id,

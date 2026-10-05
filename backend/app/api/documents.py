@@ -292,14 +292,27 @@ async def create_document(
     db: AsyncSession = Depends(get_db),
 ):
     _ensure_supported_kind(body.kind.value)
+    verified_ms_doc = None
     if body.moysklad_id and body.kind == DocumentKind.demand:
         from app.services.document_guard import lock_ms_document
         await lock_ms_document(db, current_user.id, body.kind, body.moysklad_id)
+        ms = await _get_ms_service(current_user, db)
+        try:
+            verified_ms_doc = await ms.get_document('demand', body.moysklad_id)
+        except Exception as exc:
+            raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
+        from app.services.shipment_guard import ensure_active_shipment, ensure_no_stranded_scans
+        try:
+            ensure_active_shipment(verified_ms_doc)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
         existing = (await db.execute(select(Document).where(
             Document.user_id == current_user.id, Document.moysklad_id == body.moysklad_id,
             Document.kind == DocumentKind.demand, Document.status != DocumentStatus.accepted,
         ).order_by(Document.created_at.desc()))).scalars().first()
         if existing is not None:
+            await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
+                                          existing.moysklad_customer_order_id, body.moysklad_id)
             return _doc_to_response(existing, await _scan_count(db, existing.id))
     plan: list = []
     ms_organization_id: Optional[str] = None
@@ -309,7 +322,7 @@ async def create_document(
         # Если МС не подключён или запрос упал — план остаётся пустым (произвольная сборка).
         try:
             ms = await _get_ms_service(current_user, db)
-            ms_doc = await ms.get_document(_plan_source_kind(body.kind.value), body.moysklad_id)
+            ms_doc = verified_ms_doc or await ms.get_document(_plan_source_kind(body.kind.value), body.moysklad_id)
             ms_organization_id = _ref_id(ms_doc, "organization")
             ms_store_id = _ref_id(ms_doc, "store")
             profile = await _profile_for_organization(
@@ -385,6 +398,19 @@ async def resolve_document(
             raise HTTPException(403, "Заказ или отгрузка относятся к другому юрлицу")
         order_name = order.get("name")
 
+    from app.services.shipment_guard import ensure_active_shipment, ensure_no_stranded_scans
+    if body.kind == DocumentKind.demand:
+        if verified_ms_doc is None:
+            ms = await _get_ms_service(current_user, db)
+            try:
+                verified_ms_doc = await ms.get_document('demand', body.moysklad_id)
+            except Exception as exc:
+                raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
+        try:
+            ensure_active_shipment(verified_ms_doc)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     existing = (
         (
             await db.execute(
@@ -403,12 +429,16 @@ async def resolve_document(
         .first()
     )
     if existing is not None:
+        if body.customer_order_id and existing.status == DocumentStatus.accepted:
+            raise HTTPException(409, 'Отгрузка уже собрана. Обновите список отгрузок заказа.')
+        if body.kind == DocumentKind.demand:
+            await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
+                                          body.customer_order_id or existing.moysklad_customer_order_id,
+                                          body.moysklad_id)
         from app.services.legacy_pack_plan import refresh_legacy_pack_plan
         if existing.status == DocumentStatus.draft and any('pack_quantities' not in p for p in existing.plan or []):
             await refresh_legacy_pack_plan(db, existing, await _get_ms_service(current_user, db), body.kind.value)
         if body.customer_order_id:
-            if existing.status == DocumentStatus.accepted:
-                raise HTTPException(409, "Отгрузка уже собрана. Обновите список отгрузок заказа.")
             existing.moysklad_customer_order_id = str(body.customer_order_id)
             existing.customer_order_name = order_name
             await db.commit()
@@ -427,6 +457,9 @@ async def resolve_document(
     profile = await _profile_for_organization(
         db, current_user.id, ms_organization_id, profile
     )
+    if body.kind == DocumentKind.demand:
+        await ensure_no_stranded_scans(db, ms, current_user.id, profile.id,
+                                      body.customer_order_id, body.moysklad_id)
     plan: list = []
     try:
         # objectId из кнопки МС — документ самого этого типа, поэтому план строим
@@ -633,7 +666,17 @@ async def process_document(
         raise HTTPException(400, "Для списания используйте отправку в Честный Знак")
     if not doc.moysklad_id:
         raise HTTPException(409, "Сначала выберите документ МойСклад")
-    await _get_ms_service(current_user, db)
+    ms = await _get_ms_service(current_user, db)
+    if doc.kind == DocumentKind.demand:
+        from app.services.shipment_guard import ensure_active_shipment
+        try:
+            shipment = await ms.get_document('demand', doc.moysklad_id)
+        except Exception as exc:
+            raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
+        try:
+            ensure_active_shipment(shipment)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus

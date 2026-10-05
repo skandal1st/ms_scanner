@@ -150,7 +150,7 @@ async def test_edit_and_repeated_process_are_blocked(status):
 
 async def test_process_blocks_pending_scans(monkeypatch):
     doc = NS(id=uuid4(), status=DocumentStatus.draft, kind=DocumentKind.demand, moysklad_id="ms1")
-    monkeypatch.setattr(documents, "_get_ms_service", AsyncMock())
+    monkeypatch.setattr(documents, "_get_ms_service", AsyncMock(return_value=NS(get_document=AsyncMock(return_value={}))))
     with pytest.raises(HTTPException) as exc:
         await documents.process_document(doc.id, NS(id=uuid4()), DB(doc, 1))
     assert exc.value.status_code == 409

@@ -14,6 +14,8 @@ async def editable_document(db, document_id, user_id):
     )).scalar_one_or_none()
     if doc is None:
         raise HTTPException(404, "Документ не найден")
+    if (getattr(doc, 'upd_meta', None) or {}).get('superseded_by_document_id'):
+        raise HTTPException(409, 'Марки перенесены в действующую отгрузку. Откройте её заново из заказа покупателя.')
     if doc.status != DocumentStatus.draft:
         raise HTTPException(409, "Документ обрабатывается или уже завершён. Изменять марки нельзя.")
     return doc
