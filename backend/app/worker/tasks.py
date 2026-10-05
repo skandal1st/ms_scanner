@@ -1488,6 +1488,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                     kind, doc.moysklad_id, scans_data,
                     position_quantities=product_qty, position_prices=product_price,
                     description=ms_description, on_progress=progress,
+                    shipment_state_id=(doc.upd_meta or {}).get('shipment_sent_state_id') if kind == 'demand' else None,
                 )
             if result.get("__moysklad_412__"):
                 reason = _extract_moysklad_error(result.get("body") or "")

@@ -7,6 +7,7 @@ import { isWebSerialSupported } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
 import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFiltersSettings'
+import { ShipmentStatusSettings } from '../components/ShipmentStatusSettings'
 import { InventorySettings } from '../components/InventorySettings'
 import { WorkplaceScannerSettings } from '../components/WorkplaceScannerSettings'
 
@@ -294,6 +295,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
           <TsdPairingSection />
         </Suspense>
         <CustomerOrderFiltersSettings />
+        <ShipmentStatusSettings />
         <InventorySettings />
         <ScannerSection embedded={embedded} />
       </div>

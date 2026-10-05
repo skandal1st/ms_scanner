@@ -725,6 +725,14 @@ async def process_document(
     ))).scalar_one()
     if not count:
         raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
+    if doc.kind == DocumentKind.demand:
+        from app.db.models import OrganizationProfile
+        profile = (await db.execute(select(OrganizationProfile).where(
+            OrganizationProfile.id == doc.organization_profile_id,
+            OrganizationProfile.user_id == current_user.id,
+        ))).scalar_one_or_none()
+        target = profile.shipment_sent_state_id if profile else None
+        doc.upd_meta = {**(doc.upd_meta or {}), 'shipment_sent_state_id': str(target) if target else None}
     doc.status = DocumentStatus.processing
     doc.error_message = None
     doc.processing_progress = {"sent": 0, "total": count, "stage": "preparing"}

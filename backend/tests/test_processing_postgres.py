@@ -122,3 +122,26 @@ async def test_worker_failure_returns_draft_with_a_visible_reason(monkeypatch, f
         if failure == "412":
             assert "Неверная марка" in saved.error_message
     await engine.dispose()
+
+async def test_shipment_state_snapshot_is_from_document_profile(monkeypatch):
+    from app.db.models import OrganizationProfile, DocumentKind
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    user, doc = await seed(factory)
+    state = uuid4()
+    async with factory() as db:
+        profile = OrganizationProfile(id=uuid4(), user_id=user.id, name='Юрлицо документа', shipment_sent_state_id=state)
+        other = OrganizationProfile(id=uuid4(), user_id=user.id, name='Другое', is_default=True, shipment_sent_state_id=uuid4())
+        db.add_all([profile, other])
+        saved = await db.get(Document, doc.id)
+        saved.kind = DocumentKind.demand
+        saved.organization_profile_id = profile.id
+        await db.commit()
+    monkeypatch.setattr(documents, '_get_ms_service', AsyncMock(return_value=SimpleNamespace(get_document=AsyncMock(return_value={}))))
+    monkeypatch.setattr(tasks.process_document_task, 'delay', lambda *args: None)
+    async with factory() as db:
+        await documents.process_document(doc.id, user, db)
+    async with factory() as db:
+        saved = await db.get(Document, doc.id)
+        assert saved.upd_meta['shipment_sent_state_id'] == str(state)
+    await engine.dispose()

@@ -267,3 +267,60 @@ async def test_412_never_continues_with_other_batches(monkeypatch):
     result = await ms.update_document("demand", "doc", codes(1001))
     assert result["__moysklad_412__"] is True
     assert len([method for method, _, _ in calls if method == "POST"]) == 1
+
+async def test_shipment_state_is_last_write_after_all_tracking_batches(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_shipment_states = AsyncMock(return_value=[{'id': 'ready', 'name': 'Собран'}])
+    await ms.update_document('demand', 'doc', codes(501), shipment_state_id='ready')
+    assert [method for method, _, _ in calls if method != 'GET'] == ['PUT', 'POST', 'POST', 'PUT']
+    assert calls[-1][2] == {'state': {'meta': {'href': ms.base_url + '/entity/demand/metadata/states/ready', 'type': 'state', 'mediaType': 'application/json'}}}
+    assert 'state' not in calls[1][2] if calls[0][0] == 'GET' else 'state' not in calls[0][2]
+
+async def test_rejected_marks_never_change_shipment_state(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_shipment_states = AsyncMock(return_value=[{'id': 'ready', 'name': 'Собран'}])
+    original = ms._request_with_retry
+    async def request(client, method, url, **kwargs):
+        response = await original(client, method, url, **kwargs)
+        return httpx.Response(412, text='rejected', request=httpx.Request(method, url)) if method == 'POST' else response
+    ms._request_with_retry = request
+    result = await ms.update_document('demand', 'doc', codes(1), shipment_state_id='ready')
+    assert result['__moysklad_412__']
+    assert not any('state' in (body or {}) for _, _, body in calls)
+
+async def test_unavailable_state_blocks_transfer_before_writes(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_shipment_states = AsyncMock(return_value=[])
+    with pytest.raises(ValueError, match='больше недоступен'):
+        await ms.update_document('demand', 'doc', codes(1), shipment_state_id='removed')
+    assert not calls
+
+async def test_state_failure_reports_marks_saved_and_disabled_setting_preserves_state(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_shipment_states = AsyncMock(return_value=[{'id': 'ready', 'name': 'Собран'}])
+    original = ms._request_with_retry
+    async def request(client, method, url, **kwargs):
+        response = await original(client, method, url, **kwargs)
+        return httpx.Response(403, request=httpx.Request(method, url)) if 'state' in kwargs.get('json', {}) else response
+    ms._request_with_retry = request
+    with pytest.raises(ValueError, match='Марки переданы'):
+        await ms.update_document('demand', 'doc', codes(1), shipment_state_id='ready')
+    assert any(method == 'POST' for method, _, _ in calls)
+    calls.clear()
+    await ms.update_document('demand', 'doc', codes(1))
+    assert not any('state' in (body or {}) for _, _, body in calls)
+
+async def test_shipment_status_setting_validates_live_choices_and_can_be_disabled(monkeypatch):
+    from app.api.organization_profiles import save_shipment_status, ShipmentStateRequest
+    import app.api.organization_profiles as profiles
+    state = uuid4()
+    profile = NS(shipment_sent_state_id=None)
+    db = NS(commit=AsyncMock())
+    monkeypatch.setattr(profiles, 'shipment_status_settings', AsyncMock(return_value={'states': [{'id': str(state), 'name': 'Собран'}]}))
+    await save_shipment_status(ShipmentStateRequest(state_id=state), NS(), profile, db)
+    assert profile.shipment_sent_state_id == state
+    with pytest.raises(HTTPException) as exc:
+        await save_shipment_status(ShipmentStateRequest(state_id=uuid4()), NS(), profile, db)
+    assert exc.value.status_code == 400 and profile.shipment_sent_state_id == state
+    await save_shipment_status(ShipmentStateRequest(), NS(), profile, db)
+    assert profile.shipment_sent_state_id is None

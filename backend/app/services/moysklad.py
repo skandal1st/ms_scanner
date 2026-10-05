@@ -648,12 +648,19 @@ class MoySkladService:
 
     TRACKING_BATCH_SIZE = 500
 
+    async def get_shipment_states(self) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/metadata')
+            response.raise_for_status()
+            return [{'id': row['id'], 'name': row['name']} for row in response.json().get('states', [])]
+
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict],
         position_quantities: Optional[Dict[str, int]] = None,
         position_prices: Optional[Dict[str, Dict[str, Any]]] = None,
         description: Optional[str] = None,
         on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
+        shipment_state_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Preserve existing positions; send all codes in bounded, resumable batches.
 
@@ -661,6 +668,11 @@ class MoySkladService:
         saved code before sending the remainder, including partially saved batches.
         """
         self._validate_kind(kind)
+        if shipment_state_id:
+            if kind != 'demand':
+                raise ValueError('Автоматическая смена статуса доступна только для отгрузок')
+            if shipment_state_id not in {row['id'] for row in await self.get_shipment_states()}:
+                raise ValueError('Выбранный статус отгрузки больше недоступен. Измените настройку и повторите отправку.')
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
         groups = {}
         for scan in scans:
@@ -779,6 +791,15 @@ class MoySkladService:
                         await on_progress(sent, total)
                     logger.info("moysklad.tracking_batch.sent", kind=kind, doc_id=doc_id, sent=sent, total=total)
             logger.info("moysklad.update_document.ok", kind=kind, doc_id=doc_id, positions_sent=len(positions), codes_sent=sent)
+            if shipment_state_id:
+                try:
+                    state_response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/demand/{doc_id}',
+                        json={'state': {'meta': {'href': f'{self.base_url}/entity/demand/metadata/states/{shipment_state_id}',
+                                                'type': 'state', 'mediaType': 'application/json'}}})
+                    state_response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    raise ValueError('Марки переданы в МойСклад, но смену статуса отгрузки не удалось подтвердить. Повторите отправку: уже сохранённые марки не будут добавлены повторно.') from exc
+                logger.info('moysklad.shipment_state.changed', doc_id=doc_id, state_id=shipment_state_id)
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:

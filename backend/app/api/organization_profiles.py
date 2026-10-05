@@ -100,6 +100,36 @@ async def get_order_filters(profile: OrganizationProfile = Depends(get_active_or
     return profile_order_filters(profile)
 
 
+class ShipmentStateRequest(BaseModel):
+    state_id: UUID | None = None
+
+
+@router.get('/shipment-status-settings')
+async def shipment_status_settings(current_user: User = Depends(get_current_user),
+                                   profile: OrganizationProfile = Depends(get_active_organization_profile),
+                                   db: AsyncSession = Depends(get_db)):
+    from app.api.tsd import _ms_for_user
+    ms = await _ms_for_user(db, current_user.id)
+    try:
+        states = await ms.get_shipment_states()
+    except Exception as exc:
+        raise HTTPException(502, 'Не удалось загрузить статусы отгрузок из МойСклада. Повторите попытку.') from exc
+    return {'state_id': profile.shipment_sent_state_id, 'states': states}
+
+
+@router.put('/shipment-status-settings')
+async def save_shipment_status(body: ShipmentStateRequest, current_user: User = Depends(get_current_user),
+                               profile: OrganizationProfile = Depends(get_active_organization_profile),
+                               db: AsyncSession = Depends(get_db)):
+    if body.state_id:
+        available = await shipment_status_settings(current_user, profile, db)
+        if str(body.state_id) not in {v['id'] for v in available['states']}:
+            raise HTTPException(400, 'Статус отгрузки недоступен. Обновите список статусов.')
+    profile.shipment_sent_state_id = body.state_id
+    await db.commit()
+    return {'state_id': body.state_id}
+
+
 @router.put("/order-filters", response_model=list[CustomerOrderFilter])
 async def save_order_filters(body: CustomerOrderFilterList,
     profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db)):
