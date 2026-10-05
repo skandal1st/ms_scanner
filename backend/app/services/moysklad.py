@@ -254,7 +254,7 @@ class MoySkladService:
             return response.json().get("rows", [])
 
     async def get_customer_order_filter_options(self) -> dict:
-        result = {"projects": [], "sale_values": [], "sale_attribute_id": None,
+        result = {"projects": [], "sale_values": [], "states": [], "sale_attribute_id": None,
                   "sale_dictionary_id": None, "warnings": []}
         async with httpx.AsyncClient(timeout=15) as client:
             async def dictionary(path):
@@ -275,6 +275,15 @@ class MoySkladService:
                 if exc.response.status_code != 403:
                     raise
                 result["warnings"].append("Нет прав на просмотр проектов. Обновите XML решения и переустановите его в МойСкладе.")
+            try:
+                response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder/metadata")
+                response.raise_for_status()
+                result["states"] = [{"id": row["id"], "name": row["name"]}
+                                    for row in response.json().get("states", [])]
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 403:
+                    raise
+                result["warnings"].append("Нет прав на просмотр статусов заказов покупателей в МойСкладе.")
             attrs = await dictionary("entity/customerorder/metadata/attributes")
             matches = [row for row in attrs if (row.get("name") or "").strip().casefold() == "где продажа"]
             if len(matches) != 1 or matches[0].get("type") != "customentity":

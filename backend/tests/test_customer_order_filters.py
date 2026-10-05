@@ -65,6 +65,7 @@ def test_presets_validate_names_conditions_and_unique_ids():
 
 async def test_saved_presets_are_shared_with_tsd_but_isolated_by_profile(monkeypatch):
     item = multi_preset()
+    item["states"] = [{"id": str(uuid4()), "name": "Новый"}]
     profile = NS(customer_order_filters=[])
     db = NS(commit=AsyncMock())
     saved = await organization_profiles.save_order_filters(CustomerOrderFilterList(filters=[item]), profile, db)
@@ -94,6 +95,7 @@ async def test_combined_filter_is_applied_before_pagination_and_preserves_search
         return httpx.Response(200, json={"rows": [{"id": "matching"}]}, request=httpx.Request(method, url))
     ms._request_with_retry = request
     item = multi_preset()
+    item["states"] = [{"id": str(uuid4()), "name": "Новый"}, {"id": str(uuid4()), "name": "Приоритет"}]
     assert await ms.get_customer_orders("org", "27370", offset=50, order_filter=item) == [{"id": "matching"}]
     params = calls[0]
     assert params["offset"] == 50 and params["limit"] == 50 and params["search"] == "27370"
@@ -102,10 +104,13 @@ async def test_combined_filter_is_applied_before_pagination_and_preserves_search
     assert f"metadata/attributes/{item['sale_attribute_id']}={ms.base_url}/entity/customentity/{item['sale_dictionary_id']}/{item['sale_value_id']}" in params["filter"]
     assert f"project={ms.base_url}/entity/project/{item['projects'][1]['id']}" in params["filter"]
     assert f"/{item['sale_values'][1]['id']}" in params["filter"]
+    for state in item["states"]:
+        assert f"state={ms.base_url}/entity/customerorder/metadata/states/{state['id']}" in params["filter"]
 
 
 async def test_pc_and_tsd_pass_identical_saved_conditions(monkeypatch):
     item = multi_preset()
+    item["states"] = [{"id": str(uuid4()), "name": "Новый"}]
     device, _, profile, ms, db = context(monkeypatch, ([],))
     profile.customer_order_filters = [item]
     ms.get_customer_orders.return_value = []
@@ -128,13 +133,15 @@ async def test_options_report_missing_vendor_permissions_without_empty_success()
         return httpx.Response(403, json={"errors": []}, request=httpx.Request(method, url))
     ms._request_with_retry = request
     result = await ms.get_customer_order_filter_options()
-    assert len(result["warnings"]) == 2 and result["sale_attribute_id"] == item["sale_attribute_id"]
+    assert len(result["warnings"]) == 3 and result["sale_attribute_id"] == item["sale_attribute_id"]
 
 
 async def test_options_load_full_dictionaries_and_skip_archived_values():
     ms = MoySkladService("fake")
     item = preset()
     async def request(client, method, url, **kwargs):
+        if url.endswith("customerorder/metadata"):
+            return httpx.Response(200, json={"states": [{"id": "state-id", "name": "Новый"}]}, request=httpx.Request(method, url))
         if url.endswith("metadata/attributes"):
             rows = [{"id": item["sale_attribute_id"], "name": "Где продажа", "type": "customentity",
                 "customEntityMeta": {"href": f"{ms.base_url}/context/companysettings/metadata/customEntities/{item['sale_dictionary_id']}"}}]
@@ -147,3 +154,16 @@ async def test_options_load_full_dictionaries_and_skip_archived_values():
     result = await ms.get_customer_order_filter_options()
     assert len(result["projects"]) == 1000 and result["sale_values"] == [{"id": item["sale_value_id"], "name": "Питер"}]
     assert result["warnings"] == []
+    assert result["states"] == [{"id": "state-id", "name": "Новый"}]
+
+
+def test_status_only_filters_and_legacy_defaults():
+    state = {"id": str(uuid4()), "name": "Новый"}
+    item = dict(id=str(uuid4()), name="Новые", states=[state])
+    assert moysklad_order_filter_conditions("https://ms", item) == [
+        f"state=https://ms/entity/customerorder/metadata/states/{state['id']}"]
+    assert CustomerOrderFilter.model_validate(preset()).states == []
+    with pytest.raises(ValidationError):
+        CustomerOrderFilter.model_validate({**item, "states": [state, state]})
+    with pytest.raises(ValidationError):
+        CustomerOrderFilter.model_validate({**item, "states": []})

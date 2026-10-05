@@ -21,6 +21,7 @@ class CustomerOrderFilter(BaseModel):
     sale_value_name: Optional[str] = Field(default=None, max_length=500)
     projects: list[FilterValue] = Field(default_factory=list, max_length=100)
     sale_values: list[FilterValue] = Field(default_factory=list, max_length=100)
+    states: list[FilterValue] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -44,7 +45,7 @@ class CustomerOrderFilter(BaseModel):
 
     @model_validator(mode="after")
     def validate_conditions(self):
-        for values in (self.projects, self.sale_values):
+        for values in (self.projects, self.sale_values, self.states):
             if len({value.id for value in values}) != len(values):
                 raise ValueError("Значения фильтра не должны повторяться")
         # Explicit arrays take precedence over legacy scalar fields, including an empty array.
@@ -55,8 +56,8 @@ class CustomerOrderFilter(BaseModel):
         sale = (self.sale_attribute_id, self.sale_dictionary_id, self.sale_value_id)
         if any(sale) and not all(sale):
             raise ValueError("Выберите значение поля «Где продажа»")
-        if not self.project_id and not self.sale_value_id:
-            raise ValueError("Выберите проект или значение поля «Где продажа»")
+        if not self.project_id and not self.sale_value_id and not self.states:
+            raise ValueError("Выберите проект, значение поля «Где продажа» или статус заказа")
         return self
 
 
@@ -90,6 +91,8 @@ def moysklad_order_filter_conditions(base_url: str, order_filter: dict) -> list[
     conditions = []
     for project in item.projects:
         conditions.append(f"project={base_url}/entity/project/{project.id}")
+    for state in item.states:
+        conditions.append(f"state={base_url}/entity/customerorder/metadata/states/{state.id}")
     for sale_value in item.sale_values:
         conditions.append(f"{base_url}/entity/customerorder/metadata/attributes/{item.sale_attribute_id}="
                           f"{base_url}/entity/customentity/{item.sale_dictionary_id}/{sale_value.id}")

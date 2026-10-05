@@ -116,7 +116,7 @@ async def get_order_filter_options(current_user: User = Depends(get_current_user
     try:
         return await MoySkladService(decrypt_token(integration.moysklad_token)).get_customer_order_filter_options()
     except Exception as exc:
-        raise HTTPException(502, "Не удалось загрузить проекты и поле «Где продажа» из МойСклада. Повторите попытку.") from exc
+        raise HTTPException(502, "Не удалось загрузить проекты, статусы заказов и поле «Где продажа» из МойСклада. Повторите попытку.") from exc
 
 
 @router.post("/sync", response_model=list[ProfileResponse])

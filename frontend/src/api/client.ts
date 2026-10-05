@@ -767,6 +767,7 @@ export interface OrganizationProfile {
 }
 
 export interface CustomerOrderFilter {
+  states: { id: string; name: string }[]
   projects: { id: string; name: string }[]
   sale_values: { id: string; name: string }[]
   id: string
@@ -780,6 +781,7 @@ export interface CustomerOrderFilter {
 }
 
 export interface CustomerOrderFilterOptions {
+  states: { id: string; name: string }[]
   projects: { id: string; name: string }[]
   sale_values: { id: string; name: string }[]
   sale_attribute_id: string | null
