@@ -3,6 +3,7 @@ import asyncio
 import os
 from uuid import uuid4
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -48,7 +49,7 @@ async def test_concurrent_process_only_enqueues_once(monkeypatch):
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     user, doc = await seed(factory)
-    monkeypatch.setattr(documents, "_get_ms_service", AsyncMock())
+    monkeypatch.setattr(documents, "_get_ms_service", AsyncMock(return_value=SimpleNamespace(get_document=AsyncMock(return_value={}))))
     queued = []
     monkeypatch.setattr(tasks.process_document_task, "delay", lambda *args: queued.append(args))
 

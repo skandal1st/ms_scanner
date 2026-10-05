@@ -19,7 +19,7 @@ def setup(monkeypatch, existing=None):
         build_plan=AsyncMock(return_value=[{"gtin": "04620543080527", "product_id": "partial", "product_name": "Товар", "expected_qty": 2}]),
         get_customer_order_demands=AsyncMock())
     added = []
-    db = NS(execute=AsyncMock(return_value=Result(existing)), commit=AsyncMock(), add=added.append, refresh=AsyncMock())
+    db = NS(execute=AsyncMock(side_effect=[Result(existing), Result([])]), commit=AsyncMock(), add=added.append, refresh=AsyncMock())
     monkeypatch.setattr(documents, "_get_ms_service", AsyncMock(return_value=ms))
     monkeypatch.setattr(documents, "_scan_count", AsyncMock(return_value=2))
     body = documents.ResolveDocRequest(moysklad_id="ship", customer_order_id=oid)
