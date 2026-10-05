@@ -11,6 +11,7 @@ import { WriteoffPage } from './pages/Writeoff'
 import { CzCheckPage } from './pages/CzCheck'
 import { MarkControlPage } from './pages/MarkControl'
 import { InventoryPage } from './pages/Inventory'
+import { PhysicalCounts } from './components/PhysicalCounts'
 import { SettingsPage } from './pages/Settings'
 import { HelpPage } from './pages/Help'
 import { LoginPage } from './pages/Login'
@@ -44,6 +45,12 @@ function RequireFull({ children }: { children: JSX.Element }) {
   return children
 }
 
+function InventoryRoute() {
+  const { isFull, isLoading } = useEdition()
+  if (isLoading) return null
+  return isFull ? <InventoryPage /> : <PhysicalCounts mode="inventory" />
+}
+
 // fullOnly: раздел только для полной версии (в ms_lite скрыт из навигации).
 const NAV_ITEMS: { to: string; label: string; icon: IconName; fullOnly?: boolean }[] = [
   { to: '/shipment', label: 'Отгрузка', icon: 'shipment' },
@@ -51,7 +58,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; fullOnly?: boolean
   { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
   { to: '/check', label: 'Проверка', icon: 'check' },
   { to: '/mark-control', label: 'Контроль марок', icon: 'check', fullOnly: true },
-  { to: '/inventory', label: 'Инвентаризация', icon: 'check', fullOnly: true },
+  { to: '/inventory', label: 'Инвентаризация', icon: 'check' },
   { to: '/settings', label: 'Настройки', icon: 'settings' },
   { to: '/help', label: 'Помощь', icon: 'help' },
 ]
@@ -218,11 +225,9 @@ export default function App() {
             path="/inventory"
             element={
               <RequireAuth>
-                <RequireFull>
                   <Layout>
-                    <InventoryPage />
+                    <InventoryRoute />
                   </Layout>
-                </RequireFull>
               </RequireAuth>
             }
           />

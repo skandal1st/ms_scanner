@@ -3,7 +3,7 @@ import json
 import secrets
 import httpx
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
@@ -57,6 +57,7 @@ PAIR_TTL_SECONDS = 300
 
 class PairingRequest(BaseModel):
     workplace_id: Optional[UUID] = None
+    allowed_modes: list[Literal['shipment', 'acceptance', 'inventory']] = Field(default_factory=lambda: ['shipment'], max_length=3)
 
 
 class PairingResponse(BaseModel):
@@ -87,6 +88,7 @@ class DeviceContext(BaseModel):
     workplace_name: str
     organization_profile_id: UUID
     organization_name: str
+    allowed_modes: list[str] = Field(default_factory=lambda: ['shipment'])
 
 
 class TsdDocumentItem(BaseModel):
@@ -151,6 +153,16 @@ class TsdDeviceRow(BaseModel):
     is_active: bool
     last_seen_at: Optional[datetime]
     created_at: datetime
+    allowed_modes: list[str] = Field(default_factory=lambda: ['shipment'])
+
+
+class DeviceModesRequest(BaseModel):
+    allowed_modes: list[Literal['shipment', 'acceptance', 'inventory']] = Field(max_length=3)
+
+
+def require_tsd_mode(device, mode: str):
+    if mode not in (getattr(device, 'allowed_modes', None) or ([] if hasattr(device, 'allowed_modes') else ['shipment'])):
+        raise HTTPException(403, 'Этот режим отключён для ТСД. Обратитесь к администратору.')
 
 
 async def _ms_for_user(db: AsyncSession, user_id: UUID) -> MoySkladService:
@@ -215,7 +227,7 @@ async def create_pairing(
         await db.commit()
 
     code = secrets.token_urlsafe(32)
-    payload = {"user_id": str(current_user.id), "workplace_id": str(workplace.id)}
+    payload = {"user_id": str(current_user.id), "workplace_id": str(workplace.id), "allowed_modes": list(dict.fromkeys(body.allowed_modes))}
     redis = aioredis.from_url(settings.REDIS_URL)
     try:
         await redis.set(f"{PAIR_PREFIX}{code}", json.dumps(payload), ex=PAIR_TTL_SECONDS)
@@ -262,6 +274,7 @@ async def exchange_pairing(body: PairingExchangeRequest, db: AsyncSession = Depe
         user_id=workplace.user_id,
         workplace_id=workplace.id,
         name=body.device_name.strip(),
+        allowed_modes=data.get('allowed_modes', ['shipment']),
         last_seen_at=datetime.now(timezone.utc),
     )
     db.add(device)
@@ -314,6 +327,11 @@ async def _device_scope(db: AsyncSession, device: TsdDevice):
     return user, workplace, profile
 
 
+async def get_shipping_device(device: TsdDevice = Depends(get_tsd_device)):
+    require_tsd_mode(device, 'shipment')
+    return device
+
+
 @router.get("/me", response_model=DeviceContext)
 async def device_me(
     device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db)
@@ -327,6 +345,7 @@ async def device_me(
         workplace_name=workplace.name,
         organization_profile_id=profile.id,
         organization_name=profile.name,
+        allowed_modes=device.allowed_modes,
     )
 
 
@@ -349,7 +368,7 @@ def _order_ms_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/order-filters", response_model=list[CustomerOrderFilter])
-async def get_tsd_order_filters(device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db)):
+async def get_tsd_order_filters(device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db)):
     _, _, profile = await _device_scope(db, device)
     return profile_order_filters(profile)
 
@@ -357,7 +376,7 @@ async def get_tsd_order_filters(device: TsdDevice = Depends(get_tsd_device), db:
 @router.get("/orders", response_model=list[TsdOrderItem])
 async def list_tsd_orders(
     search: Optional[str] = None, offset: int = 0,
-    device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db),
+    device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db),
     filter_id: Optional[UUID] = None,
 ):
     if offset < 0:
@@ -409,7 +428,7 @@ async def list_tsd_orders(
 
 @router.get("/orders/{order_id}/shipments", response_model=TsdOrderShipments)
 async def get_tsd_order_shipments(
-    order_id: UUID, device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db),
+    order_id: UUID, device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db),
 ):
     _, workplace, profile = await _device_scope(db, device)
     ms = await _ms_for_user(db, device.user_id)
@@ -463,7 +482,7 @@ async def get_tsd_order_shipments(
 @router.get("/documents", response_model=list[TsdDocumentItem])
 async def list_tsd_documents(
     search: Optional[str] = None,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     _, workplace, profile = await _device_scope(db, device)
@@ -547,6 +566,7 @@ async def list_tsd_documents(
 async def _owned_tsd_document(
     db: AsyncSession, device: TsdDevice, document_id: UUID
 ) -> Document:
+    require_tsd_mode(device, 'shipment')
     _, workplace, profile = await _device_scope(db, device)
     doc = (
         await db.execute(
@@ -567,7 +587,7 @@ async def _owned_tsd_document(
 @router.post("/documents/select", response_model=TsdDocumentDetail)
 async def select_tsd_document(
     body: SelectDocumentRequest,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     _, workplace, profile = await _device_scope(db, device)
@@ -679,7 +699,7 @@ async def select_tsd_document(
 @router.get("/documents/{document_id}", response_model=TsdDocumentDetail)
 async def get_tsd_document(
     document_id: UUID,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
@@ -719,7 +739,7 @@ async def get_tsd_document(
 
 @router.post("/documents/{document_id}/scans/{scan_id}/pack-mode", response_model=ScanResponse)
 async def change_tsd_pack_mode(document_id: UUID, scan_id: UUID, body: PackModeRequest,
-                               device: TsdDevice = Depends(get_tsd_device), db: AsyncSession = Depends(get_db)):
+                               device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db)):
     await _owned_tsd_document(db, device, document_id)
     scan = (await db.execute(select(Scan).where(Scan.id == scan_id, Scan.document_id == document_id))).scalar_one_or_none()
     if not scan:
@@ -731,7 +751,7 @@ async def change_tsd_pack_mode(document_id: UUID, scan_id: UUID, body: PackModeR
 async def create_tsd_scan(
     document_id: UUID,
     body: TsdScanRequest,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     device_id = device.id
@@ -777,7 +797,7 @@ async def create_tsd_scan(
 @router.delete("/documents/{document_id}/scans/last", response_model=ScanResponse)
 async def delete_last_tsd_scan(
     document_id: UUID,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
@@ -816,7 +836,7 @@ async def delete_last_tsd_scan(
 async def delete_tsd_scan(
     document_id: UUID,
     scan_id: UUID,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     await _owned_tsd_document(db, device, document_id)
@@ -840,7 +860,7 @@ async def delete_tsd_scan(
 @router.post("/documents/{document_id}/complete")
 async def complete_tsd_session(
     document_id: UUID,
-    device: TsdDevice = Depends(get_tsd_device),
+    device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
@@ -879,9 +899,19 @@ async def list_devices(
     return [
         TsdDeviceRow(
             id=d.id, name=d.name, workplace_name=w.name, is_active=d.is_active,
-            last_seen_at=d.last_seen_at, created_at=d.created_at,
+            last_seen_at=d.last_seen_at, created_at=d.created_at, allowed_modes=d.allowed_modes,
         ) for d, w in rows
     ]
+
+
+@router.patch("/devices/{device_id}/modes")
+async def update_device_modes(device_id: UUID, body: DeviceModesRequest, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    device = (await db.execute(select(TsdDevice).where(TsdDevice.id == device_id, TsdDevice.user_id == current_user.id, TsdDevice.is_active.is_(True)))).scalar_one_or_none()
+    if not device:
+        raise HTTPException(404, 'ТСД не найден')
+    device.allowed_modes = list(dict.fromkeys(body.allowed_modes))
+    await db.commit()
+    return {'id': str(device.id), 'allowed_modes': device.allowed_modes}
 
 
 @router.delete("/devices/{device_id}", status_code=204)

@@ -1163,6 +1163,20 @@ async def _import_upd_bytes(
         if pid not in plan_acc:
             new_plan.append(old)
     doc.plan = new_plan
+    # Keep every XML line for physical verification, including unmatched/unmarked goods.
+    physical_plan = []
+    for index, pos in enumerate(positions):
+        matching = [v for v in results if v.line_number == pos.line_number and v.name == pos.name]
+        aliases = set(filter(None, [normalize_gtin_key(pos.gtin), *[_code_gtin(c, None) for c in pos.codes]]))
+        product_ids = {v.product_id for v in matching if v.product_id}
+        pid = next(iter(product_ids)) if len(product_ids) == 1 else None
+        old = existing_by_pid.get(pid, {}) if pid else {}
+        physical_plan.append({'key': f'xml:{index}', 'product_id': pid,
+            'product_name': pos.name or (next((v.product_name for v in matching if v.product_name), None)) or f'Позиция {index + 1}',
+            'gtins': sorted(aliases), 'expected_qty': float(pos.quantity or 0),
+            'pack_gtins': old.get('pack_gtins', []), 'pack_quantities': old.get('pack_quantities', {}),
+            'package_codes': list(pos.packages)})
+    doc.upd_meta = {**(doc.upd_meta or {}), 'physical_plan': physical_plan}
 
     await db.commit()
     await _enrich_unmatched_names_nk(db, document_id, unmatched, results)

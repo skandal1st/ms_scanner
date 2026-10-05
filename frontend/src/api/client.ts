@@ -825,16 +825,21 @@ export interface TsdDeviceInfo {
   is_active: boolean
   last_seen_at: string | null
   created_at: string
+  allowed_modes: TsdMode[]
 }
 
+export type TsdMode = 'shipment' | 'acceptance' | 'inventory'
+export const tsdModeLabels: Record<TsdMode, string> = { shipment: 'Отгрузка', acceptance: 'Приёмка', inventory: 'Инвентаризация' }
+
 export const tsdAdminApi = {
-  createPairing: (workplace_id?: string) =>
-    api.post<TsdPairing>('/tsd/pairings', { workplace_id: workplace_id ?? null }),
+  createPairing: (workplace_id?: string, allowed_modes: TsdMode[] = ['shipment']) =>
+    api.post<TsdPairing>('/tsd/pairings', { workplace_id: workplace_id ?? null, allowed_modes }),
+  modes: (id: string, allowed_modes: TsdMode[]) => api.patch(`/tsd/devices/${id}/modes`, { allowed_modes }),
   devices: () => api.get<TsdDeviceInfo[]>('/tsd/devices'),
   revoke: (id: string) => api.delete(`/tsd/devices/${id}`),
 }
 
-const tsdClient = axios.create({
+export const tsdClient = axios.create({
   baseURL: '/api',
   timeout: 20_000,
   headers: { 'Content-Type': 'application/json' },
@@ -860,6 +865,7 @@ tsdClient.interceptors.response.use(
 )
 
 export interface TsdContext {
+  allowed_modes: TsdMode[]
   device_id: string
   device_name: string
   workplace_id: string

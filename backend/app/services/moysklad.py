@@ -1010,16 +1010,19 @@ class MoySkladService:
                                         "name": st.get("name") or "", "href": href}
         return list(stores.values())
 
-    async def get_stock_map(self, store_hrefs: List[str]) -> Dict[str, Dict[str, Any]]:
+    async def get_stock_map(self, store_hrefs: List[str], *, group_by: str = 'product', full_snapshot: bool = False) -> Dict[str, Dict[str, Any]]:
         """Учётный остаток по товарам (report/stock/all, groupBy=product) по складам.
 
         Возвращает {product_id: {qty, folder_id, folder_name}}. Пустой store_hrefs = все
         склады. Остаток по нескольким складам агрегируется (периметр «наших складов»,
         мультиюрлицо). folder — группа товаров МС («бренд» для среза инвентаризации).
         Может вернуть 403, если у токена нет права на отчёт остатков — вызывающий ловит."""
-        params: Dict[str, Any] = {"groupBy": "product", "limit": 1000}
-        if store_hrefs:
-            params["filter"] = ";".join(f"store={h}" for h in store_hrefs)
+        params: Dict[str, Any] = {"groupBy": group_by, "limit": 1000}
+        filters = [f"store={h}" for h in store_hrefs]
+        if full_snapshot:
+            filters.extend(['stockMode=all', 'quantityMode=all', 'archived=false', 'archived=true'])
+        if filters:
+            params["filter"] = ';'.join(filters)
         out: Dict[str, Dict[str, Any]] = {}
         async with httpx.AsyncClient(timeout=60) as client:
             offset = 0
@@ -1038,7 +1041,8 @@ class MoySkladService:
                         continue
                     folder = r.get("folder") or {}
                     out[pid] = {
-                        "qty": r.get("stock") or r.get("quantity") or 0,
+                        "qty": r.get("stock") if r.get("stock") is not None else r.get("quantity", 0),
+                        "product_name": r.get('name'),
                         "folder_id": self._id_from_href((folder.get("meta") or {}).get("href", "")) or None,
                         "folder_name": folder.get("pathName") or folder.get("name") or None,
                     }

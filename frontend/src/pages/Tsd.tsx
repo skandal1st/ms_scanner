@@ -1,7 +1,8 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
+import { tsdApi, tsdModeLabels, type TsdMode, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
+import { PhysicalCounts } from '../components/PhysicalCounts'
 import { CustomerOrderFilterSelect } from '../components/CustomerOrderFilterSelect'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
@@ -510,13 +511,17 @@ export function TsdPage() {
   const qc = useQueryClient()
   const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token')) && !new URLSearchParams(window.location.search).has('pair'))
   const [requestedId, setRequestedId] = useState(() => new URLSearchParams(window.location.search).get('document'))
+  const [mode, setMode] = useState<TsdMode | null>(() => new URLSearchParams(window.location.search).has('document') || localStorage.getItem('tsd_document_id') ? 'shipment' : null)
+  const context = useQuery({ queryKey: ['tsd-mode-context'], queryFn: () => tsdApi.me().then(r => r.data), enabled: authorized, refetchInterval: 10000 })
+  const allowed = context.data?.allowed_modes || ['shipment']
+  useEffect(() => { if (context.data && mode && !allowed.includes(mode)) { setMode(null); setDocument(null); setActiveId(null); setRequestedId(null); localStorage.removeItem('tsd_document_id') } }, [context.data, mode])
   const requestedOnce = useRef<string | null>(null)
   const [activeId, setActiveId] = useState(() => localStorage.getItem('tsd_document_id'))
   const [document, setDocument] = useState<TsdDocumentDetail | null>(null)
   const restored = useQuery({
     queryKey: ['tsd-document', activeId],
     queryFn: () => tsdApi.getDocument(activeId!).then((r) => r.data),
-    enabled: authorized && Boolean(activeId) && !document && !requestedId,
+    enabled: authorized && mode === 'shipment' && Boolean(activeId) && !document && !requestedId && Boolean(context.data) && allowed.includes('shipment'),
   })
   const open = (doc: TsdDocumentDetail) => {
     localStorage.setItem('tsd_document_id', doc.id)
@@ -540,21 +545,28 @@ export function TsdPage() {
     },
   })
   useEffect(() => {
-    if (authorized && requestedId && requestedOnce.current !== requestedId) {
+    if (authorized && context.data && allowed.includes('shipment') && mode === 'shipment' && requestedId && requestedOnce.current !== requestedId) {
       requestedOnce.current = requestedId
       fromLink.mutate(requestedId)
     }
-  }, [authorized, requestedId])
+  }, [authorized, requestedId, context.data, mode])
   const ready = () => {
     qc.removeQueries({ predicate: (query) => String(query.queryKey[0]).startsWith('tsd-') })
     localStorage.removeItem('tsd_document_id')
     setActiveId(null)
     setDocument(null)
+    setMode(null)
     setAuthorized(true)
   }
   const current = document || (!requestedId ? restored.data : null)
   let content
   if (!authorized) content = <TsdLogin onReady={ready} />
+  else if (!context.data) content = <main className="tsd-shell"><p>{context.error ? apiMessage(context.error) : 'Загружаем доступные режимы…'}</p></main>
+  else if (!mode || !allowed.includes(mode)) content = <main className="tsd-shell tsd-mode-menu"><header className="tsd-header"><div><h1>Выберите режим</h1><p>{context.data.workplace_name}</p></div><TsdConnection /></header>
+    {allowed.map(value => <button className="tsd-order" key={value} onClick={() => setMode(value)}><strong>{tsdModeLabels[value]}</strong><span>{value === 'shipment' ? 'Сборка заказов покупателей' : value === 'acceptance' ? 'Сверка позиций XML, загруженного на ПК' : 'Остатки склада и проверка по брендам'}</span></button>)}
+    {!allowed.length && <p className="tsd-alert">Доступ к режимам отключён. Обратитесь к администратору.</p>}
+  </main>
+  else if (mode !== 'shipment') content = <PhysicalCounts key={`${context.data.device_id}:${mode}`} mode={mode} terminal deviceId={context.data.device_id} onBack={() => setMode(null)} />
   else if (requestedId || (activeId && !current)) content = <main className="tsd-shell tsd-login">
     <h1>Сборка заказа</h1>
     <p>{fromLink.error ? apiMessage(fromLink.error) : restored.error ? apiMessage(restored.error) : requestedId ? 'Открываем отгрузку…' : 'Восстанавливаем документ…'}</p>
@@ -562,6 +574,6 @@ export function TsdPage() {
     <button type="button" className="tsd-button" disabled={fromLink.isPending} onClick={back}>К списку заказов</button>
   </main>
   else if (current) content = <TsdPicking key={current.id} initial={current} onBack={back} />
-  else content = <TsdOrderList onOpen={open} />
+  else content = <><nav className="tsd-mode-nav"><button className="tsd-button" onClick={() => setMode(null)}>‹ К выбору режима</button></nav><TsdOrderList onOpen={open} /></>
   return <><TsdPwaControls />{content}</>
 }

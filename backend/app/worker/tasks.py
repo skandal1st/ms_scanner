@@ -18,6 +18,37 @@ from app.services.chestnyznak import (
 )
 
 
+@celery_app.task(name='prepare_physical_count')
+def prepare_physical_count_task(session_id):
+    return _run(_prepare_physical_count_async(session_id))
+
+
+async def _prepare_physical_count_async(session_id):
+    from sqlalchemy import select
+    from app.db.models import PhysicalCountSession
+    from app.db.session import AsyncSessionLocal
+    from app.api.tsd import _ms_for_user
+    from app.services.physical_counts import prepare_inventory_plan
+    async with AsyncSessionLocal() as db:
+        session = (await db.execute(select(PhysicalCountSession).where(
+            PhysicalCountSession.id == session_id).with_for_update())).scalar_one_or_none()
+        if not session or session.status != 'preparing':
+            return
+        try:
+            ms = await _ms_for_user(db, session.user_id)
+            config = session.settings
+            plan = await prepare_inventory_plan(ms, config['store_id'], config['include_state_ids'])
+            session.plan = plan
+            session.settings = {**config, 'snapshot_at': datetime.now(timezone.utc).isoformat()}
+            session.status = 'active'
+            logger.info('physical_count.prepared', session_id=session_id, positions=len(plan))
+        except Exception as exc:
+            session.status = 'error'
+            session.error_message = 'Не удалось выгрузить остатки и отгрузки из МойСклада. Проверьте подключение и создайте новую сессию.'
+            logger.warning('physical_count.prepare_failed', session_id=session_id, error_type=type(exc).__name__)
+        await db.commit()
+
+
 async def _expand_aggregate_for_processing(cz, code: str) -> tuple[list[str], Optional[str]]:
     """Раскрыть упаковку перед записью приёмки в МС.
 

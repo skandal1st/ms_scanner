@@ -189,10 +189,42 @@ class TsdDevice(Base):
         UUID(as_uuid=True), ForeignKey("workplaces.id"), nullable=False, index=True
     )
     name = Column(String(255), nullable=False, default="ТСД")
+    allowed_modes = Column(JSONB, nullable=False, default=lambda: ["shipment"], server_default='["shipment"]')
     is_active = Column(Boolean, nullable=False, default=True, server_default="true")
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PhysicalCountSession(Base):
+    __tablename__ = "physical_count_sessions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    organization_profile_id = Column(UUID(as_uuid=True), ForeignKey("organization_profiles.id"), nullable=False, index=True)
+    workplace_id = Column(UUID(as_uuid=True), ForeignKey("workplaces.id"), nullable=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=True, index=True)
+    mode = Column(String(16), nullable=False)
+    name = Column(String(500), nullable=False)
+    status = Column(String(16), nullable=False, default="preparing")
+    plan = Column(JSONB, nullable=False, default=list, server_default="[]")
+    settings = Column(JSONB, nullable=False, default=dict, server_default="{}")
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PhysicalCountScan(Base):
+    __tablename__ = "physical_count_scans"
+    __table_args__ = (UniqueConstraint("session_id", "code_hash", name="uq_physical_count_code"),)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("physical_count_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("tsd_devices.id"), nullable=False)
+    product_key = Column(String(128), nullable=False)
+    code = Column(Text, nullable=False)
+    code_hash = Column(String(64), nullable=False)
+    quantity = Column(Numeric(18, 3), nullable=False)
+    is_barcode = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class TsdDocumentSession(Base):

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
+import { PhysicalCounts } from '../components/PhysicalCounts'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
 import { InventoryArchivePanel } from '../components/InventoryArchivePanel'
@@ -263,6 +264,7 @@ export function InventoryPage() {
           </div>
         )}
       </header>
+      <details className="section"><summary>Физическая инвентаризация с ТСД</summary><PhysicalCounts mode="inventory" /></details>
 
       {err && (
         <div className="alert alert--error" style={{ marginTop: 16 }}>

@@ -11,6 +11,7 @@ import type {
 import { ResizableTable } from '../components/ResizableTable'
 import type { ColumnDef } from '../components/ResizableTable'
 import { UpdImportBar } from '../components/UpdImportBar'
+import { PhysicalCounts } from '../components/PhysicalCounts'
 import { Icon } from '../components/Icon'
 import { useMatchSuggestions } from '../hooks/useDocuments'
 import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
@@ -430,6 +431,7 @@ export function AcceptancePage({
       </header>
 
       <div className="acc-scroll">
+      {docId && <details style={{ margin: '12px 16px' }}><summary>Сверка приёмки на ТСД</summary><PhysicalCounts key={docId} mode="acceptance" documentId={docId} /></details>}
       <div style={{ padding: '12px 16px 0' }}>
         <UpdImportBar
           busy={busy}

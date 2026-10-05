@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
-import { organizationProfilesApi, tsdAdminApi, type TsdDeviceInfo } from '../api/client'
+import { organizationProfilesApi, tsdAdminApi, tsdModeLabels, type TsdMode, type TsdDeviceInfo } from '../api/client'
 import { TSD_APK_PATH } from '../lib/tsdLinks'
 
 export function TsdPairingSection() {
   const qc = useQueryClient()
   const [pairingOpen, setPairingOpen] = useState(false)
   const [workplaceId, setWorkplaceId] = useState('')
+  const [allowedModes, setAllowedModes] = useState<TsdMode[]>(['shipment'])
   const { data: profiles = [] } = useQuery({
     queryKey: ['organization-profiles'],
     queryFn: () => organizationProfilesApi.list().then((r) => r.data),
@@ -23,7 +24,7 @@ export function TsdPairingSection() {
     setWorkplaceId(preferred?.id || '')
   }, [workplaceId, workplaces])
   const pairing = useMutation({
-    mutationFn: () => tsdAdminApi.createPairing(workplaceId || undefined).then((r) => r.data),
+    mutationFn: () => tsdAdminApi.createPairing(workplaceId || undefined, allowedModes).then((r) => r.data),
     onSuccess: () => setPairingOpen(true),
   })
   const { data: devices = [] } = useQuery({
@@ -36,6 +37,10 @@ export function TsdPairingSection() {
       qc.setQueryData<TsdDeviceInfo[]>(['tsd-devices'], (items) => items?.filter((device) => device.id !== id))
       void qc.invalidateQueries({ queryKey: ['tsd-devices'] })
     },
+  })
+  const modes = useMutation({
+    mutationFn: ({ id, values }: { id: string; values: TsdMode[] }) => tsdAdminApi.modes(id, values),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['tsd-devices'] }) },
   })
 
   return (
@@ -79,6 +84,9 @@ export function TsdPairingSection() {
           будет подключить отдельные ТСД для каждого из них.
         </p>
       )}
+      <fieldset className="physical-count-roles"><legend>Доступ нового ТСД к режимам</legend>
+        {(Object.keys(tsdModeLabels) as TsdMode[]).map(mode => <label className="physical-count-check" key={mode}><input type="checkbox" checked={allowedModes.includes(mode)} onChange={e => setAllowedModes(old => e.target.checked ? [...old, mode] : old.filter(v => v !== mode))} />{tsdModeLabels[mode]}</label>)}
+      </fieldset>
       <button
         type="button"
         className="button button--primary"
@@ -118,6 +126,9 @@ export function TsdPairingSection() {
                     ? `был в сети ${new Date(device.last_seen_at).toLocaleString('ru-RU')}`
                     : 'ещё не выходил в сеть'}
                 </div>
+                <fieldset className="physical-count-roles"><legend>Доступ к режимам</legend>
+                  {(Object.keys(tsdModeLabels) as TsdMode[]).map(mode => <label className="physical-count-check" key={mode}><input type="checkbox" disabled={modes.isPending} checked={(device.allowed_modes || ['shipment']).includes(mode)} onChange={e => modes.mutate({ id: device.id, values: e.target.checked ? [...(device.allowed_modes || ['shipment']), mode] : (device.allowed_modes || ['shipment']).filter(v => v !== mode) })} />{tsdModeLabels[mode]}</label>)}
+                </fieldset>
               </div>
                 <button
                   type="button"
@@ -131,6 +142,7 @@ export function TsdPairingSection() {
           ))}
         </div>
       ) : <p className="hint mt-12">Нет подключённых ТСД.</p>}
+      {modes.error && <p role="alert" className="alert alert--error">Не удалось изменить доступ ТСД к режимам.</p>}
     </section>
   )
 }
