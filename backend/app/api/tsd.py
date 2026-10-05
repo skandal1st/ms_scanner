@@ -121,6 +121,7 @@ class TsdOrderItem(BaseModel):
     shipment_count: Optional[int] = None
     retail_sale_count: int = 0
     in_work: bool = False
+    active_on_this_device: bool = False
 
 
 class TsdOrderShipments(BaseModel):
@@ -416,6 +417,8 @@ async def list_tsd_orders(
     ))).scalars().all() if local_docs else []
     active_docs = {session.document_id for session in sessions} | set(scans)
     work_orders = {doc.moysklad_customer_order_id for doc in local_docs if doc.id in active_docs}
+    own_docs = {session.document_id for session in sessions if session.device_id == device.id}
+    own_orders = {doc.moysklad_customer_order_id for doc in local_docs if doc.id in own_docs}
     await db.commit()
     return [TsdOrderItem(
         moysklad_id=row["id"], name=row.get("name") or "Без номера",
@@ -424,6 +427,7 @@ async def list_tsd_orders(
         shipment_count=customer_order_direct_shipment_count(row),
         retail_sale_count=len(customer_order_links(row, "retaildemand")),
         in_work=row["id"] in work_orders,
+        active_on_this_device=row["id"] in own_orders,
     ) for row in rows]
 
 
@@ -566,7 +570,7 @@ async def list_tsd_documents(
 
 
 async def _owned_tsd_document(
-    db: AsyncSession, device: TsdDevice, document_id: UUID
+    db: AsyncSession, device: TsdDevice, document_id: UUID, require_session: bool = True
 ) -> Document:
     require_tsd_mode(device, 'shipment')
     _, workplace, profile = await _device_scope(db, device)
@@ -585,6 +589,13 @@ async def _owned_tsd_document(
         raise HTTPException(404, "Отгрузка недоступна на этом рабочем месте")
     if (getattr(doc, 'upd_meta', None) or {}).get('superseded_by_document_id'):
         raise HTTPException(409, 'Марки перенесены в действующую отгрузку. Откройте её заново из заказа покупателя.')
+    if require_session:
+        session = (await db.execute(select(TsdDocumentSession).where(
+            TsdDocumentSession.device_id == device.id, TsdDocumentSession.document_id == doc.id,
+            TsdDocumentSession.status == 'active',
+        ).with_for_update())).scalar_one_or_none()
+        if not session:
+            raise HTTPException(409, 'Сборка не открыта на этом ТСД. Выберите отгрузку снова.')
     return doc
 
 
@@ -897,6 +908,23 @@ async def complete_tsd_session(
         "tsd.session.completed", device_id=str(device.id), document_id=str(doc.id)
     )
     return {"status": "completed", "document_id": str(doc.id)}
+
+
+@router.post('/documents/{document_id}/release')
+async def release_tsd_session(document_id: UUID, device: TsdDevice = Depends(get_shipping_device),
+                              db: AsyncSession = Depends(get_db)):
+    doc = await _owned_tsd_document(db, device, document_id, require_session=False)
+    await lock_ms_document(db, device.user_id, DocumentKind.demand, doc.moysklad_id)
+    sessions = (await db.execute(select(TsdDocumentSession).where(
+        TsdDocumentSession.device_id == device.id, TsdDocumentSession.document_id == doc.id,
+        TsdDocumentSession.status == 'active',
+    ).with_for_update())).scalars().all()
+    for session in sessions:
+        session.status = 'released'
+        session.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    logger.info('tsd.session.released', device_id=str(device.id), document_id=str(doc.id), sessions=len(sessions))
+    return {'status': 'released', 'document_id': str(doc.id)}
 
 
 @router.get("/devices", response_model=list[TsdDeviceRow])

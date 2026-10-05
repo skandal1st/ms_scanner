@@ -916,6 +916,7 @@ export interface TsdDocumentDetail {
 }
 
 export interface TsdOrderItem {
+  active_on_this_device?: boolean
   state_color?: number | null
   moysklad_id: string
   name: string
@@ -963,6 +964,7 @@ export const tsdApi = {
   deleteScan: (id: string, scanId: string) =>
     tsdClient.delete<Scan>(`/tsd/documents/${id}/scans/${scanId}`),
   complete: (id: string) => tsdClient.post(`/tsd/documents/${id}/complete`),
+  release: (id: string) => tsdClient.post(`/tsd/documents/${id}/release`),
   packMode: (id: string, scanId: string, unpack: boolean) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/pack-mode`, { unpack }),
 }
