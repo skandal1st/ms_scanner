@@ -970,8 +970,11 @@ html, body, #root { height: 100%; }
 .physical-count-roles { border: 1px solid var(--border, #dbe3ee); border-radius: 8px; margin: 12px 0; padding: 8px 12px; }
 .physical-count-setup { display: grid; gap: 14px; max-width: 680px; }
 .physical-count .tsd-scan-dock { position: sticky; top: 0; z-index: 20; background: var(--surface, #fff); }
-.physical-count-manual { display: flex; align-items: end; gap: 8px; margin: 12px 0; }
-.physical-count-manual input { max-width: 150px; }
+.physical-count-manual { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 8px; margin: 12px 0; }
+.physical-count-manual > strong { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.physical-count .physical-count-manual .field { margin: 0; min-width: 0; }
+.physical-count-manual input { width: 100%; min-width: 0; }
+.physical-count-manual > button { max-width: 130px; }
 .physical-count-observation { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid #dbe3ee; border-radius: 8px; }
 .physical-count-observation code { overflow-wrap: anywhere; }
 .physical-count .tsd-order { width: 100%; }

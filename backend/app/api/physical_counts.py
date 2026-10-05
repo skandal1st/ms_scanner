@@ -15,7 +15,8 @@ from sqlalchemy import select, func
 from app.api.deps import get_current_user, get_active_organization_profile
 from app.api.tsd import get_tsd_device, _device_scope, _ms_for_user, require_tsd_mode
 from app.db.session import get_db
-from app.db.models import Document, DocumentKind, PhysicalCountSession as Session, PhysicalCountScan as Scan
+from app.db.models import (Document, DocumentKind, OrganizationProfile, PhysicalCountQuantity as Quantity,
+                           PhysicalCountSession as Session, PhysicalCountScan as Scan)
 from app.services.physical_counts import acceptance_plan, identify_count_scan
 
 router = APIRouter(tags=['physical-counts'])
@@ -53,7 +54,7 @@ def accessible(session, scope):
 async def owned(db, session_id, scope, lock=False):
     query = select(Session).where(Session.id == session_id)
     if lock:
-        query = query.with_for_update()
+        query = query.with_for_update().execution_options(populate_existing=True)
     session = (await db.execute(query)).scalar_one_or_none()
     if not session or not accessible(session, scope):
         raise HTTPException(404, 'Сессия сверки не найдена')
@@ -69,6 +70,11 @@ def summary(session):
 
 
 async def progress(db, session):
+    if (session.settings or {}).get('count_method') == 'quantity':
+        entries = (await db.execute(select(Quantity).where(Quantity.session_id == session.id)
+            .distinct(Quantity.product_key).order_by(Quantity.product_key, Quantity.revision.desc()))).scalars().all()
+        return {**summary(session), 'counts': {v.product_key: float(v.quantity) for v in entries},
+                'revisions': {v.product_key: v.revision for v in entries}, 'scans': []}
     totals = (await db.execute(select(Scan.product_key, func.sum(Scan.quantity)).where(
         Scan.session_id == session.id).group_by(Scan.product_key))).all()
     recent = (await db.execute(select(Scan).where(Scan.session_id == session.id).order_by(
@@ -82,7 +88,8 @@ class CreateRequest(BaseModel):
     mode: Literal['acceptance', 'inventory']
     document_id: UUID | None = None
     store_id: UUID | None = None
-    include_state_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    include_state_ids: list[UUID] | None = Field(default=None, max_length=100)
+    count_method: Literal['scan', 'quantity'] = 'scan'
 
 
 class ScanRequest(BaseModel):
@@ -95,6 +102,17 @@ class ScanRequest(BaseModel):
 
 class BrandRequest(BaseModel):
     brand: str = Field(min_length=1, max_length=1000)
+
+
+class InventorySettingsRequest(BaseModel):
+    include_state_ids: list[UUID] = Field(default_factory=list, max_length=100)
+
+
+class QuantityRequest(BaseModel):
+    product_key: str = Field(min_length=1, max_length=128)
+    quantity: Decimal = Field(ge=0, le=1000000, decimal_places=3)
+    revision: int = Field(default=0, ge=0)
+    request_id: UUID
 
 
 async def list_sessions(mode: Literal['acceptance', 'inventory'], document_id: UUID | None = None,
@@ -119,7 +137,8 @@ async def options(scope=Depends(terminal_scope), db=Depends(get_db)):
             response = await ms._request_with_retry(client, 'GET', f'{ms.base_url}/entity/demand/metadata')
             response.raise_for_status()
             states = response.json().get('states', [])
-        return {'stores': stores, 'states': [{'id': v['id'], 'name': v['name']} for v in states]}
+        return {'stores': stores, 'states': [{'id': v['id'], 'name': v['name']} for v in states],
+                'default_include_state_ids': getattr(scope[1], 'inventory_include_state_ids', None) or []}
     except httpx.HTTPError as exc:
         raise HTTPException(502, 'Не удалось загрузить склады и статусы отгрузок из МойСклада') from exc
 
@@ -141,6 +160,8 @@ async def acceptances(scope=Depends(terminal_scope), db=Depends(get_db)):
 
 async def create_session(body: CreateRequest, scope=Depends(terminal_scope), db=Depends(get_db)):
     authorize_mode(scope, body.mode)
+    if body.mode != 'inventory' and body.count_method == 'quantity':
+        raise HTTPException(400, 'Ввод фактического остатка доступен в инвентаризации')
     user, profile, workplace, _ = scope
     if body.mode == 'acceptance':
         # Document lock also serializes concurrent creation of a shared verification session.
@@ -178,7 +199,8 @@ async def create_session(body: CreateRequest, scope=Depends(terminal_scope), db=
             raise HTTPException(400, 'Выберите склад')
         available = await options(scope, db)
         store = next((v for v in available['stores'] if v['id'] == str(body.store_id)), None)
-        states = list(dict.fromkeys(str(v) for v in body.include_state_ids))
+        states = list(dict.fromkeys(str(v) for v in (body.include_state_ids if body.include_state_ids is not None
+            else available['default_include_state_ids'])))
         if not store or not set(states).issubset({v['id'] for v in available['states']}):
             raise HTTPException(400, 'Склад или статусы отгрузок недоступны')
         session = Session(user_id=user.id, organization_profile_id=profile.id,
@@ -186,6 +208,7 @@ async def create_session(body: CreateRequest, scope=Depends(terminal_scope), db=
             name=f'Инвентаризация · {store["name"]}', status='preparing', plan=[],
             settings={'store_id': str(body.store_id), 'store_name': store['name'],
                 'include_state_ids': states, 'all_organizations': True,
+                'count_method': body.count_method,
                 'included_states': [v for v in available['states'] if v['id'] in states]})
     db.add(session)
     await db.commit()
@@ -209,11 +232,63 @@ async def get_progress(session_id: UUID, scope=Depends(terminal_scope), db=Depen
     return await progress(db, await owned(db, session_id, scope))
 
 
+@router.put('/physical-counts/settings')
+async def save_inventory_settings(body: InventorySettingsRequest, scope=Depends(desktop_scope), db=Depends(get_db)):
+    available = await options(scope, db)
+    selected = list(dict.fromkeys(str(v) for v in body.include_state_ids))
+    if not set(selected).issubset({v['id'] for v in available['states']}):
+        raise HTTPException(400, 'Выбранный статус отгрузки недоступен. Обновите настройки.')
+    profile = (await db.execute(select(OrganizationProfile).where(OrganizationProfile.id == scope[1].id,
+        OrganizationProfile.user_id == scope[0].id).with_for_update())).scalar_one_or_none()
+    if not profile:
+        raise HTTPException(404, 'Юрлицо не найдено')
+    profile.inventory_include_state_ids = selected
+    await db.commit()
+    return {'include_state_ids': selected}
+
+
+async def set_quantity(session_id: UUID, body: QuantityRequest, scope=Depends(terminal_scope), db=Depends(get_db)):
+    session = await owned(db, session_id, scope, lock=True)
+    if session.mode != 'inventory' or session.settings.get('count_method') != 'quantity' or session.status != 'active':
+        raise HTTPException(409, 'Сессия не открыта для ввода фактического количества')
+    row = next((v for v in session.plan if v['key'] == body.product_key), None)
+    if not row:
+        raise HTTPException(400, 'Позиция отсутствует в плане инвентаризации')
+    previous = (await db.execute(select(Quantity).where(Quantity.session_id == session.id,
+        Quantity.request_id == body.request_id))).scalar_one_or_none()
+    if previous:
+        if previous.product_key != body.product_key or previous.quantity != body.quantity:
+            raise HTTPException(409, 'Идентификатор запроса уже использован для другого количества')
+        return await progress(db, session)
+    if row['folder_name'] in session.settings.get('reviewed_brands', []):
+        raise HTTPException(409, 'Сверка этого бренда уже завершена')
+    revision = (await db.execute(select(func.max(Quantity.revision)).where(Quantity.session_id == session.id,
+        Quantity.product_key == body.product_key))).scalar_one_or_none() or 0
+    if revision != body.revision:
+        raise HTTPException(409, 'Количество уже изменено другим пользователем. Обновите позицию и проверьте фактический остаток.')
+    db.add(Quantity(session_id=session.id, device_id=scope[3].id if scope[3] else None,
+        product_key=body.product_key, quantity=body.quantity, revision=revision + 1, request_id=body.request_id))
+    await db.flush()
+    result = await progress(db, session)
+    await db.commit()
+    return result
+
+
+router.add_api_route('/tsd/counts/{session_id}/quantity', set_quantity, methods=['PUT'])
+
+
+@router.put('/physical-counts/{session_id}/quantity')
+async def desktop_quantity(session_id: UUID, body: QuantityRequest, scope=Depends(desktop_scope), db=Depends(get_db)):
+    return await set_quantity(session_id, body, scope, db)
+
+
 @router.post('/tsd/counts/{session_id}/scans')
 async def scan(session_id: UUID, body: ScanRequest, scope=Depends(terminal_scope), db=Depends(get_db)):
     session = await owned(db, session_id, scope, lock=True)
     if session.status != 'active':
         raise HTTPException(409, 'Сессия сверки не открыта для сканирования')
+    if (session.settings or {}).get('count_method') == 'quantity':
+        raise HTTPException(409, 'Эта инвентаризация проводится вводом фактического количества, без сканирования')
     row, units, _, marked, code_hash = identify_count_scan(session.plan, body.code, body.product_key, body.quantity)
     if session.mode == 'inventory' and body.brand != row['folder_name']:
         raise HTTPException(400, 'Код относится к другому бренду. Выберите нужный бренд.')
@@ -258,6 +333,11 @@ async def complete_brand(session_id: UUID, body: BrandRequest, scope=Depends(ter
     session = await owned(db, session_id, scope, lock=True)
     if session.mode != 'inventory' or session.status != 'active' or not any(v['folder_name'] == body.brand for v in session.plan):
         raise HTTPException(400, 'Бренд недоступен для завершения сверки')
+    if session.settings.get('count_method') == 'quantity':
+        data = await progress(db, session)
+        missing = [v for v in session.plan if v['folder_name'] == body.brand and v['key'] not in data['counts']]
+        if missing:
+            raise HTTPException(409, f'Введите остаток для всех позиций бренда ({len(missing)} не заполнено). Для отсутствующих товаров укажите 0.')
     session.settings = {**session.settings, 'reviewed_brands': list(dict.fromkeys([
         *session.settings.get('reviewed_brands', []), body.brand]))}
     await db.commit()
@@ -287,10 +367,14 @@ async def export(session_id: UUID, scope=Depends(terminal_scope), db=Depends(get
         text = str(value or '')
         return "'" + text if text.lstrip().startswith(('=', '+', '-', '@')) else text
     for row in session.plan:
+        manual = session.settings.get('count_method') == 'quantity'
+        entered = row['key'] in data['counts']
         counted = data['counts'].get(row['key'], 0)
         reviewed = (session.mode == 'acceptance' and session.status == 'completed') or row['folder_name'] in session.settings.get('reviewed_brands', [])
+        if manual:
+            reviewed = entered
         writer.writerow([safe(row['folder_name']), safe(row.get('product_name')), safe(row.get('gtin') or ', '.join(row.get('gtins', []))),
-            row['base_qty'], row['shipment_qty'], row['expected_qty'], counted,
+            row['base_qty'], row['shipment_qty'], row['expected_qty'], counted if not manual or entered else '',
             counted - row['expected_qty'] if reviewed else '', 'Да' if reviewed else 'Нет'])
     return Response(output.getvalue().encode('utf-8-sig'), media_type='text/csv; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename="count-{session.id}.csv"'})
@@ -331,3 +415,19 @@ async def desktop_progress(session_id: UUID, scope=Depends(desktop_scope), db=De
 @router.get('/physical-counts/{session_id}/export')
 async def desktop_export(session_id: UUID, scope=Depends(desktop_scope), db=Depends(get_db)):
     return await export(session_id, scope, db)
+
+
+@router.post('/physical-counts/{session_id}/brands/complete')
+async def desktop_brand(session_id: UUID, body: BrandRequest, scope=Depends(desktop_scope), db=Depends(get_db)):
+    session = await owned(db, session_id, scope)
+    if session.settings.get('count_method') != 'quantity':
+        raise HTTPException(409, 'Завершение сканируемой сверки выполняется на ТСД')
+    return await complete_brand(session_id, body, scope, db)
+
+
+@router.post('/physical-counts/{session_id}/complete')
+async def desktop_complete(session_id: UUID, scope=Depends(desktop_scope), db=Depends(get_db)):
+    session = await owned(db, session_id, scope)
+    if session.settings.get('count_method') != 'quantity':
+        raise HTTPException(409, 'Завершение сканируемой сверки выполняется на ТСД')
+    return await complete(session_id, scope, db)

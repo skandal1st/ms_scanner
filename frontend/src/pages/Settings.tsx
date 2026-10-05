@@ -7,6 +7,7 @@ import { isWebSerialSupported } from '../lib/scannerMode'
 import { humanizeSerialOpenError } from '../hooks/useSerialScanner'
 import { OrganizationProfileSwitcher } from '../components/OrganizationProfileSwitcher'
 import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFiltersSettings'
+import { InventorySettings } from '../components/InventorySettings'
 import { WorkplaceScannerSettings } from '../components/WorkplaceScannerSettings'
 
 const TsdPairingSection = lazy(() =>
@@ -293,6 +294,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
           <TsdPairingSection />
         </Suspense>
         <CustomerOrderFiltersSettings />
+        <InventorySettings />
         <ScannerSection embedded={embedded} />
       </div>
     </div>

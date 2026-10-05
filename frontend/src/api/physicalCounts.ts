@@ -4,18 +4,20 @@ export interface CountRow { key: string; product_name: string; gtin?: string; gt
 export interface CountScan { id: string; device_id: string; code: string; product_key: string; quantity: number }
 export interface CountSummary {
   id: string; mode: CountMode; name: string; status: string; created_at: string; error_message?: string
-  settings: { store_name?: string; snapshot_at?: string; reviewed_brands?: string[]; included_states?: { id: string; name: string }[] }
+  settings: { count_method?: 'scan' | 'quantity'; store_name?: string; snapshot_at?: string; reviewed_brands?: string[]; included_states?: { id: string; name: string }[] }
 }
-export interface CountProgress extends CountSummary { counts: Record<string, number>; scans: CountScan[]; duplicate?: boolean; product_key?: string }
+export interface CountProgress extends CountSummary { counts: Record<string, number>; revisions?: Record<string, number>; scans: CountScan[]; duplicate?: boolean; product_key?: string }
 export interface CountDetail extends CountProgress { plan: CountRow[] }
-export interface CountCreate { mode: CountMode; document_id?: string; store_id?: string; include_state_ids?: string[] }
+export interface CountCreate { mode: CountMode; count_method?: 'scan' | 'quantity'; document_id?: string; store_id?: string; include_state_ids?: string[] }
 export function countApi(terminal: boolean) {
   const client = terminal ? tsdClient : api
   const root = terminal ? '/tsd/counts' : '/physical-counts'
   return {
     list: (mode: CountMode, document_id?: string) => client.get<CountSummary[]>(root, { params: { mode, document_id } }),
     create: (body: CountCreate) => client.post<CountSummary>(root, body),
-    options: () => client.get<{ stores: { id: string; name: string }[]; states: { id: string; name: string }[] }>(root + '/options'),
+    options: () => client.get<{ stores: { id: string; name: string }[]; states: { id: string; name: string }[]; default_include_state_ids: string[] }>(root + '/options'),
+    saveSettings: (include_state_ids: string[]) => client.put<{ include_state_ids: string[] }>('/physical-counts/settings', { include_state_ids }),
+    quantity: (id: string, product_key: string, quantity: number, revision: number, request_id: string) => client.put<CountProgress>(`${root}/${id}/quantity`, { product_key, quantity, revision, request_id }),
     acceptances: () => client.get<{ id: string; name: string; created_at: string; positions: number }[]>('/tsd/acceptances'),
     detail: (id: string) => client.get<CountDetail>(`${root}/${id}`),
     progress: (id: string) => client.get<CountProgress>(`${root}/${id}/progress`),

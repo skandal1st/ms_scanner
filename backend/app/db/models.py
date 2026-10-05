@@ -146,6 +146,7 @@ class OrganizationProfile(Base):
     cz_product_groups = Column(JSONB, nullable=False, default=list, server_default="[]")
     inventory_store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
     customer_order_filters = Column(JSONB, nullable=False, default=list, server_default="[]")
+    inventory_include_state_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -211,6 +212,21 @@ class PhysicalCountSession(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class PhysicalCountQuantity(Base):
+    """Immutable absolute quantity entries, including explicit zero counts."""
+    __tablename__ = 'physical_count_quantities'
+    __table_args__ = (UniqueConstraint('session_id', 'request_id', name='uq_count_quantity_request'),
+                     UniqueConstraint('session_id', 'product_key', 'revision', name='uq_count_quantity_revision'))
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey('physical_count_sessions.id', ondelete='CASCADE'), nullable=False, index=True)
+    device_id = Column(UUID(as_uuid=True), ForeignKey('tsd_devices.id'), nullable=True)
+    product_key = Column(String(128), nullable=False)
+    quantity = Column(Numeric(18, 3), nullable=False)
+    revision = Column(Integer, nullable=False)
+    request_id = Column(UUID(as_uuid=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class PhysicalCountScan(Base):

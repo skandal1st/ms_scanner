@@ -564,7 +564,7 @@ export function TsdPage() {
   if (!authorized) content = <TsdLogin onReady={ready} />
   else if (!context.data) content = <main className="tsd-shell"><p>{context.error ? apiMessage(context.error) : 'Загружаем доступные режимы…'}</p></main>
   else if (!mode || !allowed.includes(mode)) content = <main className="tsd-shell tsd-mode-menu"><header className="tsd-header"><div><h1>Выберите режим</h1><p>{context.data.workplace_name}</p></div><TsdConnection /></header>
-    {allowed.map(value => <button className="tsd-order" key={value} onClick={() => setMode(value)}><strong>{tsdModeLabels[value]}</strong><span>{value === 'shipment' ? 'Сборка заказов покупателей' : value === 'acceptance' ? 'Сверка позиций XML, загруженного на ПК' : 'Остатки склада и проверка по брендам'}</span></button>)}
+    {(Object.keys(tsdModeLabels) as TsdMode[]).map(value => <button className="tsd-order" key={value} disabled={!allowed.includes(value)} onClick={() => setMode(value)}><strong>{tsdModeLabels[value]}</strong><span>{!allowed.includes(value) ? 'Доступ включается в настройках этого ТСД' : value === 'shipment' ? 'Сборка заказов покупателей' : value === 'acceptance' ? 'Сверка позиций XML, загруженного на ПК' : 'Остатки склада и проверка по брендам'}</span></button>)}
     {!allowed.length && <p className="tsd-alert">Доступ к режимам отключён. Обратитесь к администратору.</p>}
   </main>
   else if (mode !== 'shipment') content = <PhysicalCounts key={`${context.data.device_id}:${mode}`} mode={mode} terminal deviceId={context.data.device_id} onBack={() => setMode(null)} />
