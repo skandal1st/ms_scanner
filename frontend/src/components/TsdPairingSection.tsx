@@ -58,7 +58,7 @@ export function TsdPairingSection() {
         </div>
         <div>
           <h3>Скачать приложение для ТСД</h3>
-          <p className="hint">Отсканируйте QR камерой терминала, скачайте APK и установите его. Тестовая версия 0.1.1.</p>
+          <p className="hint">Отсканируйте QR камерой терминала, скачайте APK и установите его. Тестовая версия 0.1.2.</p>
           <a className="button button--primary" href={TSD_APK_PATH} download>Скачать APK</a>
           <p className="hint mt-8">После установки откройте «Скандата ТСД» и отсканируйте QR подключения ниже. Привязка Chrome/PWA в APK не переносится.</p>
           <a href="/tsd" target="_blank" rel="noopener noreferrer">Открыть PWA в браузере</a>
