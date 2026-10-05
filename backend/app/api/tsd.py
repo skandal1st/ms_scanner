@@ -666,6 +666,11 @@ async def select_tsd_document(
         if body.customer_order_id:
             doc.moysklad_customer_order_id = order_id
             doc.customer_order_name = order_name
+    await db.commit()
+    from app.services.collection_start import start_collection
+    await start_collection(db, doc, ms)
+    # Status steps commit independently; reacquire the find-or-create lock for sessions.
+    await lock_ms_document(db, device.user_id, DocumentKind.demand, body.moysklad_id)
     session = (
         await db.execute(
             select(TsdDocumentSession).where(

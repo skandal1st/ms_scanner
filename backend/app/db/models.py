@@ -147,6 +147,8 @@ class OrganizationProfile(Base):
     inventory_store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
     customer_order_filters = Column(JSONB, nullable=False, default=list, server_default="[]")
     inventory_include_state_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
+    shipment_start_state_id = Column(UUID(as_uuid=True), nullable=True)
+    customer_order_start_state_id = Column(UUID(as_uuid=True), nullable=True)
     shipment_sent_state_id = Column(UUID(as_uuid=True), nullable=True)
     customer_order_sent_state_id = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

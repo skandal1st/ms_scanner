@@ -116,8 +116,8 @@ async def shipment_status_settings(current_user: User = Depends(get_current_user
         order_states = await ms.get_customer_order_states()
     except Exception as exc:
         raise HTTPException(502, 'Не удалось загрузить статусы отгрузок из МойСклада. Повторите попытку.') from exc
-    return {'state_id': profile.shipment_sent_state_id, 'states': states,
-            'order_state_id': profile.customer_order_sent_state_id, 'order_states': order_states}
+    return {'state_id': profile.shipment_start_state_id, 'states': states,
+            'order_state_id': profile.customer_order_start_state_id, 'order_states': order_states}
 
 
 @router.put('/shipment-status-settings')
@@ -130,11 +130,11 @@ async def save_shipment_status(body: ShipmentStateRequest, current_user: User = 
             raise HTTPException(400, 'Статус отгрузки недоступен. Обновите список статусов.')
         if body.order_state_id and str(body.order_state_id) not in {v['id'] for v in available['order_states']}:
             raise HTTPException(400, 'Статус заказа покупателя недоступен. Обновите список статусов.')
-    profile.shipment_sent_state_id = body.state_id
+    profile.shipment_start_state_id = body.state_id
     if 'order_state_id' in body.model_fields_set:
-        profile.customer_order_sent_state_id = body.order_state_id
+        profile.customer_order_start_state_id = body.order_state_id
     await db.commit()
-    return {'state_id': body.state_id, 'order_state_id': getattr(profile, 'customer_order_sent_state_id', None)}
+    return {'state_id': body.state_id, 'order_state_id': getattr(profile, 'customer_order_start_state_id', None)}
 
 
 @router.put("/order-filters", response_model=list[CustomerOrderFilter])

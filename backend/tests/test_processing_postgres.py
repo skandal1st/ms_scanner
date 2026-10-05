@@ -123,26 +123,34 @@ async def test_worker_failure_returns_draft_with_a_visible_reason(monkeypatch, f
             assert "Неверная марка" in saved.error_message
     await engine.dispose()
 
-async def test_shipment_state_snapshot_is_from_document_profile(monkeypatch):
-    from app.db.models import OrganizationProfile, DocumentKind
+
+async def test_worker_transfer_ignores_legacy_status_targets(monkeypatch):
+    from unittest.mock import create_autospec
+    from sqlalchemy import select
+    from app.core import security
+    from app.services import moysklad
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(session, 'engine', engine)
+    monkeypatch.setattr(session, 'AsyncSessionLocal', factory)
     user, doc = await seed(factory)
-    state = uuid4()
-    async with factory() as db:
-        profile = OrganizationProfile(id=uuid4(), user_id=user.id, name='Юрлицо документа', shipment_sent_state_id=state, customer_order_sent_state_id=state)
-        other = OrganizationProfile(id=uuid4(), user_id=user.id, name='Другое', is_default=True, shipment_sent_state_id=uuid4())
-        db.add_all([profile, other])
-        saved = await db.get(Document, doc.id)
-        saved.kind = DocumentKind.demand
-        saved.organization_profile_id = profile.id
-        await db.commit()
-    monkeypatch.setattr(documents, '_get_ms_service', AsyncMock(return_value=SimpleNamespace(get_document=AsyncMock(return_value={}))))
-    monkeypatch.setattr(tasks.process_document_task, 'delay', lambda *args: None)
-    async with factory() as db:
-        await documents.process_document(doc.id, user, db)
-    async with factory() as db:
-        saved = await db.get(Document, doc.id)
-        assert saved.upd_meta['shipment_sent_state_id'] == str(state)
-        assert saved.upd_meta['customer_order_sent_state_id'] == str(state)
-    await engine.dispose()
+    try:
+        async with factory() as db:
+            saved = await db.get(Document, doc.id)
+            saved.status = DocumentStatus.processing
+            saved.upd_meta = {'shipment_sent_state_id': str(uuid4()), 'customer_order_sent_state_id': str(uuid4())}
+            scan = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalar_one()
+            scan.moysklad_product_id = 'p1'
+            await db.commit()
+        ms = create_autospec(moysklad.MoySkladService, instance=True)
+        ms.update_document.return_value = {}
+        monkeypatch.setattr(security, 'decrypt_token', lambda token: 'fake')
+        monkeypatch.setattr(moysklad, 'MoySkladService', lambda token: ms)
+        await tasks._process_document_async(str(doc.id), str(user.id))
+        ms.update_document.assert_awaited_once()
+        ms.change_collection_state.assert_not_awaited()
+        assert not {'shipment_state_id', 'order_state_id', 'customer_order_id'} & ms.update_document.call_args.kwargs.keys()
+        async with factory() as db:
+            assert (await db.get(Document, doc.id)).status == DocumentStatus.accepted
+    finally:
+        await engine.dispose()

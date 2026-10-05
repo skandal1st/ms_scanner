@@ -444,6 +444,7 @@ export const documentsApi = {
   resolve: (moysklad_id: string, kind: DocumentKind, customer_order_id?: string) =>
     api.post<Document>('/documents/resolve', { moysklad_id, kind, customer_order_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
+  startCollection: (id: string) => api.post(`/documents/${id}/start-collection`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   verify: (id: string) =>
     api.post<{ status: string; document_id: string; count: number }>(

@@ -725,16 +725,6 @@ async def process_document(
     ))).scalar_one()
     if not count:
         raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
-    if doc.kind == DocumentKind.demand:
-        from app.db.models import OrganizationProfile
-        profile = (await db.execute(select(OrganizationProfile).where(
-            OrganizationProfile.id == doc.organization_profile_id,
-            OrganizationProfile.user_id == current_user.id,
-        ))).scalar_one_or_none()
-        target = profile.shipment_sent_state_id if profile else None
-        order_target = profile.customer_order_sent_state_id if profile else None
-        doc.upd_meta = {**(doc.upd_meta or {}), 'shipment_sent_state_id': str(target) if target else None,
-                        'customer_order_sent_state_id': str(order_target) if order_target else None}
     doc.status = DocumentStatus.processing
     doc.error_message = None
     doc.processing_progress = {"sent": 0, "total": count, "stage": "preparing"}
@@ -758,3 +748,18 @@ async def accept_document_alias(
 ):
     """Backward-совместимый алиас → /process."""
     return await process_document(document_id, current_user, db)
+
+
+@router.post('/{document_id}/start-collection')
+async def begin_collection(document_id: UUID, current_user: User = Depends(get_current_user),
+                           db: AsyncSession = Depends(get_db)):
+    doc = (await db.execute(select(Document).where(
+        Document.id == document_id, Document.user_id == current_user.id,
+    ))).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(404, 'Документ не найден')
+    if doc.kind != DocumentKind.demand or not doc.moysklad_id:
+        return {'status': 'started'}
+    from app.services.collection_start import start_collection
+    await start_collection(db, doc, await _get_ms_service(current_user, db))
+    return {'status': 'started'}

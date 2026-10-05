@@ -20,6 +20,8 @@ pytestmark = pytest.mark.skipif(os.getenv("AUDIT_POSTGRES") != "1", reason="requ
 
 async def context(monkeypatch):
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    from app.db import session
+    monkeypatch.setattr(session, 'engine', engine)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as db:
         user = User(id=uuid4(), email=f"{uuid4()}@example.test", password_hash="")
@@ -80,6 +82,25 @@ async def test_two_terminals_and_desktop_first_open_reuse_one_document(monkeypat
     async with factory() as db:
         assert (await db.execute(select(func.count()).select_from(Document).where(Document.moysklad_id == ms_id))).scalar_one() == 1
     await engine.dispose()
+
+
+async def test_repeated_terminal_open_with_statuses_reuses_session(monkeypatch):
+    engine, factory, user, profile, devices, ms_id = await context(monkeypatch)
+    state = uuid4()
+    ms = tsd._ms_for_user.return_value
+    ms.get_shipment_states = AsyncMock(return_value=[{'id': str(state)}])
+    ms.change_collection_state = AsyncMock()
+    try:
+        async with factory() as db:
+            saved = await db.get(OrganizationProfile, profile.id)
+            saved.shipment_start_state_id = state
+            await db.commit()
+        results = await asyncio.wait_for(asyncio.gather(
+            open_terminal(factory, devices[0], ms_id), open_terminal(factory, devices[0], ms_id)), timeout=10)
+        assert results[0].session_id == results[1].session_id
+        ms.change_collection_state.assert_awaited_once_with('demand', ms_id, str(state))
+    finally:
+        await engine.dispose()
 
 
 @pytest.mark.skipif(os.getenv("AUDIT_REDIS") != "1", reason="requires local Redis")

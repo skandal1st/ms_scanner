@@ -115,6 +115,8 @@ async def test_new_session_uses_selected_demand_plan_and_keeps_parent_order(monk
     db.add = added.append
     db.flush = flush
     db.refresh = refresh
+    import app.services.collection_start as collection
+    monkeypatch.setattr(collection, 'start_collection', AsyncMock())
     result = await tsd.select_tsd_document(tsd.SelectDocumentRequest(moysklad_id="ship", customer_order_id=order_id), device, db)
     assert result.plan[0]["expected_qty"] == 2
     assert result.customer_order_id == str(order_id) and result.customer_order_name == "42"
@@ -139,6 +141,8 @@ async def test_tsd_opens_shipment_linked_through_invoice(monkeypatch):
     async def refresh(obj):
         obj.id = uuid4()
     db.refresh = refresh
+    import app.services.collection_start as collection
+    monkeypatch.setattr(collection, 'start_collection', AsyncMock())
     result = await tsd.select_tsd_document(tsd.SelectDocumentRequest(moysklad_id="ship", customer_order_id=oid), device, db)
     assert result.customer_order_name == "27370" and result.customer_order_id == str(oid)
     assert result.plan[0]["expected_qty"] == 2

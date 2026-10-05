@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import HTTPException
 from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 
 from app.db.models import Document, DocumentStatus
 
@@ -29,14 +30,24 @@ async def lock_ms_document(db, user_id, kind, moysklad_id):
 
 
 @asynccontextmanager
-async def processing_lock(key):
+async def processing_lock(key, wait=False):
     # Session-level PostgreSQL lock survives per-batch commits and disappears on
     # worker connection loss. Always unlock before returning a pooled connection.
     from app.db.session import engine
     async with engine.connect() as connection:
-        acquired = (await connection.execute(
-            text("SELECT pg_try_advisory_lock(hashtextextended(:key, 0))"), {"key": str(key)}
-        )).scalar_one()
+        if wait:
+            await connection.execute(text("SET LOCAL lock_timeout = '20s'"))
+            try:
+                await connection.execute(text("SELECT pg_advisory_lock(hashtextextended(:key, 0))"), {"key": str(key)})
+            except DBAPIError as exc:
+                if getattr(exc.orig, 'sqlstate', None) == '55P03':
+                    raise HTTPException(409, 'Отгрузка занята другой операцией. Повторите открытие через несколько секунд.') from exc
+                raise
+            acquired = True
+        else:
+            acquired = (await connection.execute(
+                text("SELECT pg_try_advisory_lock(hashtextextended(:key, 0))"), {"key": str(key)}
+            )).scalar_one()
         await connection.commit()
         try:
             yield acquired

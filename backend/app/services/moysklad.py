@@ -689,15 +689,22 @@ class MoySkladService:
             raise ValueError('Не удалось найти заказ покупателя по связанному счёту. Откройте отгрузку из заказа покупателя.')
         return next(iter(matches))
 
+    async def change_collection_state(self, kind: str, doc_id: str, state_id: str):
+        if kind not in ('demand', 'customerorder'):
+            raise ValueError('Смена статуса начала сборки доступна только для отгрузки и заказа')
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
+            response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/{kind}/{doc_id}',
+                json={'state': {'meta': {'href': f'{self.base_url}/entity/{kind}/metadata/states/{state_id}',
+                                        'type': 'state', 'mediaType': 'application/json'}}})
+            response.raise_for_status()
+        logger.info('moysklad.collection_state.changed', kind=kind, doc_id=doc_id, state_id=state_id)
+
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict],
         position_quantities: Optional[Dict[str, int]] = None,
         position_prices: Optional[Dict[str, Dict[str, Any]]] = None,
         description: Optional[str] = None,
         on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
-        shipment_state_id: Optional[str] = None,
-        order_state_id: Optional[str] = None,
-        customer_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Preserve existing positions; send all codes in bounded, resumable batches.
 
@@ -705,16 +712,6 @@ class MoySkladService:
         saved code before sending the remainder, including partially saved batches.
         """
         self._validate_kind(kind)
-        if order_state_id:
-            if kind != 'demand':
-                raise ValueError('Смена статуса заказа доступна только при отправке отгрузки')
-            if order_state_id not in {row['id'] for row in await self.get_customer_order_states()}:
-                raise ValueError('Выбранный статус заказа больше недоступен. Измените настройку и повторите отправку.')
-        if shipment_state_id:
-            if kind != 'demand':
-                raise ValueError('Автоматическая смена статуса доступна только для отгрузок')
-            if shipment_state_id not in {row['id'] for row in await self.get_shipment_states()}:
-                raise ValueError('Выбранный статус отгрузки больше недоступен. Измените настройку и повторите отправку.')
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
         groups = {}
         for scan in scans:
@@ -785,8 +782,6 @@ class MoySkladService:
                 response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/{doc_id}')
                 response.raise_for_status()
                 ensure_active_shipment(response.json())
-                if order_state_id:
-                    customer_order_id = await self.resolve_shipment_order(response.json(), customer_order_id)
             # Read before mutation: a failed code read also aborts safely.
             seen = set()
             if write_codes:
@@ -835,26 +830,6 @@ class MoySkladService:
                         await on_progress(sent, total)
                     logger.info("moysklad.tracking_batch.sent", kind=kind, doc_id=doc_id, sent=sent, total=total)
             logger.info("moysklad.update_document.ok", kind=kind, doc_id=doc_id, positions_sent=len(positions), codes_sent=sent)
-            if shipment_state_id:
-                try:
-                    state_response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/demand/{doc_id}',
-                        json={'state': {'meta': {'href': f'{self.base_url}/entity/demand/metadata/states/{shipment_state_id}',
-                                                'type': 'state', 'mediaType': 'application/json'}}})
-                    state_response.raise_for_status()
-                except httpx.HTTPError as exc:
-                    raise ValueError('Марки переданы в МойСклад, но смену статуса отгрузки не удалось подтвердить. Повторите отправку: уже сохранённые марки не будут добавлены повторно.') from exc
-                logger.info('moysklad.shipment_state.changed', doc_id=doc_id, state_id=shipment_state_id)
-            if order_state_id and customer_order_id:
-                try:
-                    order_response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/customerorder/{customer_order_id}',
-                        json={'state': {'meta': {'href': f'{self.base_url}/entity/customerorder/metadata/states/{order_state_id}',
-                                                'type': 'state', 'mediaType': 'application/json'}}})
-                    order_response.raise_for_status()
-                except httpx.HTTPError as exc:
-                    raise ValueError('Марки переданы, но смену статуса заказа покупателя не удалось подтвердить. Проверьте право обновления заказов: обновите XML решения и переустановите его в МойСкладе. Повторная отправка не добавит сохранённые марки повторно.') from exc
-                logger.info('moysklad.customer_order_state.changed', doc_id=doc_id, order_id=customer_order_id, state_id=order_state_id)
-            elif order_state_id:
-                logger.info('moysklad.customer_order_state.skipped', doc_id=doc_id, reason='Отгрузка без связанного заказа')
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:

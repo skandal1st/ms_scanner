@@ -20,8 +20,8 @@ export function ShipmentStatusSettings() {
   const error = settings.error || save.error
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
   return <section className="section">
-    <h2>Статусы после передачи в МойСклад</h2>
-    <p className="hint">После записи всех марок можно изменить статус отгрузки и связанного заказа покупателя. Выбор отдельный для каждого документа и юрлица, применяется при отправке с ПК и ТСД. Если у отгрузки нет связанного заказа, меняется только её статус.</p>
+    <h2>Статусы при начале сборки</h2>
+    <p className="hint">При открытии отгрузки для сборки можно изменить статус отгрузки и связанного заказа покупателя. Выбор отдельный для каждого документа и юрлица, применяется при открытии на ПК и ТСД. Повторное открытие и подключение второго ТСД не возвращают статус назад. Если у отгрузки нет связанного заказа, меняется только её статус.</p>
     <p className="hint">Для смены статуса заказа покупателя решению нужно право обновления заказов. Обновите XML решения в кабинете МойСклада и переустановите решение.</p>
     {error && <p role="alert">{typeof detail === 'string' ? detail : 'Не удалось загрузить или сохранить настройку.'} <button type="button" className="button button--sm" onClick={() => { save.reset(); void settings.refetch() }}>Повторить</button></p>}
     <div className="order-filters-settings__form">{fields.map(field => {

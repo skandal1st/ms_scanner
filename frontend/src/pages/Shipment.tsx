@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
@@ -57,6 +57,8 @@ export function ShipmentPage({
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
+  const openingRef = useRef(false)
+  const [opening, setOpening] = useState(false)
   const {
     send: sendToMs,
     sending,
@@ -156,8 +158,7 @@ export function ShipmentPage({
       .then(({ data }) => {
         if (cancelled) return
         setOrganizationProfileId(data.organization_profile_id)
-        setPendingDoc(data)
-        setDocument(data)
+        void handleSelectDoc(data)
       })
       .catch(() => {})
     return () => {
@@ -175,9 +176,23 @@ export function ShipmentPage({
     }
   }, [done, embedded, onSent])
 
-  const handleSelectDoc = (doc: Document) => {
-    setPendingDoc(doc)
-    setDocument(doc)
+  const handleSelectDoc = async (doc: Document) => {
+    if (openingRef.current) return
+    openingRef.current = true
+    setOpening(true)
+    setPendingDoc(null)
+    reset()
+    try {
+      await documentsApi.startCollection(doc.id)
+      setPendingDoc(doc)
+      setDocument(doc)
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      modal.alert(detail || 'Не удалось начать сборку. Откройте отгрузку повторно.', { variant: 'error' })
+    } finally {
+      openingRef.current = false
+      setOpening(false)
+    }
   }
 
   // Отвязаться от текущей отгрузки → вернуться к выбору (без F5). Сканы остаются в БД.
@@ -306,8 +321,11 @@ export function ShipmentPage({
         <div className="acc-left" style={{ width: leftWidth }}>
           {!embedded && (
             <>
-              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={sending || bulkBusy || document?.status === 'processing'} />
-              <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || sending || bulkBusy || document?.status === 'processing'} />
+              <fieldset disabled={opening} style={{border: 0, padding: 0, margin: 0, minWidth: 0}}>
+                <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
+              </fieldset>
+              {opening && <p role="status" className="hint">Открываем отгрузку и применяем статусы…</p>}
             </>
           )}
           <ManualProductTargetBar />
