@@ -769,6 +769,12 @@ export interface OrganizationProfile {
 }
 
 export interface CustomerOrderFilter {
+  marking_values?: { id: string; name: string }[]
+  marking_attribute_id?: string | null
+  marking_dictionary_id?: string | null
+  delivery_values?: { id: string; name: string }[]
+  delivery_attribute_id?: string | null
+  delivery_dictionary_id?: string | null
   states: { id: string; name: string }[]
   projects: { id: string; name: string }[]
   sale_values: { id: string; name: string }[]
@@ -783,6 +789,12 @@ export interface CustomerOrderFilter {
 }
 
 export interface CustomerOrderFilterOptions {
+  marking_values: { id: string; name: string }[]
+  marking_attribute_id: string | null
+  marking_dictionary_id: string | null
+  delivery_values: { id: string; name: string }[]
+  delivery_attribute_id: string | null
+  delivery_dictionary_id: string | null
   states: { id: string; name: string }[]
   projects: { id: string; name: string }[]
   sale_values: { id: string; name: string }[]

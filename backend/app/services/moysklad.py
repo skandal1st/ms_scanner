@@ -255,7 +255,8 @@ class MoySkladService:
 
     async def get_customer_order_filter_options(self) -> dict:
         result = {"projects": [], "sale_values": [], "states": [], "sale_attribute_id": None,
-                  "sale_dictionary_id": None, "warnings": []}
+                  "sale_dictionary_id": None, "marking_values": [], "marking_attribute_id": None, "marking_dictionary_id": None,
+                  "delivery_values": [], "delivery_attribute_id": None, "delivery_dictionary_id": None, "warnings": []}
         async with httpx.AsyncClient(timeout=15) as client:
             async def dictionary(path):
                 rows, offset = [], 0
@@ -285,22 +286,22 @@ class MoySkladService:
                     raise
                 result["warnings"].append("Нет прав на просмотр статусов заказов покупателей в МойСкладе.")
             attrs = await dictionary("entity/customerorder/metadata/attributes")
-            matches = [row for row in attrs if (row.get("name") or "").strip().casefold() == "где продажа"]
-            if len(matches) != 1 or matches[0].get("type") != "customentity":
-                result["warnings"].append("В заказах покупателей нужно одно поле «Где продажа» типа «Пользовательский справочник».")
-                return result
-            attr = matches[0]
-            dictionary_id = self._id_from_href((attr.get("customEntityMeta") or {}).get("href", ""))
-            result["sale_attribute_id"] = attr["id"]
-            result["sale_dictionary_id"] = dictionary_id
-            try:
-                result["sale_values"] = [{"id": row["id"], "name": row["name"]}
-                                         for row in await dictionary(f"entity/customentity/{dictionary_id}")
-                                         if not row.get("archived")]
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code != 403:
-                    raise
-                result["warnings"].append("Нет прав на справочник «Где продажа». Обновите XML решения и переустановите его в МойСкладе.")
+            for prefix, title in (("sale", "Где продажа"), ("marking", "Маркировка"), ("delivery", "Тип доставки")):
+                matches = [row for row in attrs if (row.get("name") or "").strip().casefold() == title.casefold()]
+                if len(matches) != 1 or matches[0].get("type") != "customentity":
+                    result["warnings"].append(f"В заказах покупателей нужно одно поле «{title}» типа «Пользовательский справочник».")
+                    continue
+                attr = matches[0]
+                dictionary_id = self._id_from_href((attr.get("customEntityMeta") or {}).get("href", ""))
+                result[prefix + "_attribute_id"] = attr["id"]
+                result[prefix + "_dictionary_id"] = dictionary_id
+                try:
+                    result[prefix + "_values"] = [{"id": row["id"], "name": row["name"]}
+                        for row in await dictionary(f"entity/customentity/{dictionary_id}") if not row.get("archived")]
+                except httpx.HTTPStatusError as exc:
+                    if exc.response.status_code != 403:
+                        raise
+                    result["warnings"].append(f"Нет прав на справочник «{title}». Обновите XML решения и переустановите его в МойСкладе.")
         return result
 
     async def get_customer_order(self, order_id: str) -> dict:

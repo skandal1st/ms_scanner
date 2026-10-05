@@ -22,6 +22,12 @@ class CustomerOrderFilter(BaseModel):
     projects: list[FilterValue] = Field(default_factory=list, max_length=100)
     sale_values: list[FilterValue] = Field(default_factory=list, max_length=100)
     states: list[FilterValue] = Field(default_factory=list, max_length=100)
+    marking_attribute_id: Optional[UUID] = None
+    marking_dictionary_id: Optional[UUID] = None
+    marking_values: list[FilterValue] = Field(default_factory=list, max_length=100)
+    delivery_attribute_id: Optional[UUID] = None
+    delivery_dictionary_id: Optional[UUID] = None
+    delivery_values: list[FilterValue] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -45,7 +51,7 @@ class CustomerOrderFilter(BaseModel):
 
     @model_validator(mode="after")
     def validate_conditions(self):
-        for values in (self.projects, self.sale_values, self.states):
+        for values in (self.projects, self.sale_values, self.states, self.marking_values, self.delivery_values):
             if len({value.id for value in values}) != len(values):
                 raise ValueError("Значения фильтра не должны повторяться")
         # Explicit arrays take precedence over legacy scalar fields, including an empty array.
@@ -56,8 +62,12 @@ class CustomerOrderFilter(BaseModel):
         sale = (self.sale_attribute_id, self.sale_dictionary_id, self.sale_value_id)
         if any(sale) and not all(sale):
             raise ValueError("Выберите значение поля «Где продажа»")
-        if not self.project_id and not self.sale_value_id and not self.states:
-            raise ValueError("Выберите проект, значение поля «Где продажа» или статус заказа")
+        for prefix, title in (("marking", "Маркировка"), ("delivery", "Тип доставки")):
+            attr, dictionary, values = (getattr(self, prefix + suffix) for suffix in ('_attribute_id', '_dictionary_id', '_values'))
+            if bool(values) != bool(attr and dictionary) or bool(attr) != bool(dictionary):
+                raise ValueError(f"Выберите значение поля «{title}»")
+        if not any((self.projects, self.sale_values, self.states, self.marking_values, self.delivery_values)):
+            raise ValueError("Выберите хотя бы одно условие фильтра заказов")
         return self
 
 
@@ -96,4 +106,8 @@ def moysklad_order_filter_conditions(base_url: str, order_filter: dict) -> list[
     for sale_value in item.sale_values:
         conditions.append(f"{base_url}/entity/customerorder/metadata/attributes/{item.sale_attribute_id}="
                           f"{base_url}/entity/customentity/{item.sale_dictionary_id}/{sale_value.id}")
+    for prefix in ('marking', 'delivery'):
+        for value in getattr(item, prefix + '_values'):
+            conditions.append(f"{base_url}/entity/customerorder/metadata/attributes/{getattr(item, prefix + '_attribute_id')}="
+                              f"{base_url}/entity/customentity/{getattr(item, prefix + '_dictionary_id')}/{value.id}")
     return conditions

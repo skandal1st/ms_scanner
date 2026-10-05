@@ -66,6 +66,7 @@ def test_presets_validate_names_conditions_and_unique_ids():
 async def test_saved_presets_are_shared_with_tsd_but_isolated_by_profile(monkeypatch):
     item = multi_preset()
     item["states"] = [{"id": str(uuid4()), "name": "Новый"}]
+    item.update(marking_attribute_id=str(uuid4()), marking_dictionary_id=str(uuid4()), marking_values=[{"id": str(uuid4()), "name": "Без вывода"}], delivery_attribute_id=str(uuid4()), delivery_dictionary_id=str(uuid4()), delivery_values=[{"id": str(uuid4()), "name": "Водитель"}])
     profile = NS(customer_order_filters=[])
     db = NS(commit=AsyncMock())
     saved = await organization_profiles.save_order_filters(CustomerOrderFilterList(filters=[item]), profile, db)
@@ -111,6 +112,7 @@ async def test_combined_filter_is_applied_before_pagination_and_preserves_search
 async def test_pc_and_tsd_pass_identical_saved_conditions(monkeypatch):
     item = multi_preset()
     item["states"] = [{"id": str(uuid4()), "name": "Новый"}]
+    item.update(marking_attribute_id=str(uuid4()), marking_dictionary_id=str(uuid4()), marking_values=[{"id": str(uuid4()), "name": "Без вывода"}], delivery_attribute_id=str(uuid4()), delivery_dictionary_id=str(uuid4()), delivery_values=[{"id": str(uuid4()), "name": "Водитель"}])
     device, _, profile, ms, db = context(monkeypatch, ([],))
     profile.customer_order_filters = [item]
     ms.get_customer_orders.return_value = []
@@ -133,7 +135,7 @@ async def test_options_report_missing_vendor_permissions_without_empty_success()
         return httpx.Response(403, json={"errors": []}, request=httpx.Request(method, url))
     ms._request_with_retry = request
     result = await ms.get_customer_order_filter_options()
-    assert len(result["warnings"]) == 3 and result["sale_attribute_id"] == item["sale_attribute_id"]
+    assert len(result["warnings"]) == 5 and result["sale_attribute_id"] == item["sale_attribute_id"]
 
 
 async def test_options_load_full_dictionaries_and_skip_archived_values():
@@ -153,7 +155,7 @@ async def test_options_load_full_dictionaries_and_skip_archived_values():
     ms._request_with_retry = request
     result = await ms.get_customer_order_filter_options()
     assert len(result["projects"]) == 1000 and result["sale_values"] == [{"id": item["sale_value_id"], "name": "Питер"}]
-    assert result["warnings"] == []
+    assert len(result["warnings"]) == 2
     assert result["states"] == [{"id": "state-id", "name": "Новый"}]
 
 
@@ -167,3 +169,30 @@ def test_status_only_filters_and_legacy_defaults():
         CustomerOrderFilter.model_validate({**item, "states": [state, state]})
     with pytest.raises(ValidationError):
         CustomerOrderFilter.model_validate({**item, "states": []})
+
+@pytest.mark.parametrize('prefix', ['marking', 'delivery'])
+def test_custom_fields_only_and_incomplete_metadata(prefix):
+    item = dict(id=str(uuid4()), name='Новый фильтр', **{
+        prefix + '_attribute_id': str(uuid4()), prefix + '_dictionary_id': str(uuid4()),
+        prefix + '_values': [{'id': str(uuid4()), 'name': 'Первый'}, {'id': str(uuid4()), 'name': 'Второй'}]})
+    assert moysklad_order_filter_conditions('https://ms', item) == [
+        f"https://ms/entity/customerorder/metadata/attributes/{item[prefix + '_attribute_id']}=https://ms/entity/customentity/{item[prefix + '_dictionary_id']}/{v['id']}"
+        for v in item[prefix + '_values']]
+    for patch in ({prefix + '_dictionary_id': None}, {prefix + '_values': []},
+                  {prefix + '_values': [item[prefix + '_values'][0]] * 2}):
+        with pytest.raises(ValidationError):
+            CustomerOrderFilter.model_validate({**item, **patch})
+
+async def test_all_custom_dictionaries_load_independently():
+    ms = MoySkladService('fake')
+    attrs = [{'id': str(uuid4()), 'name': name, 'type': 'customentity', 'customEntityMeta': {'href': f'https://ms/custom/{uuid4()}'}}
+             for name in ('Где продажа', 'Маркировка', 'Тип доставки')]
+    async def request(client, method, url, **kwargs):
+        rows = attrs if url.endswith('metadata/attributes') else [] if url.endswith('project') else [{'id': str(uuid4()), 'name': 'Значение'}]
+        return httpx.Response(200, json={'rows': rows, 'states': []}, request=httpx.Request(method, url))
+    ms._request_with_retry = request
+    result = await ms.get_customer_order_filter_options()
+    assert not result['warnings']
+    for prefix, attr in zip(('sale', 'marking', 'delivery'), attrs):
+        assert result[prefix + '_attribute_id'] == attr['id']
+        assert len(result[prefix + '_values']) == 1
