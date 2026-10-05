@@ -57,6 +57,7 @@
             </demand>
             <customerOrder>
                 <view/>
+                <update/>
             </customerOrder>
             <project>
                 <view/>

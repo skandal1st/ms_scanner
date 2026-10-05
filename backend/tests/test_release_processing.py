@@ -324,3 +324,62 @@ async def test_shipment_status_setting_validates_live_choices_and_can_be_disable
     assert exc.value.status_code == 400 and profile.shipment_sent_state_id == state
     await save_shipment_status(ShipmentStateRequest(), NS(), profile, db)
     assert profile.shipment_sent_state_id is None
+
+async def test_order_state_follows_marks_and_shipment_state(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_shipment_states = AsyncMock(return_value=[{'id': 'ready', 'name': 'Собран'}])
+    ms.get_customer_order_states = AsyncMock(return_value=[{'id': 'order-ready', 'name': 'Готов'}])
+    ms.resolve_shipment_order = AsyncMock(return_value='order1')
+    await ms.update_document('demand', 'doc', codes(1), shipment_state_id='ready', order_state_id='order-ready', customer_order_id='order1')
+    writes = [(method, url, body) for method, url, body in calls if method != 'GET']
+    assert [v[0] for v in writes] == ['PUT', 'POST', 'PUT', 'PUT']
+    assert writes[-1][1].endswith('/entity/customerorder/order1')
+    assert writes[-1][2]['state']['meta']['href'].endswith('/customerorder/metadata/states/order-ready')
+
+async def test_order_state_is_not_written_when_marks_are_rejected(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position()])
+    ms.get_customer_order_states = AsyncMock(return_value=[{'id': 'ready', 'name': 'Готов'}])
+    ms.resolve_shipment_order = AsyncMock(return_value='order1')
+    original = ms._request_with_retry
+    async def request(client, method, url, **kwargs):
+        response = await original(client, method, url, **kwargs)
+        return httpx.Response(412, request=httpx.Request(method, url)) if method == 'POST' else response
+    ms._request_with_retry = request
+    await ms.update_document('demand', 'doc', codes(1), order_state_id='ready')
+    assert not any(method == 'PUT' and '/customerorder/' in url for method, url, _ in calls)
+
+async def test_invoice_link_order_resolution_and_ambiguous_orders():
+    ms = MoySkladService('fake')
+    invoice = {'id': 'invoice1', 'meta': {'type': 'invoiceout'}}
+    shipment = {'invoicesOut': [invoice]}
+    ms.get_customer_order = AsyncMock(return_value={'invoicesOut': [invoice]})
+    assert await ms.resolve_shipment_order(shipment, 'selected-order') == 'selected-order'
+    ms.get_customer_order.return_value = {}
+    with pytest.raises(ValueError, match='Связь отгрузки'):
+        await ms.resolve_shipment_order(shipment, 'wrong-order')
+    async def request(client, method, url, **kwargs):
+        return httpx.Response(200, json={'rows': [{'id': 'order1', 'invoicesOut': [invoice]}]}, request=httpx.Request(method, url))
+    ms._request_with_retry = request
+    assert await ms.resolve_shipment_order(shipment, None) == 'order1'
+    async def ambiguous(client, method, url, **kwargs):
+        return httpx.Response(200, json={'rows': [{'id': oid, 'invoicesOut': [invoice]} for oid in ('order1', 'order2')]}, request=httpx.Request(method, url))
+    ms._request_with_retry = ambiguous
+    with pytest.raises(ValueError, match='несколько заказов'):
+        await ms.resolve_shipment_order(shipment, None)
+    assert await ms.resolve_shipment_order({}, None) is None
+
+async def test_order_status_setting_rejects_shipment_status_and_preserves_legacy_clients(monkeypatch):
+    from app.api.organization_profiles import save_shipment_status, ShipmentStateRequest
+    import app.api.organization_profiles as profiles
+    order_state = uuid4()
+    shipment_state = uuid4()
+    profile = NS(shipment_sent_state_id=shipment_state, customer_order_sent_state_id=order_state)
+    db = NS(commit=AsyncMock())
+    monkeypatch.setattr(profiles, 'shipment_status_settings', AsyncMock(return_value={'states': [{'id': str(shipment_state)}], 'order_states': [{'id': str(order_state)}]}))
+    with pytest.raises(HTTPException):
+        await save_shipment_status(ShipmentStateRequest(order_state_id=shipment_state), NS(), profile, db)
+    assert profile.customer_order_sent_state_id == order_state
+    await save_shipment_status(ShipmentStateRequest(state_id=shipment_state), NS(), profile, db)
+    assert profile.customer_order_sent_state_id == order_state
+    await save_shipment_status(ShipmentStateRequest(order_state_id=None), NS(), profile, db)
+    assert profile.customer_order_sent_state_id is None

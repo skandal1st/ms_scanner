@@ -732,7 +732,9 @@ async def process_document(
             OrganizationProfile.user_id == current_user.id,
         ))).scalar_one_or_none()
         target = profile.shipment_sent_state_id if profile else None
-        doc.upd_meta = {**(doc.upd_meta or {}), 'shipment_sent_state_id': str(target) if target else None}
+        order_target = profile.customer_order_sent_state_id if profile else None
+        doc.upd_meta = {**(doc.upd_meta or {}), 'shipment_sent_state_id': str(target) if target else None,
+                        'customer_order_sent_state_id': str(order_target) if order_target else None}
     doc.status = DocumentStatus.processing
     doc.error_message = None
     doc.processing_progress = {"sent": 0, "total": count, "stage": "preparing"}

@@ -654,6 +654,41 @@ class MoySkladService:
             response.raise_for_status()
             return [{'id': row['id'], 'name': row['name']} for row in response.json().get('states', [])]
 
+    async def get_customer_order_states(self) -> list[dict]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/customerorder/metadata')
+            response.raise_for_status()
+            return [{'id': row['id'], 'name': row['name']} for row in response.json().get('states', [])]
+
+    async def resolve_shipment_order(self, shipment: dict, order_id: Optional[str]) -> Optional[str]:
+        candidate = order_id or entity_reference_id(shipment.get('customerOrder') or {})
+        if candidate:
+            order = await self.get_customer_order(candidate)
+            if not shipment_matches_customer_order(shipment, order, candidate):
+                raise ValueError('Связь отгрузки с заказом покупателя изменилась. Откройте отгрузку из правильного заказа заново.')
+            return candidate
+        if not invoice_reference_ids(shipment):
+            return None
+        # Invoice chains have no direct customerOrder on demand. Never guess by document name.
+        filters = [f'{key}={shipment[key]["meta"]["href"]}' for key in ('agent', 'organization')
+                   if (shipment.get(key) or {}).get('meta', {}).get('href')]
+        matches, offset = set(), 0
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/customerorder',
+                    params={'limit': 1000, 'offset': offset, **({'filter': ';'.join(filters)} if filters else {})})
+                response.raise_for_status()
+                rows = response.json().get('rows', [])
+                matches.update(row['id'] for row in rows if shipment_matches_customer_order(shipment, row, row['id']))
+                if len(matches) > 1:
+                    raise ValueError('Через счёт найдены несколько заказов. Откройте отгрузку из нужного заказа покупателя.')
+                if len(rows) < 1000:
+                    break
+                offset += len(rows)
+        if not matches:
+            raise ValueError('Не удалось найти заказ покупателя по связанному счёту. Откройте отгрузку из заказа покупателя.')
+        return next(iter(matches))
+
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict],
         position_quantities: Optional[Dict[str, int]] = None,
@@ -661,6 +696,8 @@ class MoySkladService:
         description: Optional[str] = None,
         on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
         shipment_state_id: Optional[str] = None,
+        order_state_id: Optional[str] = None,
+        customer_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Preserve existing positions; send all codes in bounded, resumable batches.
 
@@ -668,6 +705,11 @@ class MoySkladService:
         saved code before sending the remainder, including partially saved batches.
         """
         self._validate_kind(kind)
+        if order_state_id:
+            if kind != 'demand':
+                raise ValueError('Смена статуса заказа доступна только при отправке отгрузки')
+            if order_state_id not in {row['id'] for row in await self.get_customer_order_states()}:
+                raise ValueError('Выбранный статус заказа больше недоступен. Измените настройку и повторите отправку.')
         if shipment_state_id:
             if kind != 'demand':
                 raise ValueError('Автоматическая смена статуса доступна только для отгрузок')
@@ -743,6 +785,8 @@ class MoySkladService:
                 response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/{doc_id}')
                 response.raise_for_status()
                 ensure_active_shipment(response.json())
+                if order_state_id:
+                    customer_order_id = await self.resolve_shipment_order(response.json(), customer_order_id)
             # Read before mutation: a failed code read also aborts safely.
             seen = set()
             if write_codes:
@@ -800,6 +844,17 @@ class MoySkladService:
                 except httpx.HTTPError as exc:
                     raise ValueError('Марки переданы в МойСклад, но смену статуса отгрузки не удалось подтвердить. Повторите отправку: уже сохранённые марки не будут добавлены повторно.') from exc
                 logger.info('moysklad.shipment_state.changed', doc_id=doc_id, state_id=shipment_state_id)
+            if order_state_id and customer_order_id:
+                try:
+                    order_response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/customerorder/{customer_order_id}',
+                        json={'state': {'meta': {'href': f'{self.base_url}/entity/customerorder/metadata/states/{order_state_id}',
+                                                'type': 'state', 'mediaType': 'application/json'}}})
+                    order_response.raise_for_status()
+                except httpx.HTTPError as exc:
+                    raise ValueError('Марки переданы, но смену статуса заказа покупателя не удалось подтвердить. Проверьте право обновления заказов: обновите XML решения и переустановите его в МойСкладе. Повторная отправка не добавит сохранённые марки повторно.') from exc
+                logger.info('moysklad.customer_order_state.changed', doc_id=doc_id, order_id=customer_order_id, state_id=order_state_id)
+            elif order_state_id:
+                logger.info('moysklad.customer_order_state.skipped', doc_id=doc_id, reason='Отгрузка без связанного заказа')
             return resp.json()
 
     async def find_product_by_gtin(self, gtin: str) -> Optional[Dict[str, Any]]:

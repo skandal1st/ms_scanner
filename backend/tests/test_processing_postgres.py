@@ -130,7 +130,7 @@ async def test_shipment_state_snapshot_is_from_document_profile(monkeypatch):
     user, doc = await seed(factory)
     state = uuid4()
     async with factory() as db:
-        profile = OrganizationProfile(id=uuid4(), user_id=user.id, name='Юрлицо документа', shipment_sent_state_id=state)
+        profile = OrganizationProfile(id=uuid4(), user_id=user.id, name='Юрлицо документа', shipment_sent_state_id=state, customer_order_sent_state_id=state)
         other = OrganizationProfile(id=uuid4(), user_id=user.id, name='Другое', is_default=True, shipment_sent_state_id=uuid4())
         db.add_all([profile, other])
         saved = await db.get(Document, doc.id)
@@ -144,4 +144,5 @@ async def test_shipment_state_snapshot_is_from_document_profile(monkeypatch):
     async with factory() as db:
         saved = await db.get(Document, doc.id)
         assert saved.upd_meta['shipment_sent_state_id'] == str(state)
+        assert saved.upd_meta['customer_order_sent_state_id'] == str(state)
     await engine.dispose()
