@@ -56,6 +56,8 @@ class CreateDocumentRequest(BaseModel):
 
 
 class MoySkladDocumentItem(BaseModel):
+    state_name: Optional[str] = None
+    state_color: Optional[int] = None
     id: str
     name: str
     moment: Optional[str]
@@ -155,6 +157,7 @@ async def list_customer_orders(
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",
         moment=row.get("moment"), agent_name=(row.get("agent") or {}).get("name"),
         shipment_count=customer_order_direct_shipment_count(row),
+        state_name=(row.get('state') or {}).get('name'), state_color=(row.get('state') or {}).get('color'),
         retail_sale_count=len(customer_order_links(row, "retaildemand")),
         empty_shipments_message=customer_order_empty_message(row)) for row in rows]
 

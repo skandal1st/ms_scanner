@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { tsdApi, tsdModeLabels, type TsdMode, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
 import { PhysicalCounts } from '../components/PhysicalCounts'
 import { CustomerOrderFilterSelect } from '../components/CustomerOrderFilterSelect'
+import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
@@ -231,7 +232,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
             </div>
             <div className="tsd-order-row__details">
               <span className="tsd-order-row__agent">{item.agent_name || 'Контрагент не указан'}</span>
-              <span className="tsd-order-row__status">{item.state_name || 'Статус не указан'}</span>
+              <OrderStatusBadge name={item.state_name} color={item.state_color} />
             </div>
             <small className="tsd-order-row__shipments">
               {item.shipment_count === null ? 'Проверить отгрузки' : item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}
