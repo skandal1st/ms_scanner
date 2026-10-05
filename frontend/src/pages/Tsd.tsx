@@ -223,15 +223,19 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
           </div>
         ) : null}
         {filtered.map((item) => (
-          <button key={item.moysklad_id} type="button" className="tsd-shipment-row" disabled={!online || select.isPending || chooseOrder.isPending} onClick={() => chooseOrder.mutate(item.moysklad_id)}>
-            <div className="tsd-shipment-row__main">
-              <strong>Заказ {item.name}</strong><span>{item.agent_name || 'Контрагент не указан'}</span>
-              <small>{item.state_name || 'Статус не указан'}{item.store_name ? ` · ${item.store_name}` : ''}</small>
+          <button key={item.moysklad_id} type="button" className="tsd-order-row" disabled={!online || select.isPending || chooseOrder.isPending} onClick={() => chooseOrder.mutate(item.moysklad_id)}>
+            <div className="tsd-order-row__heading">
+              <strong>Заказ {item.name}</strong>
+              <time dateTime={item.moment || undefined}>{item.moment ? new Date(item.moment).toLocaleDateString('ru-RU') : '—'}</time>
             </div>
-            <div className="tsd-shipment-row__progress">
-              <time>{item.moment ? new Date(item.moment).toLocaleDateString('ru-RU') : '—'}</time>
-              <b>{item.shipment_count === null ? 'Проверить отгрузки' : item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</b>
-            </div><span className="tsd-chevron" aria-hidden>›</span>
+            <div className="tsd-order-row__details">
+              <span className="tsd-order-row__agent">{item.agent_name || 'Контрагент не указан'}</span>
+              <span className="tsd-order-row__status">{item.state_name || 'Статус не указан'}</span>
+            </div>
+            <small className="tsd-order-row__shipments">
+              {item.shipment_count === null ? 'Проверить отгрузки' : item.shipment_count ? `Отгрузок: ${item.shipment_count}` : item.retail_sale_count ? 'Розничная продажа' : item.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}
+              {item.store_name ? ` · ${item.store_name}` : ''}
+            </small>
           </button>
         ))}
       </section>
