@@ -11,7 +11,47 @@ const source = fs.readFileSync(path.join(frontend, 'src/store/scanStore.ts'), 'u
 const compiled = ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
 const exposed = {};
 vm.runInNewContext(compiled, {exports:exposed,require:requireFrontend,setTimeout});
-const {buildProgress,findProgressRowForScan} = exposed;
+const {buildProgress,findProgressRowForScan,progressAfterScan} = exposed;
+
+test('last planned mark succeeds with HTTP first or live event first',()=>{
+  const plan=[{product_id:'p',gtin:'04620543080527',product_name:'p',expected_qty:2}];
+  const first={id:'first',gtin:plan[0].gtin,moysklad_product_id:'p',status:'scanned'};
+  const last={...first,id:'last'};
+  for(const scans of [[first],[first,last]]) {
+    const result=progressAfterScan(plan,scans,last);
+    assert.equal(result.overPlan,false);
+    assert.equal(result.matched.addedTotal,2);
+    assert.equal(result.scans.length,2);
+  }
+});
+
+test('barcode aggregate replaces previous quantity instead of adding it again',()=>{
+  const plan=[{product_id:'p',gtin:'04620543080527',product_name:'p',expected_qty:5,marked:false}];
+  const result={id:'aggregate',gtin:plan[0].gtin,moysklad_product_id:'p',status:'valid',is_barcode:true,box_quantity:5};
+  for(const scans of [[{...result,box_quantity:4}],[result]]) {
+    const next=progressAfterScan(plan,scans,result);
+    assert.equal(next.overPlan,false);
+    assert.equal(next.matched.addedTotal,5);
+  }
+});
+
+test('latest shared scans and blocks count once while genuine overflow still fails',()=>{
+  const plan=[{product_id:'p',gtin:'04620543080527',product_name:'p',expected_qty:20}];
+  const block={id:'first',gtin:plan[0].gtin,moysklad_product_id:'p',status:'scanned',box_quantity:10};
+  const second={...block,id:'second'};
+  assert.equal(progressAfterScan(plan,[block,second],second).overPlan,false);
+  const extra={...block,id:'extra',box_quantity:1};
+  const next=progressAfterScan(plan,[block,second,extra],extra);
+  assert.equal(next.overPlan,true);
+  assert.equal(next.matched.addedTotal,21);
+});
+
+test('duplicate or rejected response does not produce an overflow warning',()=>{
+  const plan=[{product_id:'p',gtin:'04620543080527',product_name:'p',expected_qty:1}];
+  const mark={id:'first',gtin:plan[0].gtin,moysklad_product_id:'p',status:'scanned'};
+  assert.equal(progressAfterScan(plan,[mark],{...mark,duplicate:true}).overPlan,false);
+  assert.equal(progressAfterScan(plan,[mark],{...mark,id:'bad',status:'invalid'}).overPlan,false);
+});
 
 test('viewing positions leaves scanner automatic and preserves explicit manual mode',()=>{
   const store=exposed.useScanStore;

@@ -3,7 +3,7 @@ import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
 import { CustomerOrderFilterSelect } from '../components/CustomerOrderFilterSelect'
-import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits } from '../store/scanStore'
+import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
@@ -301,9 +301,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
-      const matched = rowForScan(result)
-      const overPlan = Boolean(matched && matched.expected > 0 && !result.duplicate && !rejected
-        && matched.addedTotal + scanUnits(result) > matched.expected)
+      const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
+      const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
       const errorFeedback = Boolean(result.duplicate || rejected || !matched || overPlan)
       setMessage(result.duplicate
         ? { kind: 'error', text: 'Этот код уже отсканирован' }
@@ -311,10 +310,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         : !matched ? { kind: 'error', text: `Скан записан, но GTIN ${effectiveGtinKey(result) || 'не определён'} отсутствует в плане отгрузки` }
         : overPlan ? { kind: 'error', text: `Марка добавлена сверх плана: ${matched.product_name}` }
         : { kind: 'ok', text: result.product_name || matched.product_name || 'Скан принят' })
-      qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => {
-        const current = previous || initial
-        return { ...current, scans: [result, ...current.scans.filter((item) => item.id !== result.id)] }
-      })
+      qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], { ...latest, scans: mergedScans })
       setCode('')
       refresh()
       sound.play(errorFeedback ? 'error' : 'ok')

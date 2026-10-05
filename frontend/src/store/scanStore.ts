@@ -190,6 +190,17 @@ function scanMatchesPlanRow(
   return byPid || byGtin
 }
 
+/** Evaluate the committed result once, whether HTTP or the live event arrived first. */
+export function progressAfterScan(plan: PlanItem[] | undefined, scans: Scan[], result: Scan) {
+  const merged = [result, ...scans.filter(item => item.id !== result.id)]
+  const progress = buildProgress(plan, merged)
+  const matched = findProgressRowForScan(result, progress.rows)
+  const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
+  const overPlan = Boolean(matched && matched.expected > 0 && !result.duplicate && !rejected
+    && matched.addedTotal > matched.expected)
+  return { scans: merged, matched, overPlan }
+}
+
 export function findProgressRowForScan(scan: Scan, rows: ProgressRow[]): ProgressRow | undefined {
   const byProduct = scan.moysklad_product_id
     ? rows.filter((row) => row.product_id === scan.moysklad_product_id) : []
