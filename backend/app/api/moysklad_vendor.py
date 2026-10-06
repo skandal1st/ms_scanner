@@ -1,11 +1,12 @@
 import json
 import time
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from jose import JWTError, jwt
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from app.core.logging import logger
 from app.core.security import encrypt_token
 from app.db.models import Integration, User
 from app.db.session import get_db
+from app.services.subscriptions import update_subscription
 
 
 router = APIRouter(prefix="/moysklad/vendor/1.0/apps", tags=["moysklad-vendor"])
@@ -30,9 +32,16 @@ class Subscription(BaseModel):
     tariffId: Optional[str] = None
     trial: Optional[bool] = None
     tariffName: Optional[str] = None
-    expiryMoment: Optional[str] = None
+    expiryMoment: Optional[datetime] = None
     notForResale: Optional[bool] = None
     partner: Optional[bool] = None
+
+    @field_validator('expiryMoment')
+    @classmethod
+    def expiry_timezone(cls, value):
+        if value is not None and value.tzinfo is None:
+            raise ValueError('Дата окончания подписки должна содержать часовой пояс')
+        return value
 
 
 class ActivateRequest(BaseModel):
@@ -205,11 +214,17 @@ async def activate(
         )
         db.add(integration)
     else:
+        await db.execute(select(User).where(User.id == integration.user_id).with_for_update())
+        await db.refresh(integration)
         if body.accountName:
             integration.moysklad_account_name = body.accountName
         if access_token:
             integration.moysklad_token = encrypt_token(access_token)
 
+    integration.subscription_managed = True
+    if body.subscription is not None:
+        update_subscription(integration, body.subscription)
+    # TariffChanged/Autoprolongation may omit access; preserve existing API token.
     await db.commit()
 
     payload = {"status": "Activated"}
@@ -245,7 +260,12 @@ async def deactivate(
     )
     integration = result.scalar_one_or_none()
     if integration:
+        await db.execute(select(User).where(User.id == integration.user_id).with_for_update())
+        await db.refresh(integration)
         integration.moysklad_token = None
+        integration.subscription_managed = True
+        integration.subscription_active = False
+        integration.subscription_updated_at = datetime.now(timezone.utc)
         await db.commit()
 
     payload = {"status": "ok"}

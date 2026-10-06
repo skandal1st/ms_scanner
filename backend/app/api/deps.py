@@ -36,6 +36,17 @@ async def get_current_user(
     return user
 
 
+async def require_active_subscription(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    from app.services.subscriptions import get_subscription
+    state = await get_subscription(db, current_user.id)
+    if not state.active:
+        raise HTTPException(403, state.message)
+    return current_user
+
+
 async def require_full_edition(
     current_user: User = Depends(get_current_user),
 ) -> User:

@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.logging import setup_logging, logger
 from app.core.security import decode_token
 from app.api import auth, documents, scans, integrations, moysklad_vendor, products, acceptance, support, mark_control, inventory, organization_profiles, tsd, physical_counts
-from app.api.deps import require_full_edition
+from app.api.deps import require_full_edition, require_active_subscription
 
 
 class WebSocketManager:
@@ -108,19 +108,19 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-app.include_router(documents.router)
-app.include_router(scans.router)
+app.include_router(documents.router, dependencies=[Depends(require_active_subscription)])
+app.include_router(scans.router, dependencies=[Depends(require_active_subscription)])
 app.include_router(integrations.router)
 app.include_router(organization_profiles.router)
 app.include_router(tsd.router)
 app.include_router(physical_counts.router)
 app.include_router(moysklad_vendor.router)
-app.include_router(products.router)
-app.include_router(acceptance.router)
+app.include_router(products.router, dependencies=[Depends(require_active_subscription)])
+app.include_router(acceptance.router, dependencies=[Depends(require_active_subscription)])
 app.include_router(support.router)
 # Инвентаризация и Контроль марок — только полная версия (см. require_full_edition).
-app.include_router(mark_control.router, dependencies=[Depends(require_full_edition)])
-app.include_router(inventory.router, dependencies=[Depends(require_full_edition)])
+app.include_router(mark_control.router, dependencies=[Depends(require_full_edition), Depends(require_active_subscription)])
+app.include_router(inventory.router, dependencies=[Depends(require_full_edition), Depends(require_active_subscription)])
 
 
 async def terminal_websocket_scope(token, document_id):

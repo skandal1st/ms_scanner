@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { QRCodeSVG } from 'qrcode.react'
+import { isAxiosError } from 'axios'
 import { organizationProfilesApi, tsdAdminApi, tsdModeLabels, type TsdMode, type TsdDeviceInfo } from '../api/client'
 import { TSD_APK_PATH } from '../lib/tsdLinks'
 
@@ -9,6 +10,14 @@ export function TsdPairingSection() {
   const [pairingOpen, setPairingOpen] = useState(false)
   const [workplaceId, setWorkplaceId] = useState('')
   const [allowedModes, setAllowedModes] = useState<TsdMode[]>(['shipment'])
+  const { data: subscription, isPending: subscriptionPending, error: subscriptionError } = useQuery({
+    queryKey: ['marketplace-subscription'],
+    queryFn: () => tsdAdminApi.subscription().then((r) => r.data),
+    refetchInterval: 15_000,
+  })
+  useEffect(() => {
+    if (subscription && !subscription.can_pair) setPairingOpen(false)
+  }, [subscription?.can_pair])
   const { data: profiles = [] } = useQuery({
     queryKey: ['organization-profiles'],
     queryFn: () => organizationProfilesApi.list().then((r) => r.data),
@@ -30,12 +39,14 @@ export function TsdPairingSection() {
   const { data: devices = [] } = useQuery({
     queryKey: ['tsd-devices'],
     queryFn: () => tsdAdminApi.devices().then((r) => r.data),
+    refetchInterval: 15_000,
   })
   const revoke = useMutation({
     mutationFn: (id: string) => tsdAdminApi.revoke(id),
     onSuccess: (_, id) => {
       qc.setQueryData<TsdDeviceInfo[]>(['tsd-devices'], (items) => items?.filter((device) => device.id !== id))
       void qc.invalidateQueries({ queryKey: ['tsd-devices'] })
+      void qc.invalidateQueries({ queryKey: ['marketplace-subscription'] })
     },
   })
   const modes = useMutation({
@@ -49,6 +60,19 @@ export function TsdPairingSection() {
         <h2 style={{ margin: 0 }}>Терминалы сбора данных</h2>
         <span className="badge badge--info">АТОЛ · Android</span>
       </div>
+      {subscription?.managed ? (
+        <div className="mt-12">
+          <p><b>Тариф «{subscription.name}»</b>{subscription.price_monthly !== null ? ` · ${subscription.price_monthly.toLocaleString('ru-RU')} ₽/мес.` : ''}</p>
+          <p className="hint">
+            Подключено ТСД: {subscription.active_devices}{subscription.tsd_limit === null ? ' · безлимит' : ` из ${subscription.tsd_limit}`}. Лимит общий для всех складов и юрлиц аккаунта.
+            {subscription.trial ? ' Пробный период.' : ''}
+            {subscription.expires_at ? ` До ${new Date(subscription.expires_at).toLocaleString('ru-RU')}.` : ''}
+          </p>
+          <p className="hint">Выбор тарифа, оплата и продление — в маркетплейсе МойСклад. Отключение устройства освобождает место.</p>
+          {subscription.message ? <p role="status" className="alert alert--error">{subscription.message}</p> : null}
+        </div>
+      ) : null}
+      {subscriptionError ? <p role="alert" className="alert alert--error">Не удалось загрузить подписку. Обновите страницу.</p> : null}
       <p className="hint">
         Подключите ТСД к текущему юрлицу и рабочему месту. QR действует 5 минут и
         используется только один раз.
@@ -90,13 +114,13 @@ export function TsdPairingSection() {
       <button
         type="button"
         className="button button--primary"
-        disabled={pairing.isPending}
+        disabled={pairing.isPending || subscriptionPending || !subscription?.can_pair}
         onClick={() => pairing.mutate()}
       >
         {pairing.isPending ? 'Создаём QR…' : 'Подключить ТСД'}
       </button>
       {pairing.error ? (
-        <div className="alert alert--error mt-12">Не удалось создать QR подключения.</div>
+        <div className="alert alert--error mt-12">{isAxiosError(pairing.error) && typeof pairing.error.response?.data?.detail === 'string' ? pairing.error.response.data.detail : 'Не удалось создать QR подключения.'}</div>
       ) : null}
 
       {pairingOpen && pairing.data ? (
@@ -143,6 +167,7 @@ export function TsdPairingSection() {
         </div>
       ) : <p className="hint mt-12">Нет подключённых ТСД.</p>}
       {modes.error && <p role="alert" className="alert alert--error">Не удалось изменить доступ ТСД к режимам.</p>}
+      {revoke.error && <p role="alert" className="alert alert--error">Не удалось отключить ТСД. Повторите попытку.</p>}
     </section>
   )
 }

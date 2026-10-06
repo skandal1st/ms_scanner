@@ -847,11 +847,27 @@ export type TsdMode = 'shipment' | 'acceptance' | 'inventory'
 export const tsdModeLabels: Record<TsdMode, string> = { shipment: 'Отгрузка', acceptance: 'Приёмка', inventory: 'Инвентаризация' }
 
 export const tsdAdminApi = {
+  subscription: () => api.get<MarketplaceSubscription>('/tsd/subscription'),
   createPairing: (workplace_id?: string, allowed_modes: TsdMode[] = ['shipment']) =>
     api.post<TsdPairing>('/tsd/pairings', { workplace_id: workplace_id ?? null, allowed_modes }),
   modes: (id: string, allowed_modes: TsdMode[]) => api.patch(`/tsd/devices/${id}/modes`, { allowed_modes }),
   devices: () => api.get<TsdDeviceInfo[]>('/tsd/devices'),
   revoke: (id: string) => api.delete(`/tsd/devices/${id}`),
+}
+
+export interface MarketplaceSubscription {
+  managed: boolean
+  active: boolean
+  plan: 'basic' | 'tsd5' | 'unlimited' | null
+  name: string
+  price_monthly: number | null
+  trial: boolean
+  expires_at: string | null
+  active_devices: number
+  tsd_limit: number | null
+  can_pair: boolean
+  can_use_tsd: boolean
+  message: string | null
 }
 
 export const tsdClient = axios.create({

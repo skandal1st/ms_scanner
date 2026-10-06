@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
-from app.api.deps import get_current_user, get_active_organization_profile
+from app.api.deps import get_current_user, get_active_organization_profile, require_active_subscription
 from app.api.tsd import get_tsd_device, _device_scope, _ms_for_user, require_tsd_mode
 from app.db.session import get_db
 from app.db.models import (Document, DocumentKind, OrganizationProfile, PhysicalCountQuantity as Quantity,
@@ -27,7 +27,7 @@ async def terminal_scope(device=Depends(get_tsd_device), db=Depends(get_db)):
     return user, profile, workplace, device
 
 
-async def desktop_scope(user=Depends(get_current_user), profile=Depends(get_active_organization_profile)):
+async def desktop_scope(user=Depends(require_active_subscription), profile=Depends(get_active_organization_profile)):
     return user, profile, None, None
 
 

@@ -48,6 +48,7 @@ from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
     customer_order_direct_shipment_count, shipment_matches_customer_order)
 from app.services.customer_order_filters import CustomerOrderFilter, profile_order_filters, resolve_order_filter
+from app.services.subscriptions import get_subscription, require_tsd_subscription, SubscriptionResponse
 
 router = APIRouter(prefix="/tsd", tags=["tsd"])
 bearer = HTTPBearer()
@@ -211,6 +212,7 @@ async def create_pairing(
     profile: OrganizationProfile = Depends(get_active_organization_profile),
     db: AsyncSession = Depends(get_db),
 ):
+    await require_tsd_subscription(db, current_user.id, pairing=True)
     if body.workplace_id:
         workplace = (
             await db.execute(
@@ -271,6 +273,7 @@ async def exchange_pairing(body: PairingExchangeRequest, db: AsyncSession = Depe
     ).scalar_one_or_none()
     if not workplace:
         raise HTTPException(403, "Рабочее место отключено")
+    await require_tsd_subscription(db, workplace.user_id, pairing=True)
     profile = await db.get(OrganizationProfile, workplace.organization_profile_id)
     device = TsdDevice(
         user_id=workplace.user_id,
@@ -314,6 +317,7 @@ async def get_tsd_device(
         raise error
     if not device or not device.is_active or str(device.user_id) != payload.get("sub"):
         raise error
+    await require_tsd_subscription(db, device.user_id)
     device.last_seen_at = datetime.now(timezone.utc)
     return device
 
@@ -925,6 +929,11 @@ async def release_tsd_session(document_id: UUID, device: TsdDevice = Depends(get
     await db.commit()
     logger.info('tsd.session.released', device_id=str(device.id), document_id=str(doc.id), sessions=len(sessions))
     return {'status': 'released', 'document_id': str(doc.id)}
+
+
+@router.get('/subscription', response_model=SubscriptionResponse)
+async def read_subscription(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await get_subscription(db, current_user.id)
 
 
 @router.get("/devices", response_model=list[TsdDeviceRow])

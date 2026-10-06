@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     MOYSKLAD_VENDOR_SECRET_KEY: str = ""    # для проверки JWT-подписи
     MOYSKLAD_VENDOR_JWT_MAX_LIFETIME: int = 300  # секунд
     MOYSKLAD_VENDOR_BASE: str = "https://apps-api.moysklad.ru/api/vendor/1.0"
+    MOYSKLAD_TARIFF_BASIC_ID: str = "5436912b-e322-454a-a48e-ed38e2cca4fa"
+    MOYSKLAD_TARIFF_TSD5_ID: str = "f9d60a1c-43f4-4151-985a-f653299856a2"
+    MOYSKLAD_TARIFF_UNLIMITED_ID: str = "79af0218-9153-4401-ad24-c39ce0e88ac7"
 
     # Честный Знак
     CZ_MOCK_MODE: bool = False

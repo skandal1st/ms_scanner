@@ -81,6 +81,12 @@ class Integration(Base):
     moysklad_token = Column(Text, nullable=True)         # encrypted
     moysklad_account_id = Column(String(255), nullable=True)
     moysklad_account_name = Column(String(255), nullable=True)
+    subscription_managed = Column(Boolean, nullable=False, default=False, server_default="false")
+    subscription_active = Column(Boolean, nullable=False, default=False, server_default="false")
+    subscription_tariff_id = Column(String(64), nullable=True)
+    subscription_trial = Column(Boolean, nullable=False, default=False, server_default="false")
+    subscription_expires_at = Column(DateTime(timezone=True), nullable=True)
+    subscription_updated_at = Column(DateTime(timezone=True), nullable=True)
     cz_token = Column(Text, nullable=True)               # encrypted access_token from /auth/cert/
     cz_token_expires_at = Column(DateTime(timezone=True), nullable=True)
     cz_cert_thumbprint = Column(String(64), nullable=True)
