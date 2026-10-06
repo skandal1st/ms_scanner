@@ -255,7 +255,9 @@ def _looks_like_bare_gtin_serial_tail(s: str) -> bool:
         t.startswith("01")
         and len(t) >= 18
         and t[2:16].isdigit()
-        and t[16:18] == "21"
+        # Fixed-length GS1 date fields may precede the serial number (AI 21).
+        # Preserve the complete element string, including the date and tail.
+        and re.match(r"(?:1[123567]\d{6}\x1d?)*21", t[16:])
     ):
         return False
     return bool(t[14:])

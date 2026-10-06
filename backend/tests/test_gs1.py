@@ -18,7 +18,28 @@ from app.services.chestnyznak import (
     serial_len_for_pg,
 )
 
+import pytest
+
 GS = "\x1d"
+
+
+@pytest.mark.parametrize("raw", [
+    "01146056480636891326071421000010824073883",
+    "01146056480636891326072021000012924073883",
+    "01146056480636891726123121SERIAL123",
+    "011460564806368913260714\x1d21SERIAL123",
+])
+def test_cz_lookup_preserves_gs1_aggregate_with_date_before_serial(raw):
+    assert _normalize_bare_gtin_serial_to_gs1_element_string(raw) == raw
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("04605648063682ABCDEFG", "010460564806368221ABCDEFG"),
+    ("01146056480636ABCDEFG", "010114605648063621ABCDEFG"),
+    ("010460564806368221ABCDEFG", "010460564806368221ABCDEFG"),
+])
+def test_cz_lookup_keeps_existing_bare_and_ai21_formats(raw, expected):
+    assert _normalize_bare_gtin_serial_to_gs1_element_string(raw) == expected
 
 
 def _gtin14_check_digit(first13: str) -> str:
