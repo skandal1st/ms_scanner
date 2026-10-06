@@ -35,6 +35,8 @@ async def synchronize(app_id: UUID):
                 else:
                     response.raise_for_status()
                     data = response.json()
+                    # Suspended installations can omit subscription; they still belong to the marketplace.
+                    integration.subscription_managed = True
                     if data.get('subscription'):
                         update_subscription(integration, Subscription.model_validate(data['subscription']),
                             active=data.get('status') in ('Activated', 'SettingsRequired'))

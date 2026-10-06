@@ -20,11 +20,11 @@ ID тарифов заданы по умолчанию в конфигураци
    `MOYSKLAD_TARIFF_TSD5_ID`, `MOYSKLAD_TARIFF_UNLIMITED_ID`.
    ID должны быть различными. Названия тарифов не используются для выдачи прав.
 3. Выполнить миграции и пересоздать backend/worker/frontend с обновлённым окружением.
-4. Синхронизировать подписки уже установленных аккаунтов (APP_UUID — UUID решения,
-   не `MOYSKLAD_APP_UID`):
+4. Синхронизировать подписки уже установленных аккаунтов (UUID решения Скандата:
+   `8fa85fbe-eae4-4445-a431-212f735ee9e5`, не `MOYSKLAD_APP_UID`):
 
    ```bash
-   docker compose -f docker-compose.prod.yml run --rm backend python -m app.sync_subscriptions --app-id APP_UUID
+   docker compose -f docker-compose.prod.yml run --rm backend python -m app.sync_subscriptions --app-id 8fa85fbe-eae4-4445-a431-212f735ee9e5
    ```
 
    Команда читает статус через Vendor API и обновляет локальную подписку.
