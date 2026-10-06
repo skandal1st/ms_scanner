@@ -99,6 +99,8 @@ class MoySkladService:
     # МС ограничивает частоту запросов (429, code 1049). При приёмке идёт много
     # обращений подряд (позиции + trackingCodes), поэтому на 429 ждём и повторяем.
     _RATE_LIMIT_DELAYS = (1.0, 2.0, 5.0, 10.0, 20.0)
+    _READ_RETRY_DELAYS = (1.0, 2.0, 5.0)
+    _READ_RETRY_STATUSES = {502, 503, 504}
 
     async def _request_with_retry(
         self,
@@ -107,32 +109,51 @@ class MoySkladService:
         url: str,
         **kwargs: Any,
     ) -> httpx.Response:
-        """HTTP-запрос к МС с ретраем на 429 (rate limit). Прочие статусы —
-        как есть; вызывающий сам решает про raise_for_status/412."""
+        """Повторяем 429; временные ошибки и транспортные сбои — только для GET.
+
+        Повтор записи после таймаута/5xx может продублировать уже принятые марки.
+        Вызывающий сам решает про raise_for_status/412 после исчерпания попыток.
+        """
+        from app.core.diagnostics import capture_request, response_body, safe_url
+        method = method.upper()
         for attempt in range(len(self._RATE_LIMIT_DELAYS) + 1):
-            from app.core.diagnostics import capture_request, response_body
             try:
                 resp = await client.request(method, url, headers=self.headers, **kwargs)
             except httpx.HTTPError as exc:
                 capture_request('moysklad', method, url, kwargs.get('json'), error=type(exc).__name__)
+                if (method == "GET" and isinstance(exc, httpx.TransportError)
+                        and attempt < len(self._READ_RETRY_DELAYS)):
+                    delay = self._READ_RETRY_DELAYS[attempt]
+                    logger.warning("moysklad.read_retry", method=method, url=safe_url(url),
+                                   attempt=attempt + 1, delay=delay, error=type(exc).__name__)
+                    await asyncio.sleep(delay)
+                    continue
                 raise
             capture_request('moysklad', method, url, kwargs.get('json'), resp.status_code,
                             response_body(resp) if resp.status_code >= 400 else None)
-            if resp.status_code != 429 or attempt == len(self._RATE_LIMIT_DELAYS):
+            if resp.status_code == 429 and attempt < len(self._RATE_LIMIT_DELAYS):
+                delay = self._RATE_LIMIT_DELAYS[attempt]
+                event = "moysklad.rate_limited"
+            elif (method == "GET" and resp.status_code in self._READ_RETRY_STATUSES
+                  and attempt < len(self._READ_RETRY_DELAYS)):
+                delay = self._READ_RETRY_DELAYS[attempt]
+                event = "moysklad.read_retry"
+            else:
                 return resp
-            delay = self._RATE_LIMIT_DELAYS[attempt]
             try:
                 delay = max(delay, min(60.0, float(resp.headers.get("Retry-After", 0))),
                             min(60.0, float(resp.headers.get("X-Lognex-Retry-After", 0)) / 1000))
             except ValueError:
                 pass
             logger.warning(
-                "moysklad.rate_limited",
+                event,
                 method=method,
-                url=url,
+                url=safe_url(url),
+                status=resp.status_code,
                 attempt=attempt + 1,
                 delay=delay,
             )
+            await resp.aclose()
             await asyncio.sleep(delay)
         return resp
 
