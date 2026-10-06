@@ -1134,14 +1134,6 @@ def process_document_task(document_id: str, user_id: str):
         _run(_process_document_async(document_id, user_id))
     except Exception as exc:
         logger.error("process_document.error", document_id=document_id, error=str(exc))
-        _run(
-            monitoring_emit(
-                "process_document.error",
-                level="error",
-                document_id=document_id,
-                error=str(exc),
-            )
-        )
         raise
 
 
@@ -1191,6 +1183,11 @@ async def _cleanup_stale_processing_async() -> int:
                 )
         if docs:
             await db.commit()
+            from app.core.diagnostics import operation_scope
+            from app.services.incidents import record
+            for doc in docs:
+                with operation_scope(doc.id, doc.user_id, 'process_document.stale'):
+                    await record('process_document.stale', doc.error_message)
         logger.info(
             "cleanup_stale_processing.done",
             reset=len(docs),
@@ -1200,6 +1197,17 @@ async def _cleanup_stale_processing_async() -> int:
 
 
 async def _process_document_async(document_id: str, user_id: str):
+    from app.core.diagnostics import operation_scope, failure_reason
+    from app.services.incidents import record
+    with operation_scope(document_id, user_id, 'process_document'):
+        try:
+            return await _process_document_traced_async(document_id, user_id)
+        except Exception as exc:
+            await record('process_document.error', str(exc), reason=failure_reason(exc))
+            raise
+
+
+async def _process_document_traced_async(document_id: str, user_id: str):
     from app.services.document_guard import processing_lock
     from app.db.session import AsyncSessionLocal
     from app.db.models import Document, DocumentStatus
@@ -1293,6 +1301,10 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             else []
         )
         if boxes_to_expand:
+            from app.core.diagnostics import current_operation
+            operation = current_operation.get()
+            if operation:
+                operation.stage = 'chestnyznak.expand_boxes'
             # Развернуть агрегаты (НомУпак: блок/короб) в листовые КМ можно только
             # через ЧЗ. Без валидного токена (или в mock-режиме) писать сырые коды
             # упаковок в МС нельзя — это гарантированный 412. Для supply прерываем
@@ -1310,6 +1322,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                         "process_document.cz_token_missing",
                         document_id=document_id,
                         boxes=len(boxes_to_expand),
+                        message=doc.error_message,
                     )
                     if not settings.CZ_MOCK_MODE:
                         await _push_cz_token_expired(user_id, str(document_id))
@@ -1321,6 +1334,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                         document_id=document_id,
                         kind=kind,
                         boxes=len(boxes_to_expand),
+                        message=doc.error_message,
                     )
                     return
                 await _push_cz_token_expired(user_id, str(document_id))
@@ -1370,8 +1384,8 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             if kind == "supply" and unexpanded:
                 doc.error_message = (
                     f"Не удалось развернуть {len(unexpanded)} коробов в марки маркировки: "
-                    "Честный Знак не нашёл эти коды ни в одной из включённых товарных групп. "
-                    "Проверьте, что нужная товарная группа включена в Настройках, и повторите приёмку."
+                    "Не получен полный состав упаковок из Честного Знака. "
+                    "Проверьте подключение ЧЗ и товарные группы; подробности сохранены для диагностики."
                 )
                 doc.status = DocumentStatus.draft
                 logger.warning(
@@ -1388,10 +1402,16 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                     document_id=document_id,
                     kind=kind,
                     unexpanded=len(unexpanded),
+                    message=doc.error_message,
+                    codes=[{'scan_id': str(s.id), 'code': s.code, 'gtin': s.gtin} for s in unexpanded],
                 )
                 return
 
         # Интеграции
+        from app.core.diagnostics import current_operation
+        operation = current_operation.get()
+        if operation:
+            operation.stage = 'moysklad.write_document'
         int_result = await db.execute(
             select(Integration).where(Integration.user_id == user_id)
         )
@@ -1515,6 +1535,12 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
 
 
 # Терминальные статусы документа ГИС МТ (см. справочник «Статусы документов»).
+@celery_app.task(name='deliver_incidents')
+def deliver_incidents_task():
+    from app.services.incidents import deliver_pending
+    return _run(deliver_pending())
+
+
 _WRITEOFF_OK = {"CHECKED_OK"}
 _WRITEOFF_PENDING = {None, "", "IN_PROGRESS", "PENDING", "CHECKED", "NEW", "PROCESSING"}
 

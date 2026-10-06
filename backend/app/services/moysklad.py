@@ -110,7 +110,14 @@ class MoySkladService:
         """HTTP-запрос к МС с ретраем на 429 (rate limit). Прочие статусы —
         как есть; вызывающий сам решает про raise_for_status/412."""
         for attempt in range(len(self._RATE_LIMIT_DELAYS) + 1):
-            resp = await client.request(method, url, headers=self.headers, **kwargs)
+            from app.core.diagnostics import capture_request, response_body
+            try:
+                resp = await client.request(method, url, headers=self.headers, **kwargs)
+            except httpx.HTTPError as exc:
+                capture_request('moysklad', method, url, kwargs.get('json'), error=type(exc).__name__)
+                raise
+            capture_request('moysklad', method, url, kwargs.get('json'), resp.status_code,
+                            response_body(resp) if resp.status_code >= 400 else None)
             if resp.status_code != 429 or attempt == len(self._RATE_LIMIT_DELAYS):
                 return resp
             delay = self._RATE_LIMIT_DELAYS[attempt]

@@ -15,6 +15,22 @@ import httpx
 
 from app.core.config import settings
 from app.core.logging import logger
+from app.core.diagnostics import sanitize, current_operation
+
+
+async def send_payload(payload, *, delivery_id=None):
+    headers = {'X-Project': settings.MONITORING_PROJECT, 'X-Api-Key': settings.MONITORING_KEY}
+    if delivery_id:
+        headers['X-Idempotency-Key'] = delivery_id
+        payload = {'events': [{**event, 'attributes': {**(event.get('attributes') or {}),
+                    'delivery_id': delivery_id}} for event in payload['events']]}
+    async with httpx.AsyncClient(timeout=settings.MONITORING_TIMEOUT) as client:
+        response = await client.post(settings.MONITORING_URL.rstrip('/') + '/ingest',
+                                     json=payload, headers=headers)
+        response.raise_for_status()
+        receipt = response.json()
+        if not isinstance(receipt, dict) or receipt.get('accepted') != len(payload['events']):
+            raise RuntimeError('ERP не подтвердила приём всех событий мониторинга')
 
 
 def _enabled() -> bool:
@@ -33,11 +49,20 @@ async def emit(
     duration_ms: Optional[int] = None,
     trace_id: Optional[str] = None,
     **attributes,
-) -> None:
+) -> Optional[str]:
     """Отправить одно событие. Проглатывает любые ошибки — вызывать без try/except."""
+    if current_operation.get() is not None:
+        from app.services.incidents import record, resolve_current
+        if level in {'warning', 'error'}:
+            return await record(event, attributes.get('error') or attributes.get('message') or event,
+                                details=attributes)
+        if event == 'process_document.done':
+            await resolve_current()
     if not _enabled():
         return
-    clean_attrs = {k: v for k, v in attributes.items() if v is not None}
+    operation = current_operation.get()
+    trace_id = trace_id or (operation.trace_id if operation else None)
+    clean_attrs = sanitize({k: v for k, v in attributes.items() if v is not None})
     payload = {
         "events": [
             {
@@ -51,23 +76,9 @@ async def emit(
             }
         ]
     }
-    url = settings.MONITORING_URL.rstrip("/") + "/ingest"
     try:
-        async with httpx.AsyncClient(timeout=settings.MONITORING_TIMEOUT) as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={
-                    "X-Project": settings.MONITORING_PROJECT,
-                    "X-Api-Key": settings.MONITORING_KEY,
-                },
-            )
-            # ERP может ответить 200, но отвергнуть событие (неверный ключ/проект,
-            # 5xx). Без проверки статуса такой сбой был бы невидим — «в мониторинг
-            # ничего не приходит» без единого warning. raise_for_status переводит
-            # 4xx/5xx в лог monitoring.emit_failed ниже (основной поток не тронут).
-            resp.raise_for_status()
+        await send_payload(payload)
     except Exception as exc:  # noqa: BLE001 — мониторинг не должен влиять на основной поток
         # ВНИМАНИЕ: у structlog `event` — зарезервированное имя (само сообщение),
         # передавать его kwargʼом нельзя (TypeError). Используем event_name.
-        logger.warning("monitoring.emit_failed", event_name=event, error=str(exc))
+        logger.warning("monitoring.emit_failed", event_name=event, error_type=type(exc).__name__)

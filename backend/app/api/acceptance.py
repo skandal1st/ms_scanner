@@ -753,6 +753,24 @@ async def import_upd(
 
 
 async def _import_upd_bytes(
+    document_id: UUID, doc: Document, raw: bytes, current_user: User, db: AsyncSession,
+) -> ImportUpdResponse:
+    from app.core.diagnostics import operation_scope, failure_reason
+    from app.services.incidents import record, resolve_current
+    with operation_scope(document_id, current_user.id, 'acceptance.import_upd'):
+        try:
+            result = await _import_upd_bytes_traced(document_id, doc, raw, current_user, db)
+            await resolve_current(import_only=True)
+            return result
+        except Exception as exc:
+            await db.rollback()
+            incident_id = await record('acceptance.import_upd.error', str(exc), reason=failure_reason(exc))
+            if incident_id and isinstance(exc, HTTPException):
+                exc.detail = f'{exc.detail}\nКод ошибки: {incident_id}'
+            raise
+
+
+async def _import_upd_bytes_traced(
     document_id: UUID,
     doc: Document,
     raw: bytes,

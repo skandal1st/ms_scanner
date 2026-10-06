@@ -612,7 +612,42 @@ class CzLog(Base):
     response_status = Column(Integer, nullable=True)
     response_body = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
+    trace_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    document_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    original_code = Column(Text, nullable=True)
     duration_ms = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     user = relationship("User", back_populates="cz_logs")
+
+
+class Incident(Base):
+    __tablename__ = 'incidents'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fingerprint = Column(String(64), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    document_id = Column(UUID(as_uuid=True), ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)
+    stage = Column(String(80), nullable=False)
+    reason = Column(String(160), nullable=False)
+    message = Column(Text, nullable=False)
+    status = Column(String(16), nullable=False, default='open')
+    occurrences = Column(Integer, nullable=False, default=1)
+    trace_id = Column(UUID(as_uuid=True), nullable=False)
+    app_version = Column(String(64), nullable=False)
+    diagnostics = Column(JSONB, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class MonitoringDelivery(Base):
+    __tablename__ = 'monitoring_deliveries'
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey('incidents.id', ondelete='CASCADE'), nullable=False)
+    payload = Column(JSONB, nullable=False)
+    attempts = Column(Integer, nullable=False, default=0)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(String(160), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)

@@ -110,6 +110,7 @@ class Settings(BaseSettings):
     # Мониторинг (отправка событий/таймингов в ERP Elements Platform).
     # Выключено по умолчанию; включается только заданием URL+ключа в проде.
     MONITORING_ENABLED: bool = False
+    APP_VERSION: str = 'unknown'
     MONITORING_URL: str = ""          # напр. https://erp.example/api/v1/monitoring
     MONITORING_KEY: str = ""          # ключ проекта (совпадает с X-Api-Key в ERP)
     MONITORING_PROJECT: str = "ms_scaner"

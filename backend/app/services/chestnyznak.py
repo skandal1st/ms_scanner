@@ -753,17 +753,22 @@ class ChestnyZnakService:
                     resp = await client.post(
                         agg_url, params={"pg": pg}, headers=headers, json=[sscc]
                     )
-                    body = resp.json() if resp.status_code == 200 else None
+                    from app.core.diagnostics import response_body
+                    body = response_body(resp)
                     await log_cz_request(
                         method="POST",
                         url=f"{agg_url}?pg={pg}",
                         request_body=[sscc],
                         response_status=resp.status_code,
-                        response_body=body if isinstance(body, dict) else None,
+                        response_body=body,
                         duration_ms=int((time.time() - start) * 1000),
+                        original_code=sscc,
                     )
             except (httpx.TimeoutException, httpx.HTTPError) as exc:
                 logger.warning("cz.unpack_box.http_error", pg=pg, error=str(exc))
+                from app.core.diagnostics import capture_request
+                capture_request('chestnyznak', 'POST', f'{agg_url}?pg={pg}', [sscc],
+                                error=type(exc).__name__, original_code=sscc)
                 continue
 
             if resp.status_code != 200 or not isinstance(body, dict):
@@ -875,6 +880,7 @@ class ChestnyZnakService:
         cis = _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(code))
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
+        from app.core.diagnostics import response_body, capture_request
         headers = {
             "Authorization": f"Bearer {self.token}",
             "accept": "application/json",
@@ -890,7 +896,7 @@ class ChestnyZnakService:
                     resp = await client.post(
                         info_url, params={"pg": pg}, headers=headers, json=[cis]
                     )
-                    body = resp.json() if resp.status_code == 200 else None
+                    body = response_body(resp)
                     await log_cz_request(
                         method="POST",
                         url=f"{info_url}?pg={pg}",
@@ -898,8 +904,11 @@ class ChestnyZnakService:
                         response_status=resp.status_code,
                         response_body=body,
                         duration_ms=int((time.time() - start) * 1000),
+                        original_code=code,
                     )
             except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                capture_request('chestnyznak', 'POST', f'{info_url}?pg={pg}', [cis],
+                                error=type(exc).__name__, original_code=code)
                 logger.warning("cz.code_info.http_error", pg=pg, error=str(exc))
                 continue
 
@@ -919,19 +928,22 @@ class ChestnyZnakService:
                         ar = await client.post(
                             agg_url, params={"pg": pg}, headers=headers, json=[cis]
                         )
-                        abody = ar.json() if ar.status_code == 200 else None
+                        abody = response_body(ar)
                         await log_cz_request(
                             method="POST",
                             url=f"{agg_url}?pg={pg}",
                             request_body=[cis],
                             response_status=ar.status_code,
-                            response_body=abody if isinstance(abody, dict) else None,
+                            response_body=abody,
                             duration_ms=0,
+                            original_code=code,
                         )
                     if isinstance(abody, dict) and abody.get(cis):
                         children = _flatten_aggregate_leaves(abody[cis])
                 except (httpx.TimeoutException, httpx.HTTPError) as exc:
                     logger.warning("cz.aggregated_list.http_error", pg=pg, error=str(exc))
+                    capture_request('chestnyznak', 'POST', f'{agg_url}?pg={pg}', [cis],
+                                    error=type(exc).__name__, original_code=code)
                 # A box's first layer may contain blocks, not individual marks.
                 # Never replace a complete composition with that partial layer.
 
