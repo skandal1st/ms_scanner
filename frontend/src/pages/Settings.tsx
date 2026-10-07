@@ -10,10 +10,18 @@ import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFilters
 import { ShipmentStatusSettings } from '../components/ShipmentStatusSettings'
 import { InventorySettings } from '../components/InventorySettings'
 import { WorkplaceScannerSettings } from '../components/WorkplaceScannerSettings'
+import { PhysicalCounts } from '../components/PhysicalCounts'
 
 const TsdPairingSection = lazy(() =>
   import('../components/TsdPairingSection').then((module) => ({ default: module.TsdPairingSection })),
 )
+const settingsTabs = [
+  { id: 'general', label: 'Основные' },
+  { id: 'tsd', label: 'ТСД' },
+  { id: 'filters', label: 'Фильтры' },
+  { id: 'inventory', label: 'Инвентаризация' },
+] as const
+type SettingsTab = typeof settingsTabs[number]['id']
 import {
   diagnosePlugin,
   isPluginAvailable,
@@ -176,6 +184,12 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
 }
 
 export function SettingsPage({ embedded = false }: SettingsPageProps) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>('general')
+  const [visitedTabs, setVisitedTabs] = useState<SettingsTab[]>(['general'])
+  const selectTab = (id: SettingsTab) => {
+    setActiveTab(id)
+    setVisitedTabs(previous => previous.includes(id) ? previous : [...previous, id])
+  }
   const modal = useModal()
   const [msToken, setMsToken] = useState('')
   const qc = useQueryClient()
@@ -198,7 +212,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   return (
     <div className={`settings-page${embedded ? ' settings-page--embedded' : ''}`}>
       <div className="settings-card">
-        <h1>Настройки интеграции</h1>
+        <h1>Настройки</h1>
 
         <section className="section">
           <div className="section__head">
@@ -217,6 +231,33 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
           )}
         </section>
 
+        <div className="settings-tabs" role="tablist" aria-label="Разделы настроек">
+          {settingsTabs.map((tab, index) => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`settings-tab-${tab.id}`}
+              aria-controls={`settings-panel-${tab.id}`}
+              aria-selected={activeTab === tab.id}
+              tabIndex={activeTab === tab.id ? 0 : -1}
+              onClick={() => selectTab(tab.id)}
+              onKeyDown={event => {
+                let next = index
+                if (event.key === 'ArrowRight') next = (index + 1) % settingsTabs.length
+                else if (event.key === 'ArrowLeft') next = (index - 1 + settingsTabs.length) % settingsTabs.length
+                else if (event.key === 'Home') next = 0
+                else if (event.key === 'End') next = settingsTabs.length - 1
+                else return
+                event.preventDefault()
+                selectTab(settingsTabs[next].id)
+                event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#settings-tab-${settingsTabs[next].id}`)?.focus()
+              }}
+            >{tab.label}</button>
+          ))}
+        </div>
+
+        <div role="tabpanel" id="settings-panel-general" aria-labelledby="settings-tab-general" hidden={activeTab !== 'general'} tabIndex={0}>
         <section className="section">
           <div className="section__head">
             <h2 style={{ margin: 0 }}>МойСклад</h2>
@@ -291,13 +332,28 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
 
         <ChestnyZnakSection integration={integration} />
         <WorkplaceScannerSettings />
-        <Suspense fallback={<p className="hint">Загружаем подключение ТСД…</p>}>
-          <TsdPairingSection />
-        </Suspense>
-        <CustomerOrderFiltersSettings />
-        <ShipmentStatusSettings />
-        <InventorySettings />
         <ScannerSection embedded={embedded} />
+        </div>
+        <div role="tabpanel" id="settings-panel-tsd" aria-labelledby="settings-tab-tsd" hidden={activeTab !== 'tsd'} tabIndex={0}>
+          {visitedTabs.includes('tsd') && (
+            <Suspense fallback={<p className="hint">Загружаем подключение ТСД…</p>}>
+              <TsdPairingSection />
+            </Suspense>
+          )}
+        </div>
+        <div role="tabpanel" id="settings-panel-filters" aria-labelledby="settings-tab-filters" hidden={activeTab !== 'filters'} tabIndex={0}>
+          {visitedTabs.includes('filters') && <>
+            <CustomerOrderFiltersSettings />
+            <ShipmentStatusSettings />
+          </>}
+        </div>
+        <div role="tabpanel" id="settings-panel-inventory" aria-labelledby="settings-tab-inventory" hidden={activeTab !== 'inventory'} tabIndex={0}>
+          {visitedTabs.includes('inventory') && <>
+            <InventorySettings />
+            <p className="hint mt-12">Подготовьте сверку ниже, затем откройте её в режиме «Инвентаризация» на ТСД. Разрешите этот режим устройству во вкладке «ТСД». Результат сверки можно скачать здесь в XLSX.</p>
+            <PhysicalCounts mode="inventory" defaultCountMethod="scan" active={activeTab === 'inventory'} />
+          </>}
+        </div>
       </div>
     </div>
   )

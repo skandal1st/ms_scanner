@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.db.models import (Document, DocumentKind, OrganizationProfile, PhysicalCountQuantity as Quantity,
                            PhysicalCountSession as Session, PhysicalCountScan as Scan)
 from app.services.physical_counts import acceptance_plan, identify_count_scan
+from app.services.physical_count_export import HEADERS, report_rows, build_count_xlsx
 
 router = APIRouter(tags=['physical-counts'])
 
@@ -356,26 +357,22 @@ async def complete(session_id: UUID, scope=Depends(terminal_scope), db=Depends(g
     return summary(session)
 
 
-async def export(session_id: UUID, scope=Depends(terminal_scope), db=Depends(get_db)):
+async def export(session_id: UUID, scope=Depends(terminal_scope), db=Depends(get_db),
+                 format: Literal['csv', 'xlsx'] = 'csv'):
     session = await owned(db, session_id, scope)
     data = await progress(db, session)
+    if format == 'xlsx':
+        return Response(build_count_xlsx(session, data['counts']),
+                        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        headers={'Content-Disposition': f'attachment; filename="count-{session.id}.xlsx"'})
     output = io.StringIO(newline='')
     writer = csv.writer(output, delimiter=';')
-    writer.writerow(['Бренд', 'Товар', 'GTIN', 'Остаток МС', 'В отгрузках выбранных статусов',
-                     'Ожидалось', 'Посчитано', 'Разница', 'Проверен'])
+    writer.writerow(HEADERS)
     def safe(value):
         text = str(value or '')
         return "'" + text if text.lstrip().startswith(('=', '+', '-', '@')) else text
-    for row in session.plan:
-        manual = session.settings.get('count_method') == 'quantity'
-        entered = row['key'] in data['counts']
-        counted = data['counts'].get(row['key'], 0)
-        reviewed = (session.mode == 'acceptance' and session.status == 'completed') or row['folder_name'] in session.settings.get('reviewed_brands', [])
-        if manual:
-            reviewed = entered
-        writer.writerow([safe(row['folder_name']), safe(row.get('product_name')), safe(row.get('gtin') or ', '.join(row.get('gtins', []))),
-            row['base_qty'], row['shipment_qty'], row['expected_qty'], counted if not manual or entered else '',
-            counted - row['expected_qty'] if reviewed else '', 'Да' if reviewed else 'Нет'])
+    for row in report_rows(session, data['counts']):
+        writer.writerow([safe(value) if isinstance(value, str) else value for value in row])
     return Response(output.getvalue().encode('utf-8-sig'), media_type='text/csv; charset=utf-8',
                     headers={'Content-Disposition': f'attachment; filename="count-{session.id}.csv"'})
 
@@ -413,8 +410,9 @@ async def desktop_progress(session_id: UUID, scope=Depends(desktop_scope), db=De
 
 
 @router.get('/physical-counts/{session_id}/export')
-async def desktop_export(session_id: UUID, scope=Depends(desktop_scope), db=Depends(get_db)):
-    return await export(session_id, scope, db)
+async def desktop_export(session_id: UUID, scope=Depends(desktop_scope), db=Depends(get_db),
+                         format: Literal['csv', 'xlsx'] = 'csv'):
+    return await export(session_id, scope, db, format)
 
 
 @router.post('/physical-counts/{session_id}/brands/complete')

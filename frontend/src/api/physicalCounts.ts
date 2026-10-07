@@ -25,10 +25,11 @@ export function countApi(terminal: boolean) {
     remove: (id: string, scanId: string) => client.delete<CountProgress>(`${root}/${id}/scans/${scanId}`),
     brand: (id: string, brand: string) => client.post<CountProgress>(`${root}/${id}/brands/complete`, { brand }),
     complete: (id: string) => client.post<CountSummary>(`${root}/${id}/complete`),
-    async export(id: string) {
-      const { data } = await client.get(`${root}/${id}/export`, { responseType: 'blob' })
+    async export(id: string, format: 'csv' | 'xlsx' = 'csv') {
+      const { data } = await client.get(`${root}/${id}/export`, { responseType: 'blob', params: { format } })
       const url = URL.createObjectURL(data)
-      const link = document.createElement('a'); link.href = url; link.download = `count-${id}.csv`; link.click()
+      const link = document.createElement('a'); link.href = url; link.download = `count-${id}.${format}`
+      document.body.appendChild(link); link.click(); link.remove()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     },
   }

@@ -12,7 +12,7 @@ function errorText(error: unknown) {
   return typeof detail === 'string' ? detail : 'Не удалось выполнить действие. Проверьте связь и повторите.'
 }
 
-export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, onBack }: { mode: CountMode; terminal?: boolean; documentId?: string; deviceId?: string; onBack?: () => void }) {
+export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, onBack, defaultCountMethod = 'quantity', active = true }: { mode: CountMode; terminal?: boolean; documentId?: string; deviceId?: string; onBack?: () => void; defaultCountMethod?: 'scan' | 'quantity'; active?: boolean }) {
   const api = useMemo(() => countApi(terminal), [terminal])
   const qc = useQueryClient()
   const scope = terminal ? localStorage.getItem('tsd_access_token')?.slice(-16) : localStorage.getItem('organization_profile_id')
@@ -21,7 +21,7 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   const [store, setStore] = useState('')
   const [states, setStates] = useState<string[]>([])
   const [statesEdited, setStatesEdited] = useState(false)
-  const [countMethod, setCountMethod] = useState<'scan' | 'quantity'>('quantity')
+  const [countMethod, setCountMethod] = useState<'scan' | 'quantity'>(defaultCountMethod)
   const [brand, setBrand] = useState('')
   const [selected, setSelected] = useState<string | undefined>()
   const [code, setCode] = useState('')
@@ -31,13 +31,13 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   const input = useRef<HTMLInputElement>(null)
   const retryIntent = useRef<{ key: string; id: string } | null>(null)
   const sound = useTsdSound()
-  const sessions = useQuery({ queryKey: key, queryFn: () => api.list(mode, documentId).then(r => r.data), refetchInterval: 5000 })
-  const options = useQuery({ queryKey: [...key, 'options'], queryFn: () => api.options().then(r => r.data), enabled: !activeId && (mode === 'inventory' || (!terminal && Boolean(documentId))) })
+  const sessions = useQuery({ queryKey: key, queryFn: () => api.list(mode, documentId).then(r => r.data), enabled: active, refetchInterval: active ? 5000 : false })
+  const options = useQuery({ queryKey: [...key, 'options'], queryFn: () => api.options().then(r => r.data), enabled: active && !activeId && (mode === 'inventory' || (!terminal && Boolean(documentId))) })
   const docs = useQuery({ queryKey: [...key, 'acceptances'], queryFn: () => api.acceptances().then(r => r.data), enabled: terminal && mode === 'acceptance' && !activeId })
-  const detail = useQuery({ queryKey: [...key, activeId, 'detail'], queryFn: () => api.detail(activeId!).then(r => r.data), enabled: Boolean(activeId),
-    refetchInterval: q => q.state.data?.status === 'preparing' ? 2000 : false })
+  const detail = useQuery({ queryKey: [...key, activeId, 'detail'], queryFn: () => api.detail(activeId!).then(r => r.data), enabled: active && Boolean(activeId),
+    refetchInterval: q => active && q.state.data?.status === 'preparing' ? 2000 : false })
   const progressKey = [...key, activeId, 'progress']
-  const progress = useQuery({ queryKey: progressKey, queryFn: () => api.progress(activeId!).then(r => r.data), enabled: Boolean(activeId), refetchInterval: 2000 })
+  const progress = useQuery({ queryKey: progressKey, queryFn: () => api.progress(activeId!).then(r => r.data), enabled: active && Boolean(activeId), refetchInterval: active ? 2000 : false })
   const data = progress.data || detail.data
   const manual = data?.settings.count_method === 'quantity'
   const rows = detail.data?.plan || []
@@ -66,7 +66,7 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   const remove = useMutation({ mutationFn: (id: string) => api.remove(activeId!, id).then(r => r.data), onSuccess: updated, onError: fail })
   const finishBrand = useMutation({ mutationFn: () => api.brand(activeId!, brand).then(r => r.data), onSuccess: v => { updated(v); setSelected(undefined); setMessage({ text: 'Сверка бренда завершена. Выберите следующий бренд.', error: false }) }, onError: fail })
   const finish = useMutation({ mutationFn: () => api.complete(activeId!).then(r => r.data), onSuccess: () => { void qc.invalidateQueries({ queryKey: key }); setMessage({ text: 'Сверка сохранена. Результат доступен на ПК.', error: false }) }, onError: fail })
-  const download = useMutation({ mutationFn: () => api.export(activeId!), onError: fail })
+  const download = useMutation({ mutationFn: (format: 'csv' | 'xlsx') => api.export(activeId!, format), onError: fail })
   const reviewed = data?.settings.reviewed_brands || []
   const blocked = (!terminal && !manual) || !activeId || data?.status !== 'active' || !brand || reviewed.includes(brand) || Boolean(confirmation) || saveQuantity.isPending || scan.isPending || remove.isPending || finish.isPending || finishBrand.isPending || !navigator.onLine
   useTsdScannerFocus(input, blocked || manual, value => setCode(v => v + value))
@@ -114,7 +114,10 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
         <p>{confirmation === 'brand' ? manual ? `Завершить сверку «${brand}»? У каждой позиции должен быть указан фактический остаток, включая 0 для отсутствующих товаров.` : `Завершить сверку «${brand}»? Непросканированные позиции будут отмечены как отсутствующие.` : 'Сохранить и завершить сверку? Остатки МойСклада автоматически не изменяются.'}</p>
         <div className="tsd-input-actions"><button className="tsd-button" onClick={() => setConfirmation(null)}>Продолжить сверку</button><button className="tsd-button tsd-button--primary" onClick={() => { const action = confirmation; setConfirmation(null); if (action === 'brand') finishBrand.mutate(); else finish.mutate() }}>Подтвердить завершение</button></div>
       </div>}
-      {rows.length > 0 && !terminal && <button className="button" disabled={download.isPending} onClick={() => download.mutate()}>Скачать отчёт CSV</button>}
+      {rows.length > 0 && !terminal && <div className="field-row mt-12">
+        <button className="button button--primary" disabled={download.isPending} onClick={() => download.mutate('xlsx')}>{download.isPending && download.variables === 'xlsx' ? 'Готовим XLSX…' : 'Скачать XLSX'}</button>
+        <button className="button" disabled={download.isPending} onClick={() => download.mutate('csv')}>Скачать CSV</button>
+      </div>}
       {terminal && rows.length > 0 && <p className="hint">Отчёт доступен на ПК: {mode === 'inventory' ? 'Инвентаризация' : 'Приёмка → Сверка приёмки на ТСД'}.</p>}
       {data?.status === 'completed' && <p className="hint">Сверка завершена. Отчёт сохранён.</p>}
     </>}

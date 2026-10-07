@@ -617,6 +617,30 @@ html, body, #root { height: 100%; }
   margin: 0;
   padding: clamp(16px, 2vw, 28px);
 }
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--ms-border-light);
+  margin-top: 20px;
+}
+.settings-tabs [role="tab"] {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ms-text-muted);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.settings-tabs [role="tab"]:hover { background: var(--brand-tint); color: var(--ms-text); }
+.settings-tabs [aria-selected="true"] { color: var(--brand); border-bottom-color: var(--brand); }
+.settings-tabs [role="tab"]:focus-visible,
+.settings-card [role="tabpanel"]:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.settings-card [role="tabpanel"][hidden] { display: none; }
+.settings-card [role="tabpanel"] { min-width: 0; }
 .settings-status {
   background: var(--surface-2);
   border: 1px solid var(--ms-border-light);
