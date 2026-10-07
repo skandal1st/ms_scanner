@@ -125,6 +125,58 @@ async def test_worker_failure_returns_draft_with_a_visible_reason(monkeypatch, f
     await engine.dispose()
 
 
+@pytest.mark.parametrize('confirmed', [True, False])
+async def test_worker_confirms_upd_cis_before_any_ms_write_and_preserves_raw(monkeypatch, confirmed):
+    from sqlalchemy import select
+    from app.core import security
+    from app.services import moysklad, document_cis
+    from app.db.models import DocumentKind
+    raw = '04680621050477eq%Z_i?AAAA'
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(session, 'engine', engine)
+    monkeypatch.setattr(session, 'AsyncSessionLocal', factory)
+    user, doc = await seed(factory)
+    try:
+        async with factory() as db:
+            saved = await db.get(Document, doc.id)
+            saved.kind = DocumentKind.supply
+            saved.status = DocumentStatus.processing
+            scan = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalar_one()
+            scan.code = raw
+            scan.moysklad_product_id = 'p1'
+            await db.commit()
+        update = AsyncMock(return_value={})
+        async def confirm(rows, cz):
+            update.assert_not_awaited()
+            assert rows[0]['code'] == raw
+            assert cz.token == 'fake-cz'
+            if not confirmed:
+                raise ValueError('Честный Знак не подтвердил КИ')
+            return [{**row, 'code': raw[:21]} for row in rows]
+        monkeypatch.setattr(document_cis, 'confirm_document_cis', confirm)
+        monkeypatch.setattr(tasks, '_get_cz_token', AsyncMock(return_value='fake-cz'))
+        monkeypatch.setattr(tasks, '_get_cz_product_groups', AsyncMock(return_value=['otp']))
+        monkeypatch.setattr(security, 'decrypt_token', lambda token: 'fake')
+        monkeypatch.setattr(moysklad, 'MoySkladService', lambda token: SimpleNamespace(update_document=update))
+        if confirmed:
+            await tasks._process_document_async(str(doc.id), str(user.id))
+            assert update.await_args.args[2][0]['code'] == raw[:21]
+        else:
+            with pytest.raises(ValueError, match='не подтвердил'):
+                await tasks._process_document_async(str(doc.id), str(user.id))
+            update.assert_not_awaited()
+        async with factory() as db:
+            saved = await db.get(Document, doc.id)
+            assert saved.status == (DocumentStatus.accepted if confirmed else DocumentStatus.draft)
+            if not confirmed:
+                assert 'не подтвердил' in saved.error_message
+            scan = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalar_one()
+            assert scan.code == raw
+    finally:
+        await engine.dispose()
+
+
 async def test_worker_transfer_ignores_legacy_status_targets(monkeypatch):
     from unittest.mock import create_autospec
     from sqlalchemy import select

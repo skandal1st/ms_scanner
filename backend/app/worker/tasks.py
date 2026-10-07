@@ -1495,6 +1495,21 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             if any(not item.get("product_id") for item in scans_data):
                 raise ValueError("Не все марки сопоставлены с товарами МойСклад. Сопоставьте товары и повторите.")
 
+            from app.services.document_cis import needs_cis_confirmation, confirm_document_cis
+            if any(needs_cis_confirmation(item['code']) and not item.get('is_box')
+                   and not item.get('is_barcode') for item in scans_data):
+                if operation:
+                    operation.stage = 'chestnyznak.confirm_document_cis'
+                cis_token = await _get_cz_token(db, user_id, document_id)
+                if not cis_token:
+                    await _push_cz_token_expired(user_id, str(document_id))
+                cis_groups = await _get_cz_product_groups(db, user_id, document_id)
+                scans_data = await confirm_document_cis(scans_data, ChestnyZnakService(
+                    token=cis_token, mock=False, product_groups=cis_groups,
+                ))
+                if operation:
+                    operation.stage = 'moysklad.write_document'
+
             async def progress(sent, total):
                 doc.processing_progress = {"sent": sent, "total": total, "stage": "sending"}
                 await db.commit()
