@@ -256,6 +256,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [code, setCode] = useState('')
   const [lastCode, setLastCode] = useState('')
+  const [lastScannedId, setLastScannedId] = useState<string | null>(null)
   const [reviewing, setReviewing] = useState(false)
   const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
@@ -282,7 +283,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
   const last = doc.scans[0]
   const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
+  const lastScanned = doc.scans.find((item) => item.id === lastScannedId) || last
+  const lastScannedPosition = lastScanned && rowForScan(lastScanned)
   const target = progress.rows.find((row) => row.product_id === targetProductId && targetProductId)
+  const selectedPosition = typeof positionFilter === 'number' ? progress.rows[positionFilter] : undefined
   const current = target || (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
   const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
   const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
@@ -310,6 +314,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     networkMode: 'always',
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
+      setLastScannedId(result.id)
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
       const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
@@ -425,7 +430,17 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         </form>
         <div className="tsd-dock-meta">
           <span title={target?.product_name}>{targetProductId ? `Марки → ${target?.product_name || 'Позиция недоступна'}` : 'Авто по GTIN'}</span>
-          {targetProductId && <button type="button" className="tsd-button" disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
+          {(selectedPosition?.product_id || targetProductId) && <button type="button" className="tsd-button" aria-pressed={!targetProductId} disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
+          {selectedPosition?.product_id && <button type="button"
+            className={`tsd-button${targetProductId === selectedPosition.product_id ? ' tsd-button--primary' : ''}`}
+            aria-pressed={targetProductId === selectedPosition.product_id}
+            title={`Сканировать в позицию: ${selectedPosition.product_name}`}
+            disabled={scannerBlocked || Boolean(code.trim())}
+            onClick={() => {
+              setTargetProductId(selectedPosition.product_id!)
+              setSelectedScanId(null)
+              setMessage(null)
+            }}>Режим добавления</button>}
           <button type="button" data-tsd-sound className="tsd-button" aria-label={sound.active ? 'Отключить звук' : 'Включить звук'} aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук вкл.' : 'Звук выкл.'}</button>
         </div>
         {message && <div role="status" aria-live="polite" className={`tsd-dock-message tsd-dock-message--${message.kind}`}>{message.text}</div>}
@@ -457,19 +472,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         {reviewing && <>
           <div className="tsd-position-list">
             {progress.rows.map((row, index) => <button key={`${row.product_id || row.gtin}:${index}`} type="button"
-              aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}`} onClick={() => selectPosition(index)}>
+              aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}${row === lastScannedPosition ? ' tsd-recent-scan' : ''}`} onClick={() => selectPosition(index)}>
+              {row === lastScannedPosition && <span className="tsd-recent-scan__label">Последняя отсканированная позиция</span>}
               <strong>{row.product_name}</strong>
               <span>{row.unmarked ? 'Штрихкод' : 'GTIN'}: {row.gtin}</span>
               <b>{row.addedTotal} / {row.expected} шт. · {progressLabels[progressState(row.addedTotal, row.expected)]}{targetProductId === row.product_id ? ' · Выбрана для сканирования' : ''}</b>
             </button>)}
           </div>
-          {typeof positionFilter === 'number' && progress.rows[positionFilter]?.product_id && <button type="button" className="tsd-button tsd-button--primary"
-            disabled={scan.isPending || undo.isPending || remove.isPending || complete.isPending || Boolean(code.trim())}
-            onClick={() => {
-              setTargetProductId(progress.rows[positionFilter].product_id!)
-              setSelectedScanId(null)
-              setMessage(null)
-            }}>Сканировать в выбранную позицию</button>}
           <div className="tsd-input-actions">
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'other'} onClick={() => selectPosition('other')}>Вне плана</button>
@@ -478,12 +487,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           {filteredScans.length === 0 && <p className="hint">По выбранной позиции ещё нет сканов.</p>}
           <div className="tsd-mark-list">
             {filteredScans.slice(0, visibleScans).map((item) => <TsdSwipeMark key={item.id}
-              className={`tsd-mark tsd-progress--${!rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : ['scanned', 'valid'].includes(item.status) ? 'done' : 'partial'}`}
+              className={`tsd-mark tsd-progress--${!rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : ['scanned', 'valid'].includes(item.status) ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
               selected={selectedScanId === item.id} open={swipeScanId === item.id} disabled={!online || scannerBlocked || doc.status !== 'draft'}
               onSelect={() => { setSwipeScanId(null); setSelectedScanId(previous => previous === item.id ? null : item.id) }}
               onReveal={open => { setSwipeScanId(open ? item.id : null); if (open) setSelectedScanId(item.id) }}
               deleteLabel={scanUnits(item) > 1 ? `Удалить упаковку: ${scanUnits(item)} шт.` : 'Удалить марку'}
               onDelete={() => remove.mutate(item.id)}>
+              {item.id === lastScanned?.id && <span className="tsd-recent-scan__label">Последняя отсканированная марка</span>}
               <strong>{item.product_name || rowForScan(item)?.product_name || 'Товар вне плана'}</strong>
               <span>GTIN: {effectiveGtinKey(item) || 'не распознан'}{item.box_quantity ? ` · ${item.box_quantity} шт.` : ''}</span>
               <span>{scanPackageLabel(item)}</span>
