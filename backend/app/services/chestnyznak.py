@@ -559,6 +559,19 @@ def serial_len_for_pg(pg: Optional[str]) -> Optional[int]:
     return CZ_PG_SERIAL_LEN.get((pg or "").strip().lower())
 
 
+def restore_tobacco_gs_for_check(code: str, pg: str) -> str:
+    """Restore only the fixed tobacco GS1 format; CZ must confirm the result.
+
+    Keep compact 29-character codes, existing GS, and ambiguous tails intact.
+    The original scan remains unchanged for audit and response correlation.
+    """
+    if pg not in {"tobacco", "otp", "ncp"}:
+        return code
+    if re.fullmatch(r"01[0-9]{14}21[!-~]{7}93[!-~]{4}", code):
+        return code[:25] + _FNC1 + code[25:]
+    return code
+
+
 def cis_confidence_for_pg(raw: str, pg: Optional[str]) -> str:
     """Уверенность реконструкции по товарной группе (pg) — для проверки на скане.
 
@@ -1301,8 +1314,9 @@ class ChestnyZnakService:
 
         В отличие от cises/info, cises/check подтверждает валидность кода в обороте даже
         если участник им не владеет (нужно для отгрузки входящих марок). Код шлём как
-        отсканирован (с криптохвостом), убирая лишь скобки логистических AI — иначе ЧЗ
-        отвечает ``result:false``. Ответ: ``{"result":true}`` — все присланные годны;
+        отсканирован (с криптохвостом), убирая скобки логистических AI. Для точного
+        табачного формата восстанавливаем потерянный GS перед AI 93; положительный
+        ответ ЧЗ обязателен. Ответ: ``{"result":true}`` — все присланные годны;
         ``{"result":false,"codes":[…]}`` — перечислены НЕгодные (для этой группы), их
         пробуем в следующей группе.
         """
@@ -1325,6 +1339,15 @@ class ChestnyZnakService:
         for pg in self.product_groups:
             if not remaining:
                 break
+            # Several originals (with and without GS) can produce the same request.
+            # Keep all aliases so neither scan silently disappears from the result.
+            wire_to_keys: dict[str, list[str]] = {}
+            restored = []
+            for key in remaining:
+                wire = restore_tobacco_gs_for_check(key, pg)
+                wire_to_keys.setdefault(wire, []).append(key)
+                if wire != key:
+                    restored.append({"original": key_to_orig[key], "sent": wire})
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=20) as client:
@@ -1332,7 +1355,7 @@ class ChestnyZnakService:
                         check_url,
                         params={"pg": pg},
                         headers=headers,
-                        json={"codes": remaining},
+                        json={"codes": list(wire_to_keys)},
                     )
                     try:
                         body = resp.json()
@@ -1341,7 +1364,9 @@ class ChestnyZnakService:
                     await log_cz_request(
                         method="POST",
                         url=f"{check_url}?pg={pg}",
-                        request_body={"count": len(remaining)},
+                        request_body={"count": len(wire_to_keys),
+                                      "gs_restored_count": len(restored),
+                                      "gs_restored": restored[:20]},
                         response_status=resp.status_code,
                         response_body=body if isinstance(body, dict) else None,
                         duration_ms=int((time.time() - start) * 1000),
@@ -1361,7 +1386,12 @@ class ChestnyZnakService:
                 remaining = []
                 break
             if isinstance(body.get("codes"), list):
-                invalid = set(body["codes"])
+                invalid_wire = {c for c in body["codes"] if isinstance(c, str)}
+                # An unexpected response must not accidentally validate every scan.
+                if len(invalid_wire) != len(body["codes"]) or not invalid_wire.issubset(wire_to_keys):
+                    had_infra_failure = True
+                    continue
+                invalid = {key for wire in invalid_wire for key in wire_to_keys[wire]}
                 for k in remaining:
                     if k not in invalid:
                         valid_origs.add(key_to_orig[k])
