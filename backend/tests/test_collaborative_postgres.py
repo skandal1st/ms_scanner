@@ -98,7 +98,16 @@ async def test_repeated_terminal_open_with_statuses_reuses_session(monkeypatch):
         results = await asyncio.wait_for(asyncio.gather(
             open_terminal(factory, devices[0], ms_id), open_terminal(factory, devices[0], ms_id)), timeout=10)
         assert results[0].session_id == results[1].session_id
+        assert not results[0].collection_started and not results[1].collection_started
+        ms.change_collection_state.assert_not_awaited()
+        async def begin():
+            async with factory() as db:
+                return await tsd.start_tsd_collection(results[0].id, devices[0], db)
+        await asyncio.wait_for(asyncio.gather(begin(), begin()), timeout=10)
         ms.change_collection_state.assert_awaited_once_with('demand', ms_id, str(state))
+        reopened = await open_terminal(factory, devices[0], ms_id)
+        assert reopened.collection_started
+        ms.change_collection_state.assert_awaited_once()
     finally:
         await engine.dispose()
 
@@ -161,6 +170,8 @@ async def test_shared_barcode_quantity_and_per_terminal_undo_are_atomic(monkeypa
     engine, factory, user, profile, devices, ms_id = await context(monkeypatch)
     first = await open_terminal(factory, devices[0], ms_id)
     await open_terminal(factory, devices[1], ms_id)
+    async with factory() as db:
+        await tsd.start_tsd_collection(first.id, devices[0], db)
     async def scan(device):
         async with factory() as db:
             return await tsd.create_tsd_scan(first.id, tsd.TsdScanRequest(code="04620543080527"), device, db)
@@ -186,6 +197,8 @@ async def test_simultaneous_same_mark_has_one_owner_and_cannot_be_undone_by_the_
     engine, factory, user, profile, devices, ms_id = await context(monkeypatch)
     first = await open_terminal(factory, devices[0], ms_id)
     await open_terminal(factory, devices[1], ms_id)
+    async with factory() as db:
+        await tsd.start_tsd_collection(first.id, devices[0], db)
     async def scan(device):
         async with factory() as db:
             return await tsd.create_tsd_scan(first.id, tsd.TsdScanRequest(code="010462054308052721TEST000000001\x1d93ABCD"), device, db)

@@ -8,6 +8,7 @@ from uuid import UUID
 from datetime import datetime, timezone
 
 from app.services.document_guard import editable_document
+from app.services.collection_start import require_collection_started
 from app.db.models import DocumentStatus, TsdScanAction
 from app.services.scan_events import publish_scan, publish_removed, publish_event
 from app.db.session import get_db
@@ -505,6 +506,7 @@ async def create_scan(
     без вызова ЧЗ. Штрихкод маркированного товара — подсказка отсканировать КМ.
     """
     doc = await editable_document(db, body.document_id, current_user.id)
+    require_collection_started(doc)
     if is_sscc(body.code):
         raise HTTPException(
             400,
@@ -684,6 +686,7 @@ async def create_box_scans(
     Возвращает массив созданных сканов (включая дубли — статус duplicate).
     """
     doc = await editable_document(db, body.document_id, current_user.id)
+    require_collection_started(doc)
     sscc = normalize_sscc(body.sscc)
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
@@ -712,6 +715,7 @@ async def create_bulk_scans(
     дотягиваются по WS по мере проверки в Celery.
     """
     doc = await editable_document(db, body.document_id, current_user.id)
+    require_collection_started(doc)
 
     # Нормализуем список: strip, отбрасываем пустые, дедуп с сохранением порядка.
     seen: set[str] = set()

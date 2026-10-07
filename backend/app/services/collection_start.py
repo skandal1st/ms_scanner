@@ -1,4 +1,4 @@
-"""Apply configured MS statuses once when a shipment is opened for collection."""
+"""Apply configured MS statuses once on an explicit collection start."""
 from datetime import datetime, timezone
 
 import httpx
@@ -8,6 +8,16 @@ from sqlalchemy import select
 from app.db.models import Document, DocumentKind, DocumentStatus, OrganizationProfile
 from app.services.document_guard import processing_lock
 from app.services.shipment_guard import ensure_active_shipment
+
+
+def collection_started(doc):
+    return bool(((getattr(doc, 'upd_meta', None) or {}).get('collection_start') or {}).get('done'))
+
+
+def require_collection_started(doc):
+    if (getattr(doc, 'kind', None) == DocumentKind.demand
+            and getattr(doc, 'moysklad_id', None) and not collection_started(doc)):
+        raise HTTPException(409, 'Сначала нажмите «Начать сборку».')
 
 
 async def start_collection(db, doc, ms):
@@ -26,7 +36,11 @@ async def start_collection(db, doc, ms):
             Document.user_id == doc.user_id, Document.kind == DocumentKind.demand,
             Document.moysklad_id == doc.moysklad_id,
         ))).scalars().all()
-        if any(((d.upd_meta or {}).get('collection_start') or {}).get('done') for d in siblings):
+        completed = next((d for d in siblings if collection_started(d)), None)
+        if completed:
+            if not collection_started(doc):
+                doc.upd_meta = {**(doc.upd_meta or {}), 'collection_start': dict(completed.upd_meta['collection_start'])}
+                await db.commit()
             return
         owner = next((d for d in siblings if (d.upd_meta or {}).get('collection_start')), doc)
         marker = (owner.upd_meta or {}).get('collection_start')
@@ -64,5 +78,8 @@ async def start_collection(db, doc, ms):
                     await save()
             marker['done'] = True
             await save()
+            if owner.id != doc.id:
+                doc.upd_meta = {**(doc.upd_meta or {}), 'collection_start': dict(marker)}
+                await db.commit()
         except (ValueError, httpx.HTTPError) as exc:
-            raise HTTPException(502, 'Не удалось изменить статусы при начале сборки. Проверьте настройки и права решения в МойСкладе, затем откройте отгрузку повторно. ' + (str(exc) if isinstance(exc, ValueError) else '')) from exc
+            raise HTTPException(502, 'Не удалось изменить статусы при начале сборки. Проверьте настройки и права решения в МойСкладе, затем нажмите «Начать сборку» повторно. ' + (str(exc) if isinstance(exc, ValueError) else '')) from exc

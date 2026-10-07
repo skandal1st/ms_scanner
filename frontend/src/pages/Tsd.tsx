@@ -257,7 +257,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [code, setCode] = useState('')
   const [lastCode, setLastCode] = useState('')
   const [lastScannedId, setLastScannedId] = useState<string | null>(null)
-  const [reviewing, setReviewing] = useState(false)
+  const [reviewing, setReviewing] = useState(!initial.collection_started)
   const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const [swipeScanId, setSwipeScanId] = useState<string | null>(null)
@@ -278,7 +278,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       } finally { if (liveDuringFetch.current === events) liveDuringFetch.current = null }
     },
     initialData: initial,
-    refetchInterval: (query) => query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
+    refetchInterval: (query) => !query.state.data?.collection_started ? 3000
+      : query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
   const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
   const last = doc.scans[0]
@@ -361,6 +362,19 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     },
     onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
   })
+  const startCollection = useMutation({
+    networkMode: 'always',
+    mutationFn: () => tsdApi.startCollection(doc.id),
+    onSuccess: () => {
+      qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => previous
+        ? { ...previous, collection_started: true } : previous)
+      setCode('')
+      setReviewing(false)
+      setMessage(null)
+      refresh()
+    },
+    onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
+  })
   const complete = useMutation({
     networkMode: 'always',
     mutationFn: () => tsdApi.complete(doc.id),
@@ -384,11 +398,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => {
     // Android scanners may inject through the IME and need an editable, focused input.
     // Restore focus after React applies mode changes or removes readOnly after a request.
-    if (!scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending && !release.isPending) {
+    if (doc.collection_started && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending && !release.isPending) {
       inputRef.current?.focus({ preventScroll: true })
     }
-  }, [targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, release.isPending])
-  const scannerBlocked = scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
+  }, [doc.collection_started, targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, release.isPending])
+  const scannerBlocked = !doc.collection_started || startCollection.isPending || scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
   useTsdScannerFocus(inputRef, scannerBlocked, (value) => setCode((previous) => previous + value))
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
@@ -424,7 +438,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <form className={`tsd-scan-box tsd-scan-box--compact ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
           <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} /><span className="tsd-visually-hidden">Сканируйте штрихкод</span></label>
           <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
-            readOnly={scannerBlocked} inputMode="text" placeholder={scan.isPending ? 'Записываем скан…' : 'Сканируйте марку'}
+            readOnly={scannerBlocked} inputMode="text" placeholder={!doc.collection_started ? 'Сначала начните сборку' : scan.isPending ? 'Записываем скан…' : 'Сканируйте марку'}
             autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
           <button type="submit" className="tsd-button" aria-label="Принять код" disabled={!online || !code.trim() || scannerBlocked}><Icon name="check" size={20} /></button>
         </form>
@@ -451,6 +465,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <TsdConnection />
       </header>
       {doc.active_on_other_device ? <div className="tsd-alert tsd-alert--warn">Отгрузка также открыта на другом ТСД</div> : null}
+      {!doc.collection_started && <section className="tsd-current" style={{ padding: 18 }}>
+        <p>Проверьте план отгрузки и начните сборку.</p>
+        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || startCollection.isPending}
+          onClick={() => startCollection.mutate()}>{startCollection.isPending ? 'Начинаем сборку…' : 'Начать сборку'}</button>
+      </section>}
       <section className="tsd-total">
         <span>Собрано</span>
         <strong>{progress.total.addedTotal}<small>/{progress.total.expected || '—'}</small></strong>
@@ -466,7 +485,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <p><span>Собрано</span><b>{current?.addedTotal ?? 0} <small>шт.</small></b></p>
         </div>
       </section>
-      <details ref={reviewRef} className="tsd-order-review" onToggle={(event) => setReviewing(event.currentTarget.open)}>
+      <details ref={reviewRef} className="tsd-order-review" open={reviewing} onToggle={(event) => setReviewing(event.currentTarget.open)}>
         <summary>Позиции заказа ({progress.rows.length}) и сканы ({doc.scans.length})</summary>
           <p className="hint">Выберите позицию для привязки следующих марок. Смахните марку влево, чтобы показать корзину для удаления.</p>
         {reviewing && <>

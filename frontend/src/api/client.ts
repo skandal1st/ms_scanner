@@ -92,6 +92,7 @@ export interface PlanItem {
 }
 
 export interface Document {
+  collection_started?: boolean
   customer_order_name?: string | null
   id: string
   moysklad_id: string | null
@@ -920,6 +921,7 @@ export interface TsdDocumentItem {
 }
 
 export interface TsdDocumentDetail {
+  collection_started?: boolean
   id: string
   name: string
   status: string
@@ -973,6 +975,7 @@ export const tsdApi = {
   selectDocument: (moysklad_id: string, customer_order_id?: string) =>
     tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id, customer_order_id }),
   getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
+  startCollection: (id: string) => tsdClient.post(`/tsd/documents/${id}/start-collection`),
   scan: (id: string, code: string, moysklad_product_id?: string) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code, moysklad_product_id }),
   undoLast: (id: string) =>

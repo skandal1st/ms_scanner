@@ -76,6 +76,11 @@ export function useLoadDocument(documentId: string | null) {
       return { doc, scans }
     },
     enabled: !!documentId,
+    // A PC and TSD may preview the same shipment; observe an explicit start elsewhere.
+    refetchInterval: (query) => {
+      const doc = query.state.data?.doc
+      return doc?.kind === 'demand' && doc.moysklad_id && doc.status === 'draft' && !doc.collection_started ? 3000 : false
+    },
   })
 
   // Переключились на другой документ → сразу чистим сессию, чтобы план/сканы

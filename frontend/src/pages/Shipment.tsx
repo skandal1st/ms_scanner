@@ -59,6 +59,7 @@ export function ShipmentPage({
   const [bulkBusy, setBulkBusy] = useState(false)
   const openingRef = useRef(false)
   const [opening, setOpening] = useState(false)
+  const collectionReady = Boolean(document && (!document.moysklad_id || document.collection_started))
   const {
     send: sendToMs,
     sending,
@@ -77,7 +78,7 @@ export function ShipmentPage({
   })
 
   const handleBulkMarks = async (codes: string[]) => {
-    if (!document) return
+    if (!document || !collectionReady) return
     setBulkBusy(true)
     try {
       const { data: created } = await scansApi.bulk(document.id, codes, unpackBox)
@@ -183,12 +184,28 @@ export function ShipmentPage({
     setPendingDoc(null)
     reset()
     try {
-      await documentsApi.startCollection(doc.id)
       setPendingDoc(doc)
       setDocument(doc)
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
-      modal.alert(detail || 'Не удалось начать сборку. Откройте отгрузку повторно.', { variant: 'error' })
+      modal.alert(detail || 'Не удалось открыть отгрузку.', { variant: 'error' })
+    } finally {
+      openingRef.current = false
+      setOpening(false)
+    }
+  }
+
+  const handleStartCollection = async () => {
+    if (!document || openingRef.current) return
+    openingRef.current = true
+    setOpening(true)
+    try {
+      await documentsApi.startCollection(document.id)
+      const { data } = await documentsApi.get(document.id)
+      setDocument(data)
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      modal.alert(detail || 'Не удалось начать сборку. Повторите попытку.', { variant: 'error' })
     } finally {
       openingRef.current = false
       setOpening(false)
@@ -249,7 +266,7 @@ export function ShipmentPage({
     document?.status === 'processing' ? 'badge badge--info' : 'badge badge--warn'
   const docStatusText =
     document?.status === 'accepted' ? 'Завершено' :
-    document?.status === 'processing' ? 'Обрабатывается' : 'В процессе'
+    document?.status === 'processing' ? 'Обрабатывается' : collectionReady ? 'В процессе' : 'Не начата'
 
   return (
     <div className="acc-page" style={terminalMode ? {height:'100%'} : undefined}>
@@ -312,6 +329,14 @@ export function ShipmentPage({
         </div>
       )}
 
+      {document?.status === 'draft' && !collectionReady && (
+        <div className="alert" style={{ margin: '12px 18px 0', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span className="alert__spacer">Проверьте план отгрузки и начните сборку.</span>
+          <button type="button" className="button button--primary" disabled={opening} onClick={handleStartCollection}>
+            {opening ? 'Начинаем сборку…' : 'Начать сборку'}
+          </button>
+        </div>
+      )}
       {terminalMode && <div style={{padding:'12px 18px'}}>
         <p className="hint">Режим ТСД: сканируйте марки на терминале. Изменения сборки отображаются здесь автоматически.</p>
         <StatsPanel />
@@ -325,16 +350,17 @@ export function ShipmentPage({
               <fieldset disabled={opening} style={{border: 0, padding: 0, margin: 0, minWidth: 0}}>
                 <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
               </fieldset>
-              {opening && <p role="status" className="hint">Открываем отгрузку и применяем статусы…</p>}
+              {opening && <p role="status" className="hint">Подождите…</p>}
             </>
           )}
           <ManualProductTargetBar />
-          <ScanInput documentId={document?.id ?? null} />
+          <ScanInput documentId={collectionReady ? document?.id ?? null : null}
+            inactiveHint={document ? 'Нажмите «Начать сборку», чтобы сканировать марки' : undefined} />
           <button
             type="button"
             className="button"
             style={{ marginTop: 8, width: '100%', justifyContent: 'center' }}
-            disabled={!document}
+            disabled={!collectionReady}
             onClick={() => setBulkOpen(true)}
           >
             <Icon name="upload" size={16} /> Загрузить список марок
@@ -441,6 +467,7 @@ export function ShipmentPage({
           className="button button--success"
           disabled={
             !document ||
+            !collectionReady ||
             scans.length === 0 ||
             sending ||
             document?.status === "processing" ||

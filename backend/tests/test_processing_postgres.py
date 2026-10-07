@@ -23,7 +23,8 @@ pytestmark = pytest.mark.skipif(os.getenv("AUDIT_POSTGRES") != "1", reason="requ
 async def seed(factory):
     async with factory() as db:
         user = User(id=uuid4(), email=f"{uuid4()}@example.test", password_hash="")
-        doc = Document(id=uuid4(), user_id=user.id, name="Audit", moysklad_id="ms-id")
+        doc = Document(id=uuid4(), user_id=user.id, name="Audit", moysklad_id="ms-id",
+                       upd_meta={'collection_start': {'done': True}})
         db.add_all([user, doc])
         await db.flush()
         db.add(Integration(user_id=user.id, moysklad_token="fake"))

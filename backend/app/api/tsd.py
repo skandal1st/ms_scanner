@@ -43,6 +43,7 @@ from app.db.models import (
 )
 from app.db.session import get_db
 from app.services.document_guard import lock_ms_document
+from app.services.collection_start import collection_started, require_collection_started
 from app.services.scan_events import publish_scan, publish_removed, publish_event
 from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
@@ -133,6 +134,7 @@ class TsdOrderShipments(BaseModel):
 
 
 class TsdDocumentDetail(BaseModel):
+    collection_started: bool = False
     id: UUID
     name: str
     status: str
@@ -682,9 +684,7 @@ async def select_tsd_document(
             doc.moysklad_customer_order_id = order_id
             doc.customer_order_name = order_name
     await db.commit()
-    from app.services.collection_start import start_collection
-    await start_collection(db, doc, ms)
-    # Status steps commit independently; reacquire the find-or-create lock for sessions.
+    # Opening is a preview; only the explicit start endpoint changes MS statuses.
     await lock_ms_document(db, device.user_id, DocumentKind.demand, body.moysklad_id)
     session = (
         await db.execute(
@@ -714,6 +714,7 @@ async def select_tsd_document(
         )
     ).scalar_one()
     return TsdDocumentDetail(
+        collection_started=collection_started(doc),
         id=doc.id,
         name=doc.name,
         status=doc.status.value,
@@ -759,12 +760,25 @@ async def get_tsd_document(
     ).scalar_one()
     await db.commit()
     return TsdDocumentDetail(
+        collection_started=collection_started(doc),
         id=doc.id, name=doc.name, status=doc.status.value, plan=list(doc.plan or []),
         scans=[ScanResponse.model_validate(s) for s in scans], session_id=session.id,
         active_on_other_device=bool(other),
         customer_order_name=doc.customer_order_name,
         customer_order_id=doc.moysklad_customer_order_id,
     )
+
+
+@router.post("/documents/{document_id}/start-collection")
+async def start_tsd_collection(document_id: UUID,
+                               device: TsdDevice = Depends(get_shipping_device),
+                               db: AsyncSession = Depends(get_db)):
+    doc = await _owned_tsd_document(db, device, document_id)
+    # Require an active session on this device as well as workplace access.
+    await get_tsd_document(document_id, device, db)
+    from app.services.collection_start import start_collection
+    await start_collection(db, doc, await _ms_for_user(db, device.user_id))
+    return {'status': 'started', 'collection_started': True}
 
 
 @router.post("/documents/{document_id}/scans/{scan_id}/pack-mode", response_model=ScanResponse)
@@ -788,6 +802,7 @@ async def create_tsd_scan(
     doc = await _owned_tsd_document(db, device, document_id)
     from app.services.document_guard import editable_document
     doc = await editable_document(db, document_id, device.user_id)
+    require_collection_started(doc)
     user, _, _ = await _device_scope(db, device)
     target = None
     if body.moysklad_product_id:
@@ -894,6 +909,7 @@ async def complete_tsd_session(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _owned_tsd_document(db, device, document_id)
+    require_collection_started(doc)
     session = (
         await db.execute(
             select(TsdDocumentSession).where(

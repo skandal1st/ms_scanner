@@ -14,6 +14,7 @@ from app.services.moysklad import (MoySkladService, SUPPORTED_KINDS, customer_or
     customer_order_empty_message, customer_order_direct_shipment_count, shipment_matches_customer_order)
 from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
+from app.services.collection_start import collection_started, require_collection_started
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -30,6 +31,7 @@ class PlanItem(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    collection_started: bool = False
     id: UUID
     moysklad_id: Optional[str]
     name: str
@@ -74,6 +76,7 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
     # Вызывающий должен передать scan_count явно (либо посчитать SELECT count,
     # либо использовать selectinload, либо знать что документ только что создан).
     return DocumentResponse(
+        collection_started=collection_started(doc),
         id=doc.id,
         moysklad_id=doc.moysklad_id,
         name=doc.name,
@@ -667,6 +670,7 @@ async def process_document(
     doc = await editable_document(db, document_id, current_user.id)
     if doc.kind not in (DocumentKind.demand, DocumentKind.supply):
         raise HTTPException(400, "Для списания используйте отправку в Честный Знак")
+    require_collection_started(doc)
     if not doc.moysklad_id:
         raise HTTPException(409, "Сначала выберите документ МойСклад")
     ms = await _get_ms_service(current_user, db)
@@ -762,4 +766,4 @@ async def begin_collection(document_id: UUID, current_user: User = Depends(get_c
         return {'status': 'started'}
     from app.services.collection_start import start_collection
     await start_collection(db, doc, await _get_ms_service(current_user, db))
-    return {'status': 'started'}
+    return {'status': 'started', 'collection_started': True}

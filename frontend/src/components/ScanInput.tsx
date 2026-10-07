@@ -8,9 +8,10 @@ import { Icon } from './Icon'
 
 interface Props {
   documentId: string | null
+  inactiveHint?: string
 }
 
-export function ScanInput({ documentId }: Props) {
+export function ScanInput({ documentId, inactiveHint = 'Выберите документ для начала сканирования' }: Props) {
   const [manualValue, setManualValue] = useState('')
   const [manualOpen, setManualOpen] = useState(false)
   const [lastCode, setLastCode] = useState('')
@@ -185,7 +186,7 @@ export function ScanInput({ documentId }: Props) {
         </div>
       )}
       {!documentId && (
-        <p className="hint">Выберите документ для начала сканирования</p>
+        <p className="hint">{inactiveHint}</p>
       )}
       <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
