@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { acceptanceApi, scansApi, productsApi } from '../api/client'
 import type {
   AcceptanceDoc,
@@ -38,6 +39,7 @@ export function AcceptancePage({
   presetMoyskladId,
   onSent,
 }: AcceptancePageProps = {}) {
+  const queryClient = useQueryClient()
   const [doc, setDoc] = useState<AcceptanceDoc | null>(null)
   const [result, setResult] = useState<ImportUpdResult | null>(null)
   const [scans, setScans] = useState<Scan[]>([])
@@ -141,6 +143,7 @@ export function AcceptancePage({
         product_group: group,
         moysklad_id: moyskladId || undefined,
       })
+      void queryClient.invalidateQueries({ queryKey: ['edo-incoming-count'] })
       setDoc(data.document)
       setResult(data.import_result)
       const { data: sc } = await scansApi.list(data.document.id)

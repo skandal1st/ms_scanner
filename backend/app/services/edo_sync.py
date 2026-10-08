@@ -23,6 +23,7 @@ from app.services.saby import (
     parse_document,
     primary_upd_link,
     incoming_upd_link,
+    INCOMING_PENDING_STATE_CODES,
 )
 
 # Предохранитель от бесконечного цикла (25/стр → до 25000 документов за один синк).
@@ -82,8 +83,10 @@ async def _upsert_document(db, user_id, parsed: dict) -> EdoDocument:
     row.doc_type = parsed.get("type")
     row.counterparty_inn = parsed.get("counterparty_inn")
     row.counterparty_name = parsed.get("counterparty_name")
-    row.state_code = parsed.get("state_code")
-    row.state_name = parsed.get("state_name")
+    # A later change event may omit the state: do not erase the last known status.
+    if parsed.get("state_code") is not None:
+        row.state_code = parsed["state_code"]
+        row.state_name = parsed.get("state_name")
     if parsed.get("mark_state"):
         row.mark_state = parsed["mark_state"]
     return row
@@ -139,13 +142,54 @@ async def _save_marks(db, doc: EdoDocument, user_id, codes: list[str]) -> int:
     return n
 
 
+def _set_incoming_link(row, link):
+    if link and row.upd_link != link:
+        row.upd_link = link
+        row.marks_parsed = False
+        row.codes_total = 0
+
+
+def incoming_mark_count(raw: bytes) -> int:
+    from app.services.upd_parser import parse_upd_503
+    upd = parse_upd_503(raw)
+    return sum(len(position.codes) + len(position.packages) for position in upd.positions)
+
+
+async def check_incoming_marks(db, client, auth, user_id, *, limit=100):
+    """Check pending XML once per attachment, including old cached incoming documents."""
+    rows = (await db.execute(select(EdoDocument).where(
+        EdoDocument.user_id == user_id, EdoDocument.direction == 'Входящий',
+        EdoDocument.accepted_document_id.is_(None), EdoDocument.upd_link.isnot(None),
+        EdoDocument.state_code.in_(INCOMING_PENDING_STATE_CODES),
+        EdoDocument.marks_parsed.is_(False),
+    ).order_by(EdoDocument.updated_at.desc()).limit(limit))).scalars().all()
+    checked = 0
+    for row in rows:
+        try:
+            try:
+                raw = await client.download(auth, row.upd_link)
+            except SabyAuthError:
+                auth = await client.authenticate()
+                raw = await client.download(auth, row.upd_link)
+            count = incoming_mark_count(raw)
+        except Exception as exc:
+            # Unknown content never counts as marked; retry on the next sync.
+            logger.warning('edo_sync.incoming_check_failed', external_id=row.external_id,
+                           error=str(exc))
+            continue
+        row.codes_total = count
+        row.marks_parsed = True
+        checked += 1
+    await db.commit()
+    return checked
+
+
 async def scan_incoming_upds(db, integ: Integration, *, days: int = 60, max_pages: int = 8) -> int:
     """Живой скан входящих УПД (Поступление) из ленты Saby → upsert в EdoDocument.
 
     Для ручного «Обновить» на странице приёмки: проходим до max_pages страниц ленty за
-    период, сохраняем входящие документы с первичным УПД-вложением (ссылку — в upd_link),
-    марки не качаем. Возвращает число найденных входящих УПД. Best-effort (не бросает
-    наружу SabyError — вернём то, что успели)."""
+    период, обновляем статусы и ссылки первичных УПД, затем проверяем до 25 XML.
+    Остальные XML проверяются фоновым синком. Возвращает число найденных УПД."""
     client = _client(integ)
     if client is None:
         return 0
@@ -178,15 +222,15 @@ async def scan_incoming_upds(db, integ: Integration, *, days: int = 60, max_page
         for d in docs:
             parsed = parse_document(d)
             ext = parsed.get("id")
-            if not ext or ext in seen or parsed.get("direction") != "Входящий":
+            if not ext or parsed.get("direction") != "Входящий":
                 continue
             link = incoming_upd_link(d)
-            if not link:
-                continue
-            seen.add(ext)
+            # Status-only events must update already known documents as well.
             row = await _upsert_document(db, user_id, parsed)
-            row.upd_link = link
-            found += 1
+            _set_incoming_link(row, link)
+            if link and ext not in seen:
+                seen.add(ext)
+                found += 1
         await db.commit()
         eid, edt, did = last_event_cursor(docs)
         nav = result.get("Навигация") if isinstance(result, dict) else {}
@@ -195,6 +239,7 @@ async def scan_incoming_upds(db, integ: Integration, *, days: int = 60, max_page
             event_id, doc_id, cur_from = eid, did, (edt or cur_from)
         if not has_more:
             break
+    await check_incoming_marks(db, client, auth, user_id, limit=25)
     logger.info("edo_sync.incoming_scanned", user_id=str(user_id), found=found)
     return found
 
@@ -267,16 +312,16 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
             if not ext:
                 continue
             # Мониторинг ВХОДЯЩИХ УПД (Поступление) для приёмки из ЭДО: сохраняем
-            # документ + ссылку на первичное вложение (марки не качаем — скачаем при
-            # импорте). accepted_document_id не трогаем (проставится при создании приёмки).
+            # документ и ссылку на первичное вложение. XML проверяются после ленты.
+            # accepted_document_id не трогаем (проставится при создании приёмки).
             if parsed.get("direction") == "Входящий":
                 link = incoming_upd_link(d)
-                if link:
+                row = await _upsert_document(db, user_id, parsed)
+                _set_incoming_link(row, link)
+                if row.upd_link:
                     if ext not in seen_ext:
                         seen_ext.add(ext)
                         docs_seen += 1
-                    row = await _upsert_document(db, user_id, parsed)
-                    row.upd_link = link
                     await db.flush()
                 continue
 
@@ -342,6 +387,7 @@ async def sync_user(db, integ: Integration, *, date_from: str, date_to: Optional
         if not has_more:
             break
 
+    await check_incoming_marks(db, client, auth, user_id)
     logger.info("edo_sync.done", user_id=str(user_id), pages=pages, docs=docs_seen,
                 out_docs=out_docs, parsed=parsed_docs, marks=marks_saved, names=names_saved,
                 downloaded=downloaded, skipped=skipped)

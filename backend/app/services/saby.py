@@ -24,6 +24,9 @@ SERVICE_URL = "https://online.sbis.ru/service/?srv=1"
 # Исходящая реализация/УПД — «Реализация», входящее поступление — «Поступление».
 DOC_TYPE_OUTGOING = "Реализация"
 DOC_TYPE_INCOMING = "Поступление"
+# https://saby.ru/help/integration/api/sequence/cod
+# New, internal processing, awaiting signature. Completed/error/revoked are excluded.
+INCOMING_PENDING_STATE_CODES = (1, 10, 23)
 
 # ВАЖНО: без charset=utf-8 Saby читает тело как windows-1251 и падает на кириллице
 # (ошибка -32700). Авторизация — application/json, вызовы сервиса — application/json-rpc

@@ -22,6 +22,7 @@ from app.api.deps import get_current_user, require_full_edition, get_active_orga
 from app.api.documents import _profile_for_organization, _ref_id
 from app.core.config import settings
 from app.core.logging import logger
+from app.services.saby import INCOMING_PENDING_STATE_CODES
 from app.core.security import decrypt_token
 from app.db.models import (
     User, Document, DocumentKind, DocumentStatus, Integration, OrganizationProfile, Scan, ScanStatus,
@@ -332,7 +333,7 @@ class EdoImportResponse(BaseModel):
 
 
 def _edo_incoming_query(user_id):
-    """Входящие УПД, ещё не превращённые в приёмку (accepted_document_id IS NULL)."""
+    """Pending incoming UPDs with confirmed marks, not yet imported locally."""
     return (
         select(EdoDocument)
         .where(
@@ -340,6 +341,9 @@ def _edo_incoming_query(user_id):
             EdoDocument.direction == "Входящий",
             EdoDocument.upd_link.isnot(None),
             EdoDocument.accepted_document_id.is_(None),
+            EdoDocument.state_code.in_(INCOMING_PENDING_STATE_CODES),
+            EdoDocument.marks_parsed.is_(True),
+            EdoDocument.codes_total > 0,
         )
         .order_by(EdoDocument.created_at.desc())
     )
@@ -437,6 +441,8 @@ async def import_edo_upd(
         )
     if edo_row.accepted_document_id is not None:
         raise HTTPException(status_code=409, detail="Этот УПД уже принят")
+    if edo_row.state_code not in INCOMING_PENDING_STATE_CODES:
+        raise HTTPException(status_code=409, detail="УПД уже обработан в ЭДО или не ожидает приёмки. Обновите список.")
     link = edo_row.upd_link
 
     try:
@@ -448,6 +454,17 @@ async def import_edo_upd(
         raise HTTPException(status_code=502, detail=f"Скачивание УПД из Saby: {exc}")
     if not raw:
         raise HTTPException(status_code=502, detail="Пустой файл УПД из ЭДО")
+    from app.services.edo_sync import incoming_mark_count
+    from app.services.upd_parser import UpdParseError
+    try:
+        count = incoming_mark_count(raw)
+    except UpdParseError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not count:
+        edo_row.marks_parsed = True
+        edo_row.codes_total = 0
+        await db.commit()
+        raise HTTPException(status_code=409, detail="В УПД нет кодов маркировки. Обновите список входящих.")
 
     # План из поступления МС (если привязано) — как в create_acceptance_document.
     moysklad_id = (body.moysklad_id or "").strip() or None

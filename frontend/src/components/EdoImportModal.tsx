@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { acceptanceApi } from '../api/client'
 import type { EdoIncomingDoc } from '../api/client'
 
@@ -17,6 +18,7 @@ interface Props {
  * «Принять» родитель скачивает XML и создаёт приёмку с выбранной группой/поступлением.
  */
 export function EdoImportModal({ open, onClose, groupSelected, busy = false, onPick }: Props) {
+  const queryClient = useQueryClient()
   const [docs, setDocs] = useState<EdoIncomingDoc[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -27,7 +29,10 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
     setLoading(true)
     acceptanceApi
       .edoIncoming(refresh)
-      .then(({ data }) => setDocs(data))
+      .then(({ data }) => {
+        setDocs(data)
+        void queryClient.invalidateQueries({ queryKey: ['edo-incoming-count'] })
+      })
       .catch((e) => {
         const ax = e as { response?: { data?: { detail?: string } } }
         setError(ax?.response?.data?.detail ?? 'Не удалось получить входящие документы ЭДО')
@@ -92,8 +97,8 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
             </div>
           )}
           <p className="hint" style={{ marginTop: 0 }}>
-            Входящие поступления из Saby с первичным УПД. Нажмите «Принять» — коды из
-            документа загрузятся в новую приёмку.
+            Только ожидающие обработки УПД из Saby с кодами маркировки или маркированными упаковками.
+            Обработанные, аннулированные и уже импортированные документы скрыты.
           </p>
           {loading && <div className="text-muted">Загружаю входящие документы…</div>}
           {error && (
@@ -102,7 +107,7 @@ export function EdoImportModal({ open, onClose, groupSelected, busy = false, onP
             </div>
           )}
           {!loading && !error && docs.length === 0 && (
-            <div className="text-muted">Входящих УПД за период не найдено.</div>
+            <div className="text-muted">Новых УПД с маркировкой, ожидающих приёмки, нет.</div>
           )}
           {docs.length > 0 && (
             <div style={{ maxHeight: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>

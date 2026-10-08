@@ -103,7 +103,7 @@ function Layout({ children }: { children: React.ReactNode }) {
               <span
                 className="badge badge--info"
                 style={{ marginLeft: 6, fontSize: 11, padding: '0 6px', borderRadius: 10 }}
-                title={`Новых входящих УПД: ${edoCount}`}
+                title={`Новых УПД с маркировкой: ${edoCount}`}
               >
                 {edoCount}
               </span>
