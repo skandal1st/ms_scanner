@@ -80,11 +80,28 @@ async def test_xml_failure_stays_unverified_for_retry():
 
 async def test_state_only_event_updates_cached_status_and_keeps_import(monkeypatch):
     row = NS(state_code=10, state_name='В обработке', accepted_document_id=uuid4())
-    db = NS(execute=AsyncMock(return_value=NS(scalar_one_or_none=lambda: row)))
+    db = NS(execute=AsyncMock(return_value=NS(scalar_one_or_none=lambda: row)), flush=AsyncMock())
     await edo_sync._upsert_document(db, uuid4(), {'id': 'doc', 'state_code': 7, 'state_name': 'Завершён'})
     assert row.state_code == 7 and row.accepted_document_id
     await edo_sync._upsert_document(db, uuid4(), {'id': 'doc'})
     assert row.state_code == 7
+
+
+async def test_repeated_new_document_events_flush_pending_insert_before_lookup():
+    pending, stored = [], {}
+    async def flush():
+        for row in pending:
+            stored[row.external_id] = row
+        pending.clear()
+    async def execute(statement):
+        return NS(scalar_one_or_none=lambda: stored.get('new'))
+    db = NS(flush=flush, execute=execute, add=pending.append)
+    user = uuid4()
+    first = await edo_sync._upsert_document(db, user, {'id': 'new', 'state_code': 10})
+    second = await edo_sync._upsert_document(db, user, {'id': 'new', 'state_code': 7})
+    assert first is second
+    assert second.state_code == 7
+    assert not pending
 
 
 async def test_manual_scan_applies_later_status_even_without_attachment(monkeypatch):

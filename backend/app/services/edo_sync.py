@@ -67,6 +67,8 @@ def _client(integ: Integration) -> Optional[SabyClient]:
 async def _upsert_document(db, user_id, parsed: dict) -> EdoDocument:
     """Upsert EdoDocument по (user_id, external_id). Возвращает ORM-объект (свежий)."""
     ext = parsed["id"]
+    # Sessions disable autoflush: a repeated event must see the preceding insert.
+    await db.flush()
     row = (
         await db.execute(
             select(EdoDocument).where(
