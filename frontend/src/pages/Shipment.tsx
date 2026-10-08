@@ -291,7 +291,7 @@ export function ShipmentPage({
           ) : null}
         </div>
         <span className="acc-header__doc">
-          {document?.customer_order_name ? `Заказ ${document.customer_order_name} · Отгрузка ${document.name}` : document?.name ?? 'Документ не выбран'}
+          {document?.display_name || document?.name || 'Документ не выбран'}
         </span>
       </header>
 

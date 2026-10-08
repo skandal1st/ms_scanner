@@ -392,6 +392,7 @@ class MoySkladService:
             resp = await client.get(
                 f"{self.base_url}/entity/{kind}/{doc_id}",
                 headers=self.headers,
+                params={'expand': 'agent,customerOrder'} if kind == 'demand' else None,
             )
             resp.raise_for_status()
             return resp.json()

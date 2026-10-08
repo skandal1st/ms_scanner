@@ -92,6 +92,7 @@ export interface PlanItem {
 }
 
 export interface Document {
+  display_name?: string | null
   collection_started?: boolean
   customer_order_name?: string | null
   id: string

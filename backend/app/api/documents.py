@@ -15,6 +15,7 @@ from app.services.moysklad import (MoySkladService, SUPPORTED_KINDS, customer_or
 from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
 from app.services.collection_start import collection_started, require_collection_started
+from app.services.shipment_labels import update_shipment_metadata, shipment_display_name
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -31,6 +32,7 @@ class PlanItem(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    display_name: Optional[str] = None
     collection_started: bool = False
     id: UUID
     moysklad_id: Optional[str]
@@ -80,6 +82,7 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
         id=doc.id,
         moysklad_id=doc.moysklad_id,
         name=doc.name,
+        display_name=shipment_display_name(doc) if doc.kind == DocumentKind.demand else doc.name,
         kind=doc.kind,
         status=doc.status,
         scan_count=scan_count,
@@ -319,8 +322,11 @@ async def create_document(
         if existing is not None:
             await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
                                           existing.moysklad_customer_order_id, body.moysklad_id)
+            update_shipment_metadata(existing, verified_ms_doc)
+            await db.commit()
             return _doc_to_response(existing, await _scan_count(db, existing.id))
     plan: list = []
+    ms_doc = verified_ms_doc or {}
     ms_organization_id: Optional[str] = None
     ms_store_id: Optional[str] = None
     if body.moysklad_id:
@@ -358,6 +364,8 @@ async def create_document(
         plan=plan,
     )
     db.add(doc)
+    if body.kind == DocumentKind.demand and ms_doc:
+        update_shipment_metadata(doc, ms_doc)
     await db.commit()
     await db.refresh(doc)
     # Документ только что создан — сканов заведомо нет.
@@ -447,6 +455,9 @@ async def resolve_document(
         if body.customer_order_id:
             existing.moysklad_customer_order_id = str(body.customer_order_id)
             existing.customer_order_name = order_name
+        if body.kind == DocumentKind.demand:
+            update_shipment_metadata(existing, verified_ms_doc, order_name)
+        if body.customer_order_id or body.kind == DocumentKind.demand:
             await db.commit()
         return _doc_to_response(existing, await _scan_count(db, existing.id))
 
@@ -495,6 +506,8 @@ async def resolve_document(
         plan=plan,
     )
     db.add(doc)
+    if body.kind == DocumentKind.demand:
+        update_shipment_metadata(doc, ms_doc, order_name)
     await db.commit()
     await db.refresh(doc)
     return _doc_to_response(doc, scan_count=0)
@@ -539,6 +552,17 @@ async def get_document(
     from app.services.legacy_pack_plan import refresh_legacy_pack_plan
     if doc.moysklad_id and doc.status == DocumentStatus.draft and any('pack_quantities' not in p for p in doc.plan or []):
         await refresh_legacy_pack_plan(db, doc, await _get_ms_service(current_user, db), _plan_source_kind(doc.kind.value))
+    if doc.kind == DocumentKind.demand and doc.moysklad_id and not doc.moysklad_name:
+        # One-time enrichment of shipments created before structured display metadata.
+        try:
+            ms = await _get_ms_service(current_user, db)
+            shipment = await ms.get_document('demand', doc.moysklad_id)
+            update_shipment_metadata(doc, shipment)
+            await db.commit()
+        except (HTTPException, httpx.HTTPError):
+            # Keep old collections readable if MS is temporarily unavailable.
+            from app.core.logging import logger
+            logger.warning('shipment.label_refresh_failed', document_id=str(doc.id))
     return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 

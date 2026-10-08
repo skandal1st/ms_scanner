@@ -310,6 +310,8 @@ class Document(Base):
     moysklad_store_id = Column(String(64), nullable=True)
     moysklad_customer_order_id = Column(String(64), nullable=True, index=True)
     customer_order_name = Column(String(500), nullable=True)
+    moysklad_name = Column(String(255), nullable=True)
+    agent_name = Column(String(500), nullable=True)
     name = Column(String(500), nullable=False)
     kind = Column(
         Enum(DocumentKind),

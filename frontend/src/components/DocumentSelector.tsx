@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMsDocuments, useDocuments, useCreateDocument } from '../hooks/useDocuments'
 import type { Document, DocumentKind, MsDocument } from '../api/client'
+import { shipmentLabel } from '../lib/shipmentLabel'
 
 interface Props {
   kind: DocumentKind
@@ -18,15 +19,8 @@ const KIND_LABEL: Record<DocumentKind, string> = {
   supply: 'поступление',
 }
 
-/** Отображаемое имя МС-отгрузки: "00045 - (00123) ООО Покупатель".
- * Номер привязанного заказа, затем номер отгрузки в скобках, затем контрагент.
- * Отсутствующие части пропускаются (заказ/контрагент могут быть не заданы). */
 function msDocLabel(m: MsDocument): string {
-  const number = m.name || `Без имени · ${m.id.slice(0, 8)}`
-  let label = `(${number})`
-  if (m.customer_order_name) label = `${m.customer_order_name} - ${label}`
-  if (m.agent_name) label = `${label} ${m.agent_name}`
-  return label
+  return shipmentLabel(m)
 }
 
 export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
@@ -51,6 +45,10 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
   const { data: msDocs, isLoading: msLoading } = useMsDocuments(msSearchKind, debounced || undefined)
   const { data: documents } = useDocuments(kind)
   const createMutation = useCreateDocument()
+  const localLabel = (doc: Document) => {
+    const current = msDocs?.find(item => item.id === doc.moysklad_id)
+    return current ? shipmentLabel({ ...current, customer_order_name: current.customer_order_name || doc.customer_order_name }) : doc.display_name || doc.name
+  }
 
   const errorText = (err: any, fallback: string) => {
     const detail = err?.response?.data?.detail
@@ -99,7 +97,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
 
       {selected && (
         <div className="badge badge--info mb-8" style={{ display: 'flex' }}>
-          {selected.name}
+          {localLabel(selected)}
           <span className="text-muted" style={{ marginLeft: 6 }}>({selected.status})</span>
         </div>
       )}
@@ -107,7 +105,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
       {mode === 'select' && (() => {
         const q = search.trim().toLowerCase()
         const localDocs = (documents ?? []).filter(
-          (d) => !q || d.name.toLowerCase().includes(q),
+          (d) => !q || localLabel(d).toLowerCase().includes(q),
         )
         const boundMsIds = new Set(
           (documents ?? []).map((d) => d.moysklad_id).filter(Boolean) as string[],
@@ -154,7 +152,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
                 className={`doc-list__item ${selected?.id === doc.id ? 'is-active' : ''}`}
                 onClick={() => onSelect(doc)}
               >
-                <span>{doc.name}</span>
+                <span>{localLabel(doc)}</span>
                 <span className="doc-list__item-count">{doc.scan_count} кодов</span>
               </button>
             ))}

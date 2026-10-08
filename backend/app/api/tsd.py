@@ -683,6 +683,8 @@ async def select_tsd_document(
         if body.customer_order_id:
             doc.moysklad_customer_order_id = order_id
             doc.customer_order_name = order_name
+    from app.services.shipment_labels import update_shipment_metadata
+    update_shipment_metadata(doc, ms_doc, order_name)
     await db.commit()
     # Opening is a preview; only the explicit start endpoint changes MS statuses.
     await lock_ms_document(db, device.user_id, DocumentKind.demand, body.moysklad_id)

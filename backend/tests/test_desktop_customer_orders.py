@@ -15,6 +15,7 @@ def setup(monkeypatch, existing=None):
     profile = NS(id=uuid4(), moysklad_organization_id="org")
     oid = uuid4()
     ms = NS(get_document=AsyncMock(return_value={"id": "ship", "name": "52", "organization": {"id": "org"},
+        "agent": {"name": "ООО Покупатель"},
         "customerOrder": {"id": str(oid)}}), get_customer_order=AsyncMock(return_value={"name": "42", "organization": {"id": "org"}}),
         build_plan=AsyncMock(return_value=[{"gtin": "04620543080527", "product_id": "partial", "product_name": "Товар", "expected_qty": 2}]),
         get_customer_order_demands=AsyncMock())
@@ -32,9 +33,23 @@ async def test_desktop_reuses_existing_tsd_document_and_scans(monkeypatch):
     body, user, profile, ms, db, added = setup(monkeypatch, doc)
     result = await documents.resolve_document(body, user, profile, db)
     assert result.id == doc.id and result.scan_count == 2 and result.customer_order_name == "42"
+    assert result.display_name == '(42) 52 ООО Покупатель'
+    assert doc.name == '52' and doc.agent_name == 'ООО Покупатель'
     assert doc.moysklad_customer_order_id == str(body.customer_order_id)
     ms.build_plan.assert_not_awaited()
     assert added == []
+
+
+async def test_direct_ms_open_reads_expanded_order_and_agent(monkeypatch):
+    doc = Document(id=uuid4(), user_id=uuid4(), name='52', kind=DocumentKind.demand,
+        status=DocumentStatus.draft, moysklad_id='ship', plan=[], created_at=datetime.now(timezone.utc))
+    body, user, profile, ms, db, _ = setup(monkeypatch, doc)
+    body.customer_order_id = None
+    ms.get_document.return_value['customerOrder']['name'] = '42'
+    result = await documents.resolve_document(body, user, profile, db)
+    assert result.display_name == '(42) 52 ООО Покупатель'
+    assert result.customer_order_name == '42'
+    ms.get_customer_order.assert_not_awaited()
 
 
 async def test_desktop_reuses_shipment_linked_through_invoice(monkeypatch):
@@ -87,6 +102,7 @@ async def test_new_collection_uses_partial_shipment_plan_and_order_header(monkey
     db.refresh = refresh
     result = await documents.resolve_document(body, user, profile, db)
     assert result.plan[0].expected_qty == 2 and result.customer_order_name == "42"
+    assert result.display_name == '(42) 52 ООО Покупатель'
     assert len(added) == 1 and added[0].moysklad_customer_order_id == str(body.customer_order_id)
     ms.build_plan.assert_awaited_once_with("demand", "ship")
 

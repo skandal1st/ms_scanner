@@ -5,6 +5,7 @@ import { CustomerOrderFilterSelect } from './CustomerOrderFilterSelect'
 import { OrderStatusBadge } from './OrderStatusBadge'
 import type { Document, MsDocument } from '../api/client'
 import { getOrganizationProfileId } from '../lib/organizationProfile'
+import { shipmentLabel } from '../lib/shipmentLabel'
 
 function errorMessage(error: unknown): string {
   const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
@@ -57,7 +58,7 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
         {choice.shipments.length === 0 && <p className="hint">{choice.order.empty_shipments_message || 'Нет доступных отгрузок. Проверьте связанные документы в МойСкладе.'}</p>}
         <div className="doc-list">{choice.shipments.map(shipment => <button key={shipment.id} type="button" className="doc-list__item" disabled={busy}
           onClick={() => { setError(null); resolve.mutate({ shipment, order: choice.order }) }}>
-          <span>Отгрузка {shipment.name}</span><span className="doc-list__item-count">{shipment.agent_name || 'Открыть'}</span>
+          <span>{shipmentLabel({ ...shipment, customer_order_name: choice.order.name, agent_name: shipment.agent_name || choice.order.agent_name })}</span><span className="doc-list__item-count">Открыть</span>
         </button>)}</div>
         <button type="button" className="button button--sm" disabled={busy} onClick={() => choose.mutate(choice.order)}>Обновить отгрузки</button>
       </> : <>
