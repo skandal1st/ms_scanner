@@ -1135,3 +1135,34 @@ export const supportApi = {
     page?: string
   }) => api.post<SupportTicketResult>('/support/ticket', body),
 }
+
+export interface ShipmentCorrectionDelta {
+  preview_hash: string
+  added: { position_id: string; product_name: string; code: string; units: number | null; package: boolean }[]
+  removed: { position_id: string; product_name: string; code: string; units: number | null; package: boolean }[]
+  quantities: { product_name: string; before: number; after: number }[]
+}
+
+export interface ShipmentCorrectionDetail {
+  id: string; name: string; status: string; error_message: string | null; locked: boolean
+  processing_progress: { sent: number; total: number } | null
+  positions: { id: string; name: string; quantity: number }[]
+  scans: (Scan & { position_id: string; existing: boolean; package: boolean })[]
+  delta: ShipmentCorrectionDelta | null
+}
+
+export function shipmentCorrectionsApi(terminal = false) {
+  const client = terminal ? tsdClient : api
+  const base = '/shipment-corrections'
+  return {
+    list: () => client.get<{ id: string; name: string; resume: boolean }[]>(base),
+    open: (id: string) => client.post<{ id: string }>(`${base}/${id}/open`),
+    get: (id: string) => client.get<ShipmentCorrectionDetail>(`${base}/${id}`),
+    scan: (id: string, code: string, position_id: string) => client.post<{ duplicate: boolean }>(`${base}/${id}/scans`, { code, position_id }),
+    remove: (id: string, scanId: string) => client.delete(`${base}/${id}/scans/${scanId}`),
+    verify: (id: string) => client.post(`${base}/${id}/verify`),
+    preview: (id: string, adjust_quantities: boolean) => client.post<ShipmentCorrectionDelta>(`${base}/${id}/preview`, { adjust_quantities }),
+    save: (id: string, adjust_quantities: boolean, preview_hash: string) => client.post(`${base}/${id}/save`, { adjust_quantities, preview_hash }),
+    cancel: (id: string) => client.post(`${base}/${id}/cancel`),
+  }
+}

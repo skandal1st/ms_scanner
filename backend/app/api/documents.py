@@ -694,6 +694,8 @@ async def process_document(
     doc = await editable_document(db, document_id, current_user.id)
     if doc.kind not in (DocumentKind.demand, DocumentKind.supply):
         raise HTTPException(400, "Для списания используйте отправку в Честный Знак")
+    if (getattr(doc, 'upd_meta', None) or {}).get('shipment_correction'):
+        raise HTTPException(409, 'Сохраните изменения через раздел «Исправить отгрузку». Полная отправка исправления запрещена.')
     require_collection_started(doc)
     if not doc.moysklad_id:
         raise HTTPException(409, "Сначала выберите документ МойСклад")

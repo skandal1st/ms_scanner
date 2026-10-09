@@ -16,6 +16,7 @@ import { parseTsdDocumentCode } from '../lib/tsdLinks'
 import { Icon } from '../components/Icon'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
 import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
+import { ShipmentCorrections } from '../components/ShipmentCorrections'
 
 function progressState(added: number, expected: number) {
   return expected > 0 && added > expected ? 'overflow'
@@ -125,6 +126,7 @@ function ShipmentRow({ item, onOpen, disabled }: { item: TsdDocumentItem; onOpen
 }
 
 function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) {
+  const [correctionsOpen, setCorrectionsOpen] = useState(false)
   const online = useTsdOnline()
   const [search, setSearch] = useState('')
   const [filterId, setFilterId] = useState(() => localStorage.getItem('tsd_order_filter_id') || '')
@@ -174,6 +176,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
     }
     if (online && !select.isPending && !chooseOrder.isPending) select.mutate({ id })
   }
+  if (correctionsOpen) return <ShipmentCorrections terminal onClose={() => setCorrectionsOpen(false)} />
   return (
     <main className="tsd-shell">
       <header className="tsd-header">
@@ -183,6 +186,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
         </div>
         <TsdConnection />
       </header>
+      <button type="button" className="tsd-button" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>
       {orderChoice ? <section className="tsd-order-choice">
         <button type="button" className="tsd-button" disabled={select.isPending || chooseOrder.isPending} onClick={() => { setOrderChoice(null); setOpenError(null) }}>К списку заказов</button>
         <h2>Выберите отгрузку</h2>

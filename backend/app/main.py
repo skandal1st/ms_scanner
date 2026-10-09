@@ -113,6 +113,8 @@ app.include_router(scans.router, dependencies=[Depends(require_active_subscripti
 app.include_router(integrations.router)
 app.include_router(organization_profiles.router)
 app.include_router(tsd.router)
+from app.api import shipment_corrections
+app.include_router(shipment_corrections.router)
 app.include_router(physical_counts.router)
 app.include_router(moysklad_vendor.router)
 app.include_router(products.router, dependencies=[Depends(require_active_subscription)])

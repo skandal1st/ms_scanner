@@ -20,6 +20,7 @@ import { scansApi, documentsApi } from '../api/client'
 import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
+import { ShipmentCorrections } from '../components/ShipmentCorrections'
 
 const TsdDocumentQr = lazy(() =>
   import('../components/TsdDocumentQr').then((module) => ({ default: module.TsdDocumentQr })),
@@ -59,6 +60,7 @@ export function ShipmentPage({
   const [bulkBusy, setBulkBusy] = useState(false)
   const openingRef = useRef(false)
   const [opening, setOpening] = useState(false)
+  const [correctionsOpen, setCorrectionsOpen] = useState(false)
   const collectionReady = Boolean(document && (!document.moysklad_id || document.collection_started))
   const {
     send: sendToMs,
@@ -268,11 +270,13 @@ export function ShipmentPage({
     document?.status === 'accepted' ? 'Завершено' :
     document?.status === 'processing' ? 'Обрабатывается' : collectionReady ? 'В процессе' : 'Не начата'
 
+  if (correctionsOpen) return <ShipmentCorrections onClose={() => setCorrectionsOpen(false)} />
   return (
     <div className="acc-page" style={terminalMode ? {height:'100%'} : undefined}>
       <header className="acc-header">
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
+          {!embedded && <button type="button" className="button button--sm" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
           {document && <span className={docStatusCls}>{docStatusText}</span>}
           {document && !embedded && (
             <button

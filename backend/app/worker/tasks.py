@@ -1137,6 +1137,12 @@ def process_document_task(document_id: str, user_id: str):
         raise
 
 
+@celery_app.task(name='correct_shipment')
+def correct_shipment_task(document_id: str, user_id: str):
+    from app.services.shipment_corrections import process
+    _run(process(document_id, user_id))
+
+
 # Backward-совместимый алиас для старого имени задачи.
 @celery_app.task(name="accept_document")
 def accept_document_task(document_id: str, user_id: str):
@@ -1250,6 +1256,8 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
 
         if doc.status != DocumentStatus.processing:
             return
+        if (getattr(doc, 'upd_meta', None) or {}).get('shipment_correction'):
+            raise ValueError('Исправление отгрузки отправляется отдельной задачей; полная запись запрещена.')
         t0 = time.monotonic()
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
         # demand — отгрузка, supply — приёмка по УПД. Обе ветки пишут trackingCodes

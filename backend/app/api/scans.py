@@ -238,7 +238,7 @@ async def _create_scan_record(
 
     # Конфликт: код уже есть в ДРУГОМ документе ТОГО ЖЕ типа (приёмка↔приёмка /
     # отгрузка↔отгрузка). Движение приёмка→отгрузка — норма, поэтому фильтр по kind.
-    conflict_q = await db.execute(
+    conflict_statement = (
         select(Document.name)
         .join(Scan, Scan.document_id == Document.id)
         .where(
@@ -246,6 +246,7 @@ async def _create_scan_record(
             Document.user_id == current_user_id,
             Document.id != document_id,
             Document.kind == doc_obj.kind,
+            Document.upd_meta['superseded_by_document_id'].astext.is_(None),
             Scan.status.in_(
                 [
                     ScanStatus.valid,
@@ -258,6 +259,10 @@ async def _create_scan_record(
         )
         .limit(1)
     )
+    if (getattr(doc_obj, 'upd_meta', None) or {}).get('shipment_correction'):
+        from sqlalchemy import or_
+        conflict_statement = conflict_statement.where(or_(Document.moysklad_id.is_(None), Document.moysklad_id != doc_obj.moysklad_id))
+    conflict_q = await db.execute(conflict_statement)
     conflict_doc_name = conflict_q.scalar_one_or_none()
 
     # Пакетный флоу: обычный КМ проверяем ЛОКАЛЬНО при скане (формат GS1 + контрольная

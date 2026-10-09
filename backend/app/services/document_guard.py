@@ -19,6 +19,8 @@ async def editable_document(db, document_id, user_id):
         raise HTTPException(409, 'Марки перенесены в действующую отгрузку. Откройте её заново из заказа покупателя.')
     if doc.status != DocumentStatus.draft:
         raise HTTPException(409, "Документ обрабатывается или уже завершён. Изменять марки нельзя.")
+    if ((getattr(doc, 'upd_meta', None) or {}).get('shipment_correction') or {}).get('job'):
+        raise HTTPException(409, 'Исправление уже отправлялось. Повторите сохранение этой версии; изменять марки во время сверки нельзя.')
     return doc
 
 

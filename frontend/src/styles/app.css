@@ -787,6 +787,15 @@ html, body, #root { height: 100%; }
   box-shadow: 0 0 0 1px #e5eaf1;
 }
 
+.shipment-corrections { --tsd-blue: #0878ee; --tsd-navy: #0d1b34; --tsd-muted: #617089; --tsd-line: #dce3ec; box-sizing: border-box; padding: 16px; overflow-y: auto; }
+.shipment-corrections .tsd-header { padding: 0 0 12px; flex-wrap: wrap; }
+.shipment-corrections .tsd-header h1 { font-size: 26px; }
+.shipment-corrections label { display: block; margin: 12px 0; }
+.shipment-corrections .input { display: block; width: 100%; min-width: 0; min-height: 44px; box-sizing: border-box; margin-top: 6px; padding: 10px; border: 1px solid var(--tsd-line); border-radius: 6px; background: #fff; color: var(--tsd-navy); font: inherit; }
+.correction-scan-form { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.correction-scan-form .input { flex: 1; margin-top: 0; }
+.shipment-corrections .tsd-input-actions { flex-wrap: wrap; }
+
 .tsd-header {
   display: flex;
   align-items: center;
