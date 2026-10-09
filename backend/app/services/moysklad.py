@@ -8,6 +8,7 @@ from app.core.logging import logger
 from app.services.customer_order_filters import moysklad_order_filter_conditions
 from app.services.chestnyznak import (
     cis_string_for_moysklad_api,
+    normalize_km_ai_prefix,
     normalize_gtin_key,
     parse_gs1_km_gtin_serial,
 )
@@ -589,7 +590,7 @@ class MoySkladService:
         чтении в gs1-форме (``01<GTIN>21<серия>``) — сравнение по сырой строке их не
         свяжет. Приводим к (GTIN, серия) через тот же парсер, что и остальной поток.
         """
-        g, s = parse_gs1_km_gtin_serial((cis or "").strip())
+        g, s = parse_gs1_km_gtin_serial(normalize_km_ai_prefix((cis or "").strip()))
         if g and s:
             return f"{g}|{s.strip()}"
         return (cis or "").strip()

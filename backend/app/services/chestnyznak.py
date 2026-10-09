@@ -374,7 +374,7 @@ def cis_identification_document_code(normalized_cis: str, serial_symbol_len: int
 def cis_compare_forms_for_ms(raw: str) -> list[str]:
     """Варианты cis для сопоставления с текстом ошибки МС (полный КМ и укороченные КИ)."""
     base = cis_string_for_moysklad_api(raw, moysklad_tracking_type=None)
-    out: list[str] = [base]
+    out: list[str] = [raw, base]
     for serial_len in (6, 7):
         short = cis_identification_document_code(base, serial_len)
         if short != base:
@@ -417,6 +417,19 @@ def _gate_gsless_serial(serial_and_tail: str, serial_len: Optional[int]) -> tupl
     return serial_and_tail, "ambiguous"
 
 
+def normalize_km_ai_prefix(code: str) -> str:
+    """Remove presentation brackets around leading GTIN/serial AIs only.
+
+    Parentheses inside the serial are data and must remain unchanged.
+    """
+    return re.sub(
+        r"^(?:\(01\)|01)(\d{14})(?:\(21\)|21)",
+        lambda match: "01" + match.group(1) + "21",
+        code,
+        count=1,
+    )
+
+
 def cis_string_for_moysklad_api(
     stored: str, moysklad_tracking_type: Optional[str] = None
 ) -> str:
@@ -446,7 +459,7 @@ def cis_string_for_moysklad_api(
             parts.append(ch)
         elif 0x20 <= o <= 0x7E:
             parts.append(ch)
-    s = "".join(parts)
+    s = normalize_km_ai_prefix("".join(parts))
 
     tt = (moysklad_tracking_type or "").strip().upper()
     serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
@@ -502,6 +515,7 @@ def _printable_with_gs(raw: str) -> str:
 
 def _cis_confidence(s: str, serial_len: Optional[int]) -> str:
     """Уверенность реконструкции для очищенной строки ``s``. См. normalize_cis."""
+    s = normalize_km_ai_prefix(s)
     if _FNC1 in s:
         return "exact"  # был разделитель — граница точная
     # Компактный потребительский КМ табачных групп: при длине серии 7 граница
