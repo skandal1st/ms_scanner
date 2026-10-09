@@ -257,6 +257,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [code, setCode] = useState('')
   const [lastCode, setLastCode] = useState('')
   const [lastScannedId, setLastScannedId] = useState<string | null>(null)
+  const [pickingView, setPickingView] = useState<'card' | 'list'>(() =>
+    localStorage.getItem('tsd_shipment_view') === 'list' ? 'list' : 'card')
+  const [scanNavigation, setScanNavigation] = useState(0)
+  const listView = pickingView === 'list'
   const [reviewing, setReviewing] = useState(!initial.collection_started)
   const [positionFilter, setPositionFilter] = useState<number | 'all' | 'other'>('all')
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
@@ -266,6 +270,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const submitting = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const reviewRef = useRef<HTMLDetailsElement>(null)
+  const scannerDockRef = useRef<HTMLElement>(null)
+  const positionRefs = useRef<(HTMLButtonElement | null)[]>([])
   const liveDuringFetch = useRef<DocumentEvent[] | null>(null)
   const { data: doc = initial } = useQuery({
     queryKey: ['tsd-document', initial.id],
@@ -286,6 +292,24 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
   const lastScanned = doc.scans.find((item) => item.id === lastScannedId) || last
   const lastScannedPosition = lastScanned && rowForScan(lastScanned)
+  const lastScannedIndex = lastScannedPosition ? progress.rows.indexOf(lastScannedPosition) : -1
+  useEffect(() => {
+    if (!listView || !scanNavigation || lastScannedIndex < 0) return
+    setPositionFilter(lastScannedIndex)
+    setSelectedScanId(null)
+    setSwipeScanId(null)
+    setVisibleScans(50)
+    const element = positionRefs.current[lastScannedIndex]
+    if (element) {
+      element.style.scrollMarginTop = `${(scannerDockRef.current?.offsetHeight || 160) + 8}px`
+      element.scrollIntoView({ block: 'start', behavior: 'instant' })
+    }
+  }, [listView, scanNavigation, lastScannedIndex])
+  const changePickingView = (view: 'card' | 'list') => {
+    setPickingView(view)
+    localStorage.setItem('tsd_shipment_view', view)
+    inputRef.current?.focus({ preventScroll: true })
+  }
   const target = progress.rows.find((row) => row.product_id === targetProductId && targetProductId)
   const selectedPosition = typeof positionFilter === 'number' ? progress.rows[positionFilter] : undefined
   const current = target || (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
@@ -316,6 +340,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
       setLastScannedId(result.id)
+      setScanNavigation(value => value + 1)
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
       const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
@@ -434,7 +459,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const submit = (event: FormEvent) => { event.preventDefault(); acceptCode() }
   return (
     <main className="tsd-shell tsd-picking">
-      <section className="tsd-scanner-dock" aria-label="Сканер маркировки">
+      <section ref={scannerDockRef} className="tsd-scanner-dock" aria-label="Сканер маркировки">
         <form className={`tsd-scan-box tsd-scan-box--compact ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
           <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} /><span className="tsd-visually-hidden">Сканируйте штрихкод</span></label>
           <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
@@ -476,7 +501,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <b>{percent}%</b>
         <div><i style={{ width: `${percent}%` }} /></div>
       </section>
-      <section className={`tsd-current tsd-progress--${progressState(current?.addedTotal || 0, current?.expected || 0)}`}>
+      <div className="tsd-input-actions" role="group" aria-label="Режим экрана отгрузки">
+        <button type="button" className={`tsd-button${!listView ? ' tsd-button--primary' : ''}`} aria-pressed={!listView} onClick={() => changePickingView('card')}>Карточка товара</button>
+        <button type="button" className={`tsd-button${listView ? ' tsd-button--primary' : ''}`} aria-pressed={listView} onClick={() => changePickingView('list')}>Список товаров</button>
+      </div>
+      {!listView && <section className={`tsd-current tsd-progress--${progressState(current?.addedTotal || 0, current?.expected || 0)}`}>
         <div><span>{target ? 'Выбранный товар' : 'Текущий товар'}</span><small>{progress.rows.indexOf(current) + 1} из {progress.rows.length}</small></div>
         <h2>{current?.product_name || 'Сканируйте товар'}</h2>
         {last && <p className="hint">GTIN последнего скана: {effectiveGtinKey(last) || 'не распознан'}</p>}
@@ -484,13 +513,14 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <p><span>Ожидалось</span><b>{current?.expected ?? '—'} <small>шт.</small></b></p>
           <p><span>Собрано</span><b>{current?.addedTotal ?? 0} <small>шт.</small></b></p>
         </div>
-      </section>
-      <details ref={reviewRef} className="tsd-order-review" open={reviewing} onToggle={(event) => setReviewing(event.currentTarget.open)}>
-        <summary>Позиции заказа ({progress.rows.length}) и сканы ({doc.scans.length})</summary>
+      </section>}
+      <details ref={reviewRef} className="tsd-order-review" open={listView || reviewing} onToggle={(event) => { if (!listView) setReviewing(event.currentTarget.open) }}>
+        <summary onClick={event => { if (listView) event.preventDefault() }}>Позиции заказа ({progress.rows.length}) и сканы ({doc.scans.length})</summary>
           <p className="hint">Выберите позицию для привязки следующих марок. Смахните марку влево, чтобы показать корзину для удаления.</p>
-        {reviewing && <>
+        {(listView || reviewing) && <>
           <div className="tsd-position-list">
             {progress.rows.map((row, index) => <button key={`${row.product_id || row.gtin}:${index}`} type="button"
+              ref={element => { positionRefs.current[index] = element }}
               aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}${row === lastScannedPosition ? ' tsd-recent-scan' : ''}`} onClick={() => selectPosition(index)}>
               {row === lastScannedPosition && <span className="tsd-recent-scan__label">Последняя отсканированная позиция</span>}
               <strong>{row.product_name}</strong>
