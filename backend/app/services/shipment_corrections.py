@@ -148,7 +148,7 @@ async def rebase(db, doc, ms, actor):
             fresh_state['add_positions'][str(scan.id)] = pid
     doc.upd_meta = {**doc.upd_meta, 'superseded_by_document_id': str(fresh.id)}
     fresh_state['rebased_from'] = str(doc.id)
-    fresh.upd_meta = {**fresh.upd_meta, MARKER: fresh_state}
+    fresh.upd_meta = {**fresh.upd_meta, MARKER: copy.deepcopy(fresh_state)}
     await db.flush()
     pending_scans = (await db.execute(select(Scan).where(Scan.document_id == fresh.id))).scalars().all()
     pending_delta = build_delta(fresh, pending_scans)
@@ -173,7 +173,7 @@ async def rebase(db, doc, ms, actor):
             net = sum(units(op['code']) * (1 if op['action'] == 'add' else -1) for op in changes)
             offsets[pid] = target - live_quantity - net
     fresh_state['quantity_offsets'] = offsets
-    fresh.upd_meta = {**fresh.upd_meta, MARKER: fresh_state}
+    fresh.upd_meta = {**fresh.upd_meta, MARKER: copy.deepcopy(fresh_state)}
     await db.commit()
     return fresh
 
