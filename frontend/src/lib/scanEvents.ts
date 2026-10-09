@@ -11,7 +11,7 @@ export function applyScanEvent(scans: Scan[], event: DocumentEvent): Scan[] {
   }
   if (event.type === 'scan_update') {
     const { type: _type, scan_id, document_id: _documentId, ...data } = event
-    const patch = Object.fromEntries(Object.entries(data).filter(([key, value]) => value != null || ['error_message', 'product_name'].includes(key)))
+    const patch = Object.fromEntries(Object.entries(data).filter(([key, value]) => value != null || ['error_message', 'product_name', 'owner_name', 'owner_inn', 'withdraw_reason', 'verification', 'verified_at'].includes(key)))
     return scans.map(item => item.id === scan_id ? { ...item, ...patch } : item)
   }
   return scans

@@ -101,6 +101,8 @@ async def start(db, source, ms, actor, *, commit=True):
                 moysklad_product_id=row['product_id'], product_name=row['product_name'],
                 is_box=code.get('type') == 'transportpack', keep_aggregate=True,
                 box_quantity=units(code), verified_at=datetime.now(timezone.utc))
+            scan.verification = {'source': 'ms', 'checked_at': None,
+                                 'owner_result': 'unknown', 'owner_reason': 'Загружена из МС, проверка владельца в ЧЗ не выполнена'}
             db.add(scan)
             mapping[str(scan.id)] = {'position_id': pos_id, 'code': code}
     doc.upd_meta = {'collection_start': {'done': True}, MARKER: {
@@ -144,6 +146,7 @@ async def rebase(db, doc, ms, actor):
                 gtin=original.gtin, serial=original.serial, status=original.status,
                 moysklad_product_id=original.moysklad_product_id, product_name=original.product_name,
                 verified_at=original.verified_at)
+            scan.verification = copy.deepcopy(original.verification)
             db.add(scan)
             fresh_state['add_positions'][str(scan.id)] = pid
     doc.upd_meta = {**doc.upd_meta, 'superseded_by_document_id': str(fresh.id)}

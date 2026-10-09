@@ -904,6 +904,16 @@ async def delete_tsd_scan(
     return response
 
 
+@router.post('/documents/{document_id}/verify')
+async def verify_tsd_document(document_id: UUID, recheck_all: bool = True,
+                              device: TsdDevice = Depends(get_shipping_device),
+                              db: AsyncSession = Depends(get_db)):
+    await _owned_tsd_document(db, device, document_id)
+    user, _, _ = await _device_scope(db, device)
+    from app.api.documents import verify_document
+    return await verify_document(document_id, user, db, recheck_all)
+
+
 @router.post("/documents/{document_id}/complete")
 async def complete_tsd_session(
     document_id: UUID,

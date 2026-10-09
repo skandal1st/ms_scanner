@@ -6,6 +6,7 @@ import {
   ownerCheckState,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
+import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
 import { Icon } from './Icon'
 import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
 
@@ -153,7 +154,10 @@ function ScanRow({
   onToggle: () => void
   onDelete: () => void
 }) {
-  const cfg = STATUS_CONFIG[scan.status]
+  const originalCfg = STATUS_CONFIG[scan.status]
+  const cfg = !scan.is_barcode && ['valid', 'scanned', 'overflow'].includes(scan.status)
+    ? { label: verificationLabel(scan), cls: scan.verification?.ms_error ? 'badge--error' : scan.verification?.checked_at ? originalCfg.cls : 'badge--pending' }
+    : originalCfg
   const [changingPack, setChangingPack] = useState(false)
   const [packError, setPackError] = useState('')
   const document = useScanStore((state) => state.document)
@@ -245,13 +249,13 @@ function ScanRow({
               Чужой владелец
             </span>
           )}
-          {owner === 'unknown' && (
+          {(owner === 'unknown' || (!scan.is_barcode && scan.verification?.owner_result === 'unknown')) && (
             <span
               className="badge badge--pending"
               style={{ marginLeft: 4 }}
-              title="Не удалось проверить владельца марки в Честном Знаке"
+              title={ownerCheckLabel(scan, signatureInn)}
             >
-              Владелец не проверен
+              {ownerCheckLabel(scan, signatureInn)}
             </span>
           )}
         </td>
@@ -288,6 +292,10 @@ function ScanRow({
                 <span>{scan.gtin}</span>
               </div>
             )}
+            {scan.verification?.checked_at && <div className="text-muted">Проверка ЧЗ: {new Date(scan.verification.checked_at).toLocaleString('ru-RU')}
+              {scan.verification.children_total != null && ` · вложенные марки: ${scan.verification.children_checked ?? 0}/${scan.verification.children_total}`}</div>}
+            {scan.verification?.child_issues?.map(issue => <div key={issue.code} className="text-error">{issue.code}: {issue.error}</div>)}
+            {scan.verification?.ms_error && <div className="text-error">МойСклад: {scan.verification.ms_error}</div>}
             {(scan.owner_name || scan.owner_inn) && (
               <div className="scans-expanded__row">
                 <span className="scans-expanded__label">Владелец:</span>

@@ -250,11 +250,11 @@ export function ShipmentPage({
   // Пакетная проверка марок в ЧЗ (основной флоу: скан — локально, проверка — здесь).
   // Завершение придёт по WS (verify_done) → setVerifying(false). Прогресс по каждой
   // марке — через scan_update, статусы обновятся в таблице сами.
-  const handleVerify = async () => {
+  const handleVerify = async (recheckAll = false) => {
     if (!document || verifying) return
     setVerifying(true)
     try {
-      await documentsApi.verify(document.id)
+      await documentsApi.verify(document.id, recheckAll)
     } catch (err) {
       setVerifying(false)
       console.error('Verify error:', err)
@@ -458,7 +458,7 @@ export function ShipmentPage({
             type="button"
             className="button"
             disabled={!document || document.status !== 'draft' || sending || verifying}
-            onClick={handleVerify}
+            onClick={() => void handleVerify()}
             style={{ marginRight: 8 }}
           >
             {verifying
@@ -466,6 +466,11 @@ export function ShipmentPage({
               : `Проверить марки (${stats.scanned})`}
           </button>
         )}
+        {scans.some(scan => !scan.is_barcode) && <button type="button" className="button"
+          disabled={!document || document.status !== 'draft' || sending || verifying}
+          onClick={() => void handleVerify(true)} style={{ marginRight: 8 }}>
+          {verifying ? 'Проверяю марки…' : 'Перепроверить все марки в ЧЗ'}
+        </button>}
         <button
           type="button"
           className="button button--success"

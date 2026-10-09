@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { shipmentCorrectionsApi, type ShipmentCorrectionDelta } from '../api/client'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { verificationLabel } from '../lib/scanVerification'
 import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
 
 export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: boolean; onClose: () => void }) {
@@ -117,7 +118,8 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
         <h3>Марки отгрузки ({doc.scans.length})</h3>
         <div className="tsd-mark-list">{doc.scans.slice(0, visibleScans).map(scan => <article className="tsd-mark" key={scan.id}>
           <strong>{scan.product_name || doc.positions.find(p => p.id === scan.position_id)?.name}</strong>
-          <code>{scan.code}</code><span>{scan.existing ? 'Из МойСклада' : scan.error_message || (['valid', 'overflow'].includes(scan.status) ? 'Новая · проверена' : 'Новая · требуется проверка')}</span>
+          <code>{scan.code}</code><span>{scan.existing ? 'Из МойСклада' : scan.error_message || verificationLabel(scan)}</span>
+          {!scan.existing && scan.verification?.owner_result !== 'match' && <small>{scan.verification?.owner_reason}</small>}
           <button type="button" className="tsd-button tsd-button--danger" disabled={blocked} onClick={() => void run(async () => { await api.remove(id, scan.id); setPreview(null) })}>{scan.package ? 'Удалить упаковку с вложенными марками' : 'Удалить марку'}</button>
         </article>)}</div>
         {doc.scans.length > visibleScans && <button type="button" className="tsd-button" onClick={() => setVisibleScans(count => count + 50)}>Показать ещё 50 марок</button>}

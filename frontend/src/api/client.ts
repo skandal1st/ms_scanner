@@ -448,9 +448,9 @@ export const documentsApi = {
   get: (id: string) => api.get<Document>(`/documents/${id}`),
   startCollection: (id: string) => api.post(`/documents/${id}/start-collection`),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
-  verify: (id: string) =>
+  verify: (id: string, recheckAll = false) =>
     api.post<{ status: string; document_id: string; count: number }>(
-      `/documents/${id}/verify`,
+      `/documents/${id}/verify`, undefined, { params: { recheck_all: recheckAll } },
     ),
   process: (id: string) => api.post(`/documents/${id}/process`),
   exportXlsx: (id: string) =>
@@ -494,6 +494,19 @@ export interface Scan {
   producer_name?: string | null
   /** ИНН владельца марки (ЧЗ) — сверка с владельцем подписи (cz_inn) в отгрузке. */
   owner_inn?: string | null
+  verified_at?: string | null
+  verification?: {
+    source: string
+    checked_at?: string | null
+    format_valid?: boolean
+    owner_result?: 'match' | 'mismatch' | 'unknown'
+    owner_reason?: string
+    children_total?: number
+    children_checked?: number
+    child_issues?: { code: string; error: string }[]
+    ms_error?: string
+    ms_error_at?: string
+  } | null
   /** Марка выведена из оборота / заблокирована (ЧЗ markWithdraw) + причина. */
   withdrawn?: boolean
   withdraw_reason?: string | null
@@ -977,6 +990,7 @@ export const tsdApi = {
     tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id, customer_order_id }),
   getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
   startCollection: (id: string) => tsdClient.post(`/tsd/documents/${id}/start-collection`),
+  verify: (id: string) => tsdClient.post(`/tsd/documents/${id}/verify`, undefined, { params: { recheck_all: true } }),
   scan: (id: string, code: string, moysklad_product_id?: string) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code, moysklad_product_id }),
   undoLast: (id: string) =>

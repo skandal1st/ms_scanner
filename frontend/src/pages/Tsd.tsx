@@ -8,6 +8,7 @@ import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
+import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
 import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
@@ -331,7 +332,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     ? Math.min(100, Math.round(progress.total.addedTotal * 100 / progress.total.expected))
     : 0
   const refresh = () => qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] })
+  const verify = useMutation({
+    mutationFn: () => tsdApi.verify(doc.id),
+    onSuccess: () => { setMessage({ kind: 'ok', text: 'Проверка всех марок в ЧЗ запущена.' }); void refresh() },
+    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+  })
   useDocumentLive(initial.id, true, (event) => {
+    if (event.type === 'verify_done') { void refresh(); setMessage({ kind: event.failed ? 'error' : 'ok', text: event.failed ? 'Часть марок не удалось проверить. Посмотрите результаты у каждой марки.' : 'Проверка завершена. Посмотрите результаты у каждой марки.' }); return }
     liveDuringFetch.current?.push(event)
     if (event.type === 'scans_changed' || (event.type === 'scan_update' && !qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id])?.scans.some(item => item.id === event.scan_id))) {
       void refresh(); return
@@ -473,6 +480,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <button type="submit" className="tsd-button" aria-label="Принять код" disabled={!online || !code.trim() || scannerBlocked}><Icon name="check" size={20} /></button>
         </form>
         <div className="tsd-dock-meta">
+          <button type="button" className="tsd-button" disabled={!online || verify.isPending || doc.status !== 'draft'} onClick={() => verify.mutate()}>Проверить все марки в ЧЗ</button>
           <span title={target?.product_name}>{targetProductId ? `Марки → ${target?.product_name || 'Позиция недоступна'}` : 'Авто по GTIN'}</span>
           {(selectedPosition?.product_id || targetProductId) && <button type="button" className="tsd-button" aria-pressed={!targetProductId} disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
           {selectedPosition?.product_id && <button type="button"
@@ -541,7 +549,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           {filteredScans.length === 0 && <p className="hint">По выбранной позиции ещё нет сканов.</p>}
           <div className="tsd-mark-list">
             {filteredScans.slice(0, visibleScans).map((item) => <TsdSwipeMark key={item.id}
-              className={`tsd-mark tsd-progress--${!rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : ['scanned', 'valid'].includes(item.status) ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
+              className={`tsd-mark tsd-progress--${item.verification?.ms_error || item.verification?.owner_result === 'mismatch' || !rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : item.verification?.checked_at && item.status === 'valid' ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
               selected={selectedScanId === item.id} open={swipeScanId === item.id} disabled={!online || scannerBlocked || doc.status !== 'draft'}
               onSelect={() => { setSwipeScanId(null); setSelectedScanId(previous => previous === item.id ? null : item.id) }}
               onReveal={open => { setSwipeScanId(open ? item.id : null); if (open) setSelectedScanId(item.id) }}
@@ -552,7 +560,9 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
               <span>GTIN: {effectiveGtinKey(item) || 'не распознан'}{item.box_quantity ? ` · ${item.box_quantity} шт.` : ''}</span>
               <span>{scanPackageLabel(item)}</span>
               <code>{item.code}</code>
-              <span>{item.error_message || (['scanned', 'valid', 'overflow'].includes(item.status) ? 'Добавлен в сборку' : 'Не засчитан в сборку')}</span>
+              <span>{item.error_message || verificationLabel(item)}</span>
+              {!item.is_barcode && item.verification?.owner_result !== 'match' && <span>{item.verification?.owner_reason || ownerCheckLabel(item, null)}</span>}
+              {item.verification?.checked_at && <small>Проверка ЧЗ: {new Date(item.verification.checked_at).toLocaleString('ru-RU')}</small>}
             </TsdSwipeMark>)}
           </div>
           {filteredScans.length > visibleScans && <button type="button" className="tsd-button" onClick={() => setVisibleScans((count) => count + 50)}>Показать ещё 50</button>}

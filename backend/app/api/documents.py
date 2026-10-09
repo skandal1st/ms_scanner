@@ -653,6 +653,7 @@ async def verify_document(
     document_id: UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    recheck_all: bool = False,
 ):
     """Пакетно проверить в ЧЗ все локально отсканированные марки (status=scanned).
 
@@ -666,17 +667,33 @@ async def verify_document(
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus
 
+    from app.services.shipment_corrections import correction
+    baseline_ids = list((correction(doc) or {}).get('baseline_scans', {}))
+    filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
+               Scan.status.in_([ScanStatus.scanned, ScanStatus.valid, ScanStatus.overflow, ScanStatus.invalid, ScanStatus.unknown_product])
+               if recheck_all else Scan.status == ScanStatus.scanned]
+    if baseline_ids:
+        filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
     pending_q = await db.execute(
         select(func.count(Scan.id)).where(
-            Scan.document_id == document_id,
-            Scan.status == ScanStatus.scanned,
-            Scan.is_box.is_(False),
+            *filters,
         )
     )
     to_check = pending_q.scalar_one()
 
+    if recheck_all:
+        selected = (await db.execute(select(Scan).where(*filters))).scalars().all()
+        for scan in selected:
+            scan.status = ScanStatus.scanned
+            scan.verified_at = None
+            scan.verification = {'source': 'pending', 'checked_at': None,
+                                 'owner_result': 'unknown', 'owner_reason': 'Идёт повторная проверка ЧЗ'}
+        await db.commit()
+        from app.services.scan_events import publish_event
+        await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(doc.id)})
+
     from app.worker.tasks import verify_document_task
-    verify_document_task.delay(str(document_id), str(current_user.id))
+    verify_document_task.delay(str(document_id), str(current_user.id), recheck_all)
     return {"status": "verifying", "document_id": str(document_id), "count": to_check}
 
 

@@ -385,6 +385,7 @@ class Scan(Base):
     withdraw_reason = Column(String(200), nullable=True)
     scanned_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
     verified_at = Column(DateTime(timezone=True), nullable=True)
+    verification = Column(JSONB, nullable=True)
 
     document = relationship("Document", back_populates="scans")
 

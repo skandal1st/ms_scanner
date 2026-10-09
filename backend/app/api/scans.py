@@ -60,6 +60,8 @@ class ScanResponse(BaseModel):
     withdrawn: bool = False
     withdraw_reason: Optional[str] = None
     child_codes: Optional[List[str]] = None
+    verified_at: Optional[datetime] = None
+    verification: Optional[dict] = None
     # Повторный скан кода, уже присутствующего в ЭТОМ документе. Строка в БД одна
     # (unique document_id+code), статус существующей не меняется — фронт подсвечивает.
     duplicate: bool = False

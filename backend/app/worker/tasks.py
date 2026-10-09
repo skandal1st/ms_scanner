@@ -460,8 +460,22 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
         # → НЕ трогаем статус (остаётся scanned), чтобы кнопка «Проверить» повторила код.
         if precheck is not None:
             from app.services.chestnyznak import VerifyResult, extract_gtin as _extract_gtin
+            strict = getattr(precheck, 'verification', None)
+            if strict is not None:
+                previous = getattr(scan, 'verification', None) or {}
+                if previous.get('ms_error'):
+                    strict = {**strict, 'ms_error': previous['ms_error'], 'ms_error_at': previous.get('ms_error_at')}
+                scan.verification = strict
+                scan.owner_inn = precheck.owner_inn
+                scan.owner_name = precheck.owner_name
+                scan.withdrawn = bool(precheck.mark_withdraw)
+                scan.withdraw_reason = precheck.withdraw_reason
+                scan.error_message = None
 
             if getattr(precheck, "uncertain", False):
+                if strict is not None:
+                    scan.status = ScanStatus.scanned
+                    scan.verified_at = None
                 scan.error_message = (
                     precheck.error or "Не удалось проверить в ЧЗ — повторите"
                 )
@@ -474,11 +488,12 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
                     producer_name=scan.producer_name, owner_inn=scan.owner_inn,
                     withdrawn=scan.withdrawn, withdraw_reason=scan.withdraw_reason,
                     child_codes=scan.child_codes,
+                    verification=getattr(scan, 'verification', None), verified_at=scan.verified_at,
                 )
                 logger.info("verify_code.uncertain", scan_id=scan_id)
                 return
 
-            valid = precheck.found and str(precheck.status or "").upper() == "INTRODUCED"
+            valid = precheck.found and str(precheck.status or "").upper() == "INTRODUCED" and not precheck.mark_withdraw
             if valid:
                 # Снимаем возможную ошибку от прошлого неудачного прохода (повтор).
                 scan.error_message = None
@@ -492,7 +507,12 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             out_gtin = precheck.gtin or scan.gtin
             name_override = precheck.product_name
             # Агрегат (блок/короб): развернуть в листовые КМ — отдельный запрос (редко).
-            if valid and (precheck.child_count or scan.package_type in {"GROUP", "BOX"}) and not scan.child_codes:
+            if getattr(precheck, 'verified_children', None) is not None:
+                scan.child_codes = precheck.verified_children
+                scan.box_quantity = len(scan.child_codes)
+                if scan.child_codes:
+                    out_gtin = _extract_gtin(scan.child_codes[0]) or out_gtin
+            if strict is None and valid and (precheck.child_count or scan.package_type in {"GROUP", "BOX"}) and not scan.child_codes:
                 tok = await _get_cz_token(db, user_id, scan.document_id)
                 if tok:
                     grp = await _get_cz_product_groups(db, user_id, scan.document_id)
@@ -547,6 +567,8 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             verify_result = await cz.verify_code(scan.code)
         else:
             verify_result = verify_code_local_gs1(scan.code)
+            scan.verification = {'source': 'format', 'checked_at': None, 'format_valid': verify_result.valid,
+                                 'owner_result': 'unknown', 'owner_reason': 'Проверен только формат, проверка ЧЗ не выполнена'}
             # USB-сканер даёт сырой GS1; официальное приложение ЧЗ ходит в API.
             # При невалидном локальном разборе — запрос в ЧЗ по полной CIS (нужен токен УКЭП).
             if not verify_result.valid:
@@ -601,7 +623,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
         scan.gtin = verify_result.gtin or scan.gtin
         scan.serial = verify_result.serial
         scan.product_name = verify_result.product_name or scan.product_name
-        scan.verified_at = datetime.now(timezone.utc)
+        scan.verified_at = datetime.now(timezone.utc) if (getattr(scan, 'verification', None) or {}).get('source', '').startswith('cz_') else None
         if scan.gtin:
             gk = normalize_gtin_key(scan.gtin)
             if gk:
@@ -759,24 +781,25 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             withdrawn=scan.withdrawn,
             withdraw_reason=scan.withdraw_reason,
             child_codes=scan.child_codes,
+            verification=getattr(scan, 'verification', None), verified_at=scan.verified_at,
         )
 
 
 @celery_app.task(bind=True, max_retries=2, default_retry_delay=5, name="verify_document")
-def verify_document_task(self, document_id: str, user_id: str):
+def verify_document_task(self, document_id: str, user_id: str, recheck_all: bool = False):
     """Пакетная проверка марок документа в ЧЗ по кнопке «Проверить марки».
 
     Основной флоу: при скане КМ проверяется только локально (формат GS1) и получает
     статус `scanned`. Здесь проверяем все такие сканы в ЧЗ разом — статус/владелец/
     withdrawn/разворот агрегатов/план/сопоставление товара МС."""
     try:
-        _run(_verify_document_async(document_id, user_id))
+        _run(_verify_document_async(document_id, user_id, recheck_all))
     except Exception as exc:
         logger.error("verify_document.error", document_id=document_id, error=str(exc))
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
-async def _verify_document_async(document_id: str, user_id: str):
+async def _verify_document_async(document_id: str, user_id: str, recheck_all: bool = False):
     import asyncio
     import redis.asyncio as aioredis
 
@@ -798,12 +821,22 @@ async def _verify_document_async(document_id: str, user_id: str):
 
     try:
         async with AsyncSessionLocal() as db:
+            from app.db.models import Document
+            from uuid import UUID
+            from app.services.shipment_corrections import correction
+            doc = await db.get(Document, UUID(document_id))
+            if not doc or str(doc.user_id) != user_id or doc.status.value != 'draft':
+                return
+            baseline_ids = list((correction(doc) or {}).get('baseline_scans', {}))
+            filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
+                       Scan.status.in_([ScanStatus.scanned, ScanStatus.valid, ScanStatus.overflow, ScanStatus.invalid, ScanStatus.unknown_product])
+                       if recheck_all else Scan.status == ScanStatus.scanned]
+            if baseline_ids:
+                filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
             res = await db.execute(
                 select(Scan)
                 .where(
-                    Scan.document_id == document_id,
-                    Scan.status == ScanStatus.scanned,
-                    Scan.is_box.is_(False),
+                    *filters,
                 )
                 .order_by(Scan.scanned_at.asc())
             )
@@ -813,6 +846,8 @@ async def _verify_document_async(document_id: str, user_id: str):
             scan_gtins = [s.gtin for s in scans if s.gtin]
             cz_token = await _get_cz_token(db, user_id, document_id)
             cz_groups = await _get_cz_product_groups(db, user_id, document_id)
+            integration = await _get_cz_source(db, user_id, document_id)
+            signature_inn = integration.cz_inn if integration else None
 
             # Товарные группы по GTIN (своя БД → МС → запись в БД): добавляем в перебор
             # ЧЗ первыми, чтобы товар из «невключённой» галочкой группы не давал
@@ -840,14 +875,15 @@ async def _verify_document_async(document_id: str, user_id: str):
 
         # #2 Батч-проверка статуса в ЧЗ: один запрос на товарную группу на всю пачку
         # (check_codes). В mock/без токена — прежний per-scan путь (precheck=None).
-        use_batch = bool(codes) and bool(cz_token) and not settings.CZ_MOCK_MODE
+        use_batch = bool(codes)
         checks_by_code: dict[str, CisCheck] = {}
         if use_batch:
             try:
-                results = await ChestnyZnakService(
-                    token=cz_token, mock=False, product_groups=cz_groups
-                ).check_codes(codes)
-                checks_by_code = {c.code: c for c in results}
+                from app.services.scan_verification import check_scans
+                cz = ChestnyZnakService(token=cz_token, mock=False, product_groups=cz_groups) if cz_token and not settings.CZ_MOCK_MODE else None
+                checks_by_code = await check_scans(cz, scans, signature_inn)
+                if cz is None:
+                    await _push_cz_token_expired(user_id, document_id)
             except Exception as exc:
                 # Весь батч не удался → все коды uncertain (останутся scanned, повтор).
                 logger.warning(
@@ -872,12 +908,16 @@ async def _verify_document_async(document_id: str, user_id: str):
                             found=False,
                             uncertain=True,
                             error="Не удалось проверить в ЧЗ — повторите",
+                            verification_source='cz_unavailable',
+                            verification={'source': 'cz_unavailable', 'checked_at': None,
+                                          'owner_result': 'unknown', 'owner_reason': 'Ответ ЧЗ не получен'},
                         )
                     if precheck.uncertain:
                         failed += 1
                 try:
                     await _verify_code_async(scan_id, user_id, precheck=precheck)
                 except Exception as exc:
+                    failed += 1
                     logger.warning(
                         "verify_document.scan_failed", scan_id=scan_id, error=str(exc)
                     )
@@ -1033,6 +1073,8 @@ async def _push_ws_update(
     child_codes: Optional[list] = None,
     package_type: Optional[str] = None,
     keep_aggregate: Optional[bool] = None,
+    verification: Optional[dict] = None,
+    verified_at=None,
 ):
     import redis.asyncio as aioredis
     import json
@@ -1058,6 +1100,8 @@ async def _push_ws_update(
         "child_codes": child_codes,
         "package_type": package_type,
         "keep_aggregate": keep_aggregate,
+        "verification": verification,
+        "verified_at": verified_at.isoformat() if verified_at else None,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()
@@ -1534,7 +1578,19 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 )
             if result.get("__moysklad_412__"):
                 reason = _extract_moysklad_error(result.get("body") or "")
+                if reason:
+                    from app.services.scan_verification import record_ms_errors
+                    affected = record_ms_errors(valid_scans, reason)
+                    if affected:
+                        await db.commit()
+                        from app.services.scan_events import publish_event
+                        await publish_event(user_id, {'type': 'scans_changed', 'document_id': str(doc.id)})
                 raise ValueError("МойСклад отклонил документ: " + (reason or "проверьте марки и повторите отправку"))
+
+        for scan in valid_scans:
+            if (getattr(scan, 'verification', None) or {}).get('ms_error'):
+                scan.verification = {k: v for k, v in scan.verification.items() if not k.startswith('ms_error')}
+                scan.error_message = None
 
         # Финальный статус документа
         doc.status = DocumentStatus.accepted

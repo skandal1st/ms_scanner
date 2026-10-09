@@ -168,6 +168,9 @@ class CisCheck:
     # Ответ ЧЗ не получен (таймаут/5xx) — статус НЕ определён. Отличать от found=False
     # («точно не найдена»): uncertain → повторить проверку, не терминальный статус.
     uncertain: bool = False
+    verification_source: str = 'cz_info'
+    verification: Optional[dict] = None
+    verified_children: Optional[list[str]] = None
 
 
 def _flatten_aggregate_leaves(node: Any) -> list[str]:
@@ -1164,6 +1167,11 @@ class ChestnyZnakService:
         разворачиваем. Возвращает по одному CisCheck на код в исходном порядке.
         """
         order = list(dict.fromkeys(codes))  # дедуп с сохранением порядка
+        if len(order) > 100:
+            results = []
+            for offset in range(0, len(order), 100):
+                results.extend(await self.check_codes(order[offset:offset + 100]))
+            return results
         results: dict[str, CisCheck] = {}
         if self.mock or not self.token:
             return [
@@ -1218,10 +1226,12 @@ class ChestnyZnakService:
                 logger.warning("cz.check.http_error", pg=pg, error=str(exc))
                 had_infra_failure = True
                 continue
-            if resp.status_code >= 500:
+            if resp.status_code >= 500 or resp.status_code in {401, 403, 429}:
                 had_infra_failure = True
                 continue
             if not isinstance(body, list):
+                if resp.status_code != 404:
+                    had_infra_failure = True
                 continue
             for entry in body:
                 if not isinstance(entry, dict):
@@ -1281,6 +1291,7 @@ class ChestnyZnakService:
                         found=True,
                         gtin=normalize_gtin_key(extract_gtin(orig)),
                         status="INTRODUCED",
+                        verification_source='cz_check',
                     )
                     del remaining[key]
 
@@ -1375,10 +1386,12 @@ class ChestnyZnakService:
                 logger.warning("cz.cises_check.http_error", pg=pg, error=str(exc))
                 had_infra_failure = True
                 continue
-            if resp.status_code == 429 or resp.status_code >= 500:
+            if resp.status_code in {401, 403, 429} or resp.status_code >= 500:
                 had_infra_failure = True
                 continue
             if resp.status_code != 200 or not isinstance(body, dict):
+                if resp.status_code != 404:
+                    had_infra_failure = True
                 continue
             if body.get("result") is True:
                 for k in remaining:
