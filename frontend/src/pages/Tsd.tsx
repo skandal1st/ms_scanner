@@ -7,6 +7,7 @@ import { CustomerOrderFilterSelect } from '../components/CustomerOrderFilterSele
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
 import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
@@ -291,7 +292,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     refetchInterval: (query) => !query.state.data?.collection_started ? 3000
       : query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
-  const progress = useMemo(() => buildProgress(doc.plan, doc.scans), [doc.plan, doc.scans])
+  const progress = useMemo(() => sortShipmentProgress(buildProgress(doc.plan, doc.scans)), [doc.plan, doc.scans])
   const last = doc.scans[0]
   const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
   const lastScanned = doc.scans.find((item) => item.id === lastScannedId) || last

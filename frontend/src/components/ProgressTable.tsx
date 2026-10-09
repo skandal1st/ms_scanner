@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import {
   useScanStore,
   buildProgress,
@@ -18,9 +19,10 @@ interface ProgressTableProps {
   tabbed?: boolean
   onInspectMarks?: () => void
   showScanTarget?: boolean
+  sortByName?: boolean
 }
 
-export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget = true }: ProgressTableProps = {}) {
+export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget = true, sortByName = false }: ProgressTableProps = {}) {
   const modal = useModal()
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
@@ -32,7 +34,10 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
   const togglePositionSelection = useScanStore((s) => s.togglePositionSelection)
   const documentId = useScanStore((s) => s.document?.id)
   const removeScan = useScanStore((s) => s.removeScan)
-  const progress = buildProgress(plan, scans)
+  const progress = useMemo(() => {
+    const result = buildProgress(plan, scans)
+    return sortByName ? sortShipmentProgress(result) : result
+  }, [plan, scans, sortByName])
   const [deletingOff, setDeletingOff] = useState<string | null>(null)
 
   const handleDeleteOffPlan = async (row: OffPlanRow) => {

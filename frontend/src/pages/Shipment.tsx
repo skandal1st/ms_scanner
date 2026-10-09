@@ -393,7 +393,7 @@ export function ShipmentPage({
             onChange={setWorkspaceTab}
             summary={
               progress.hasSummary ? (
-                <ProgressTable tabbed showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
+                <ProgressTable tabbed sortByName showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
               ) : (
                 <div className="flow-tabs__empty">
                   Выберите отгрузку и начните сканирование — здесь появится состав сборки.
