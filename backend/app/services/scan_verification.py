@@ -1,5 +1,8 @@
 """Explicit evidence for a CZ check, including every leaf of an aggregate."""
 from datetime import datetime, timezone
+import asyncio
+import time
+from app.core.logging import logger
 from app.services.chestnyznak import CisCheck, verify_code_local_gs1
 from app.services.chestnyznak import cis_compare_forms_for_ms
 
@@ -59,8 +62,49 @@ async def check_scans(cz, scans, signature_inn=None):
                 'checked_at': None}
             results[scan.code] = check
         return results
+    started = time.monotonic()
     inputs = [scan.code for scan in scans if not scan.is_box]
     answers = {c.code: c for c in await cz.check_codes(inputs)} if inputs else {}
+    parents_done = time.monotonic()
+    aggregate_scans = {}
+    for scan in scans:
+        parent = answers.get(scan.code)
+        if scan.is_box or (parent and acceptable(parent) and bool(scan.child_codes or parent.child_count
+                or str(parent.package_type or '').upper() in {'GROUP', 'BOX', 'LEVEL1', 'LEVEL2'})):
+            aggregate_scans.setdefault(scan.code, scan)
+    contents = {}
+    contents_failed = set()
+    sem = asyncio.Semaphore(3)
+
+    async def load_contents(scan):
+        async with sem:
+            try:
+                if scan.is_box:
+                    children = await cz.unpack_box(scan.code)
+                else:
+                    info = await cz.get_code_info(scan.code)
+                    children = info.children if info else []
+                children = list(dict.fromkeys(children))
+                if not children:
+                    raise ValueError('ЧЗ не вернул состав упаковки')
+                contents[scan.code] = children
+            except Exception:
+                contents_failed.add(scan.code)
+
+    await asyncio.gather(*(load_contents(scan) for scan in aggregate_scans.values()))
+    contents_done = time.monotonic()
+    leaves = list(dict.fromkeys(code for parent in aggregate_scans
+                              for code in contents.get(parent, [])))
+    checks = {}
+    if leaves:
+        try:
+            checks = {c.code: c for c in await cz.check_codes(leaves)}
+        except Exception:
+            contents_failed.update(contents)
+    logger.info('verify_scans.cz_timing', scans=len(scans), aggregates=len(aggregate_scans), leaves=len(leaves),
+                parents_ms=int((parents_done - started) * 1000),
+                contents_ms=int((contents_done - parents_done) * 1000),
+                leaves_ms=int((time.monotonic() - contents_done) * 1000))
     for scan in scans:
         check = answers.get(scan.code)
         if scan.is_box:
@@ -78,16 +122,11 @@ async def check_scans(cz, scans, signature_inn=None):
         aggregate = bool(scan.child_codes or check.child_count or str(check.package_type or '').upper() in {'GROUP', 'BOX', 'LEVEL1', 'LEVEL2'})
         if acceptable(check) and aggregate:
             try:
-                if scan.is_box:
-                    children = list(dict.fromkeys(await cz.unpack_box(scan.code)))
-                else:
-                    info = await cz.get_code_info(scan.code)
-                    children = list(dict.fromkeys(info.children)) if info else []
-                if not children:
+                children = contents.get(scan.code, [])
+                if scan.code in contents_failed or not children:
                     raise ValueError('ЧЗ не вернул состав упаковки')
-                checks = {c.code: c for c in await cz.check_codes(children)}
                 if scan.is_box:
-                    owners = {str(c.owner_inn).strip() for c in checks.values() if c.owner_inn}
+                    owners = {str(checks[c].owner_inn).strip() for c in children if c in checks and checks[c].owner_inn}
                     if len(owners) == 1 and all(c in checks and checks[c].owner_inn for c in children):
                         check.owner_inn = next(iter(owners))
                         check.verification = evidence(check, signature_inn)

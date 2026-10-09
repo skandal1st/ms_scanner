@@ -1194,10 +1194,15 @@ class ChestnyZnakService:
         """
         order = list(dict.fromkeys(codes))  # дедуп с сохранением порядка
         if len(order) > 100:
-            results = []
-            for offset in range(0, len(order), 100):
-                results.extend(await self.check_codes(order[offset:offset + 100]))
-            return results
+            sem = asyncio.Semaphore(3)
+
+            async def check_batch(batch):
+                async with sem:
+                    return await self.check_codes(batch)
+
+            batches = await asyncio.gather(*(check_batch(order[offset:offset + 100])
+                                            for offset in range(0, len(order), 100)))
+            return [result for batch in batches for result in batch]
         results: dict[str, CisCheck] = {}
         if self.mock or not self.token:
             return [
@@ -1258,6 +1263,7 @@ class ChestnyZnakService:
                 if resp.status_code != 404:
                     had_infra_failure = True
                 continue
+            cache_gtins = set()
             for entry in body:
                 if not isinstance(entry, dict):
                     continue
@@ -1295,12 +1301,12 @@ class ChestnyZnakService:
                 )
                 # Засеиваем кэш gtin→pg: последующий get_code_info по этому GTIN
                 # пойдёт сразу в нужную группу (в т.ч. в пакетной verify_document_task).
-                await set_cached_pg(
-                    normalize_gtin_key(_digits_gtin14_from_value(ci.get("gtin"))), pg
-                )
+                cache_gtins.add(normalize_gtin_key(_digits_gtin14_from_value(ci.get("gtin"))))
                 for key in request_keys:
                     original = remaining.pop(key)
                     results[original] = replace(results[orig], code=original)
+            for gtin in cache_gtins:
+                await set_cached_pg(gtin, pg)
 
         # Если cises/info не вернул сведения, проверяем исходный полный код через
         # cises/check. Этот ответ подтверждает статус, но не сведения о владельце.

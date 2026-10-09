@@ -877,6 +877,7 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
         # (check_codes). В mock/без токена — прежний per-scan путь (precheck=None).
         use_batch = bool(codes)
         checks_by_code: dict[str, CisCheck] = {}
+        cz_started = time.monotonic()
         if use_batch:
             try:
                 from app.services.scan_verification import check_scans
@@ -892,6 +893,9 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
                     error=str(exc),
                 )
 
+        logger.info('verify_document.cz_checked', document_id=document_id, count=len(checks_by_code),
+                    duration_ms=int((time.monotonic() - cz_started) * 1000))
+        apply_started = time.monotonic()
         sem = asyncio.Semaphore(6)
         failed = 0
 
@@ -927,6 +931,8 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
                 *(_one(sid, code) for sid, code in zip(scan_ids, codes))
             )
 
+        logger.info('verify_document.results_applied', document_id=document_id, count=len(scan_ids),
+                    duration_ms=int((time.monotonic() - apply_started) * 1000))
         await _push_verify_done(
             user_id, document_id, checked=len(scan_ids) - failed, failed=failed
         )
