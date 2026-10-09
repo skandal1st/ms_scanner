@@ -512,6 +512,7 @@ html, body, #root { height: 100%; }
 /* ---------- Таблица сканов ---------- */
 .scans-table { font-variant-numeric: tabular-nums; }
 .scans-table .scans-row { cursor: pointer; }
+.scans-table .scan-owner-badge { display: flex; width: fit-content; max-width: 100%; white-space: normal; margin-top: 4px; }
 .scans-table .scans-row.is-expanded > td { background: var(--brand-tint); }
 .scans-table .scans-row.is-selected > td { background: var(--brand-weak); }
 .scans-table .scans-row.is-selected > td.is-code { box-shadow: inset 3px 0 0 var(--brand); }

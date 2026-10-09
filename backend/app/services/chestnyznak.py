@@ -5,7 +5,7 @@ import random
 import re
 import time
 import uuid as uuid_lib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 from urllib.parse import quote
 
@@ -562,6 +562,17 @@ def serial_len_for_pg(pg: Optional[str]) -> Optional[int]:
     return CZ_PG_SERIAL_LEN.get((pg or "").strip().lower())
 
 
+def cis_for_cz_info(raw: str, pg: str) -> str:
+    """Info lookup uses the identification code, preserving its registered AI/bare form.
+
+    GS boundaries and compact tobacco layout identify crypto tails exactly.
+    Unknown/ambiguous serial lengths remain unchanged rather than guessed.
+    The original full scan is retained for status/crypto checking and audit.
+    """
+    tracking_type = next((tt for tt, group in MS_TRACKING_TYPE_TO_CZ_PG.items() if group == pg), None)
+    return cis_string_for_moysklad_api(strip_ai_brackets(raw), tracking_type)
+
+
 def restore_tobacco_gs_for_check(code: str, pg: str) -> str:
     """Restore only the fixed tobacco GS1 format; CZ must confirm the result.
 
@@ -906,6 +917,7 @@ class ChestnyZnakService:
         gtin_key = normalize_gtin_key(extract_gtin(cis))
         cached_pg = await get_cached_pg(gtin_key)
         for pg in self._ordered_groups(cached_pg):
+            cis = cis_for_cz_info(code, pg)
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=10) as client:
@@ -1188,11 +1200,7 @@ class ChestnyZnakService:
             "accept": "application/json",
             "Content-Type": "application/json",
         }
-        # Ключ запроса (после strip_ai_brackets + достройки голого КИ) → исходный код.
-        remaining: dict[str, str] = {
-            _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(c)): c
-            for c in order
-        }
+        remaining: dict[str, str] = {code: code for code in order}
         reasons: dict[str, str] = {}
 
         # Была ли инфраструктурная ошибка (таймаут/5xx) — тогда нерезолвленные коды
@@ -1203,7 +1211,10 @@ class ChestnyZnakService:
         for pg in self.product_groups:
             if not remaining:
                 break
-            lookup = list(remaining.keys())
+            lookup_to_requests: dict[str, list[str]] = {}
+            for key, original in remaining.items():
+                lookup_to_requests.setdefault(cis_for_cz_info(original, pg), []).append(key)
+            lookup = list(lookup_to_requests)
             start = time.time()
             try:
                 async with httpx.AsyncClient(timeout=20) as client:
@@ -1238,13 +1249,15 @@ class ChestnyZnakService:
                     continue
                 ci = entry.get("cisInfo") or {}
                 req = ci.get("requestedCis") or ci.get("cis")
-                if req not in remaining:
+                request_keys = [key for key in lookup_to_requests.get(req, []) if key in remaining]
+                if not request_keys:
                     continue
-                orig = remaining[req]
-                if entry.get("errorCode"):
-                    msg = entry.get("errorMessage")
-                    if msg and (orig not in reasons or resp.status_code == 404):
-                        reasons[orig] = str(msg)
+                orig = remaining[request_keys[0]]
+                if entry.get("errorCode") or ci.get("errorCode"):
+                    msg = entry.get("errorMessage") or ci.get("errorMessage")
+                    for key in request_keys:
+                        if msg and (remaining[key] not in reasons or resp.status_code == 404):
+                            reasons[remaining[key]] = str(msg)
                     continue
                 child = [c for c in (ci.get("child") or []) if isinstance(c, str)]
                 results[orig] = CisCheck(
@@ -1271,12 +1284,12 @@ class ChestnyZnakService:
                 await set_cached_pg(
                     normalize_gtin_key(_digits_gtin14_from_value(ci.get("gtin"))), pg
                 )
-                del remaining[req]
+                for key in request_keys:
+                    original = remaining.pop(key)
+                    results[original] = replace(results[orig], code=original)
 
-        # cises/info видит только коды, которыми участник ВЛАДЕЕТ/оперирует — для входящих
-        # марок (отгрузка) он отвечает 404, хотя код в обороте. Авторитетная проверка
-        # годности — cises/check: он подтверждает валидность любого кода в обороте.
-        # Прогоняем через него всё, что cises/info не нашёл, и валидные помечаем годными.
+        # Если cises/info не вернул сведения, проверяем исходный полный код через
+        # cises/check. Этот ответ подтверждает статус, но не сведения о владельце.
         if remaining:
             check_valid, check_infra = await self._cises_check_valid(
                 list(remaining.values())

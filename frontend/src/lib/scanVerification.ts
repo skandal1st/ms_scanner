@@ -18,3 +18,10 @@ export function ownerCheckLabel(scan: Scan, reference?: string | null): string {
   return scan.verification?.owner_reason || (scan.verification?.checked_at
     ? 'ЧЗ не вернул ИНН владельца' : 'Проверка владельца в ЧЗ не выполнена')
 }
+
+export function ownerBadgeLabel(scan: Scan, reference?: string | null): string {
+  if (!reference) return 'Нет ИНН подписи ЧЗ'
+  if (scan.verification?.source === 'format') return 'Нужен вход в ЧЗ'
+  if (scan.verification?.source === 'pending') return 'Владелец: проверяем'
+  return 'Нет данных о владельце'
+}

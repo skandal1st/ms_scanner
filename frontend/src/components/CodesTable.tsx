@@ -6,7 +6,7 @@ import {
   ownerCheckState,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
-import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
+import { verificationLabel, ownerCheckLabel, ownerBadgeLabel } from '../lib/scanVerification'
 import { Icon } from './Icon'
 import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
 
@@ -251,11 +251,10 @@ function ScanRow({
           )}
           {(owner === 'unknown' || (!scan.is_barcode && scan.verification?.owner_result === 'unknown')) && (
             <span
-              className="badge badge--pending"
-              style={{ marginLeft: 4 }}
+              className="badge badge--pending scan-owner-badge"
               title={ownerCheckLabel(scan, signatureInn)}
             >
-              {ownerCheckLabel(scan, signatureInn)}
+              {ownerBadgeLabel(scan, signatureInn)}
             </span>
           )}
         </td>
@@ -295,6 +294,7 @@ function ScanRow({
             {scan.verification?.checked_at && <div className="text-muted">Проверка ЧЗ: {new Date(scan.verification.checked_at).toLocaleString('ru-RU')}
               {scan.verification.children_total != null && ` · вложенные марки: ${scan.verification.children_checked ?? 0}/${scan.verification.children_total}`}</div>}
             {scan.verification?.child_issues?.map(issue => <div key={issue.code} className="text-error">{issue.code}: {issue.error}</div>)}
+            {!scan.is_barcode && <div className="text-muted">Проверка владельца: {ownerCheckLabel(scan, signatureInn)}</div>}
             {scan.verification?.ms_error && <div className="text-error">МойСклад: {scan.verification.ms_error}</div>}
             {(scan.owner_name || scan.owner_inn) && (
               <div className="scans-expanded__row">
