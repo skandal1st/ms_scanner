@@ -88,6 +88,11 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
       </> : <>
         {doc.status === 'processing' && <p role="status">Сохраняем изменения… {doc.processing_progress ? `${doc.processing_progress.sent}/${doc.processing_progress.total}` : ''}</p>}
         {doc.locked && <p className="hint">Версия зафиксирована для отправки. При сбое повторите сохранение: уже выполненные изменения не отправятся повторно.</p>}
+        {doc.locked && doc.status === 'draft' && <button type="button" className="tsd-button" disabled={busy} onClick={() => void run(async () => {
+          const { data } = await api.rebase(id)
+          setId(data.id); localStorage.setItem(storageKey, data.id); setPreview(null); setPosition(''); setCode('')
+          setNotice('Состав обновлён из МС. Оставшиеся правки перенесены; просмотрите изменения перед сохранением заново.')
+        })}>Обновить из МС и продолжить исправление</button>}
         <label>Позиция для новых марок<select className="input" value={position} disabled={blocked} onChange={e => { setPosition(e.target.value); setPreview(null) }}>
           <option value="">Выберите товар</option>{doc.positions.map((p, i) => <option key={p.id} value={p.id}>{p.name} · {p.quantity} шт. · строка {i + 1}</option>)}
         </select></label>
@@ -107,7 +112,7 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
           {(['removed', 'added'] as const).map(action => preview[action].map((change, index) => <p key={`${action}:${index}`}><strong>{action === 'removed' ? 'Удалить' : 'Добавить'}: {change.product_name}</strong><br /><code style={{ overflowWrap: 'anywhere' }}>{change.code}</code>{change.package && <span> · Упаковка целиком</span>}</p>))}
           {preview.quantities.map((q, i) => <p key={i}>Количество {q.product_name}: {q.before} → {q.after}</p>)}
           {!preview.quantities.length && <p>Количества товаров сохраняются.</p>}
-          <button type="button" className="tsd-button tsd-button--primary" disabled={busy || doc.status !== 'draft' || !preview.added.length && !preview.removed.length} onClick={() => void run(async () => { await api.save(id, adjust, preview.preview_hash); setPreview(null) })}>{doc.locked ? 'Продолжить сохранение' : 'Сохранить исправления'}</button>
+          <button type="button" className="tsd-button tsd-button--primary" disabled={busy || doc.status !== 'draft' || !preview.added.length && !preview.removed.length && !preview.quantities.length} onClick={() => void run(async () => { await api.save(id, adjust, preview.preview_hash); setPreview(null) })}>{doc.locked ? 'Продолжить сохранение' : 'Сохранить исправления'}</button>
         </section>}
         <h3>Марки отгрузки ({doc.scans.length})</h3>
         <div className="tsd-mark-list">{doc.scans.slice(0, visibleScans).map(scan => <article className="tsd-mark" key={scan.id}>

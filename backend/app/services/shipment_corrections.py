@@ -75,7 +75,7 @@ async def snapshot(ms, ms_id):
     return document, result
 
 
-async def start(db, source, ms, actor):
+async def start(db, source, ms, actor, *, commit=True):
     document, baseline = await snapshot(ms, source.moysklad_id)
     assert_scope(source, document)
     from app.db.models import OrganizationProfile
@@ -107,8 +107,75 @@ async def start(db, source, ms, actor):
         'source_id': str(source.id), 'opened_at': datetime.now(timezone.utc).isoformat(),
         'actor': actor, 'baseline': baseline, 'baseline_scans': mapping, 'add_positions': {},
     }}
-    await db.commit()
+    if commit:
+        await db.commit()
+    else:
+        await db.flush()
     return doc
+
+
+async def rebase(db, doc, ms, actor):
+    """Keep already applied MS changes and carry remaining intent into a fresh local revision."""
+    old_state = copy.deepcopy(correction(doc))
+    old_scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalars().all()
+    fresh = await start(db, doc, ms, actor, commit=False)
+    fresh_state = copy.deepcopy(correction(fresh))
+    new_scans = (await db.execute(select(Scan).where(Scan.document_id == fresh.id))).scalars().all()
+    remaining = old_state['job']['delta']['operations'][old_state['job']['completed']:]
+    for op in remaining:
+        pid = op['position_id']
+        if op['action'] == 'quantity':
+            continue  # Recompute quantities from the fresh baseline during the new review.
+        if pid not in fresh_state['baseline'] or fresh_state['baseline'][pid]['product_id'] != old_state['baseline'][pid]['product_id']:
+            raise ValueError('Позиция исправления удалена или заменена другим товаром в МС. Сначала восстановите нужную позицию в МойСкладе.')
+        matches_code = [scan for scan in new_scans if
+            (fresh_state['baseline_scans'].get(str(scan.id)) or {}).get('position_id') == pid
+            and code_key(fresh_state['baseline_scans'][str(scan.id)]['code']) == code_key(op['code'])]
+        if op['action'] == 'delete':
+            for scan in matches_code:
+                await db.delete(scan)
+                new_scans.remove(scan)
+        elif not matches_code:
+            original = next((scan for scan in old_scans if old_state['add_positions'].get(str(scan.id)) == pid
+                and code_key(MoySkladService('')._tracking_code_entry({'code': scan.code}, old_state['baseline'][pid]['tracking_type'])) == code_key(op['code'])), None)
+            if original is None:
+                raise ValueError('Не удалось восстановить исходный скан новой марки. Сохранённая версия исправления не изменена.')
+            scan = Scan(id=uuid4(), document_id=fresh.id, code=original.code,
+                gtin=original.gtin, serial=original.serial, status=original.status,
+                moysklad_product_id=original.moysklad_product_id, product_name=original.product_name,
+                verified_at=original.verified_at)
+            db.add(scan)
+            fresh_state['add_positions'][str(scan.id)] = pid
+    doc.upd_meta = {**doc.upd_meta, 'superseded_by_document_id': str(fresh.id)}
+    fresh_state['rebased_from'] = str(doc.id)
+    fresh.upd_meta = {**fresh.upd_meta, MARKER: fresh_state}
+    await db.flush()
+    pending_scans = (await db.execute(select(Scan).where(Scan.document_id == fresh.id))).scalars().all()
+    pending_delta = build_delta(fresh, pending_scans)
+    # Preserve the originally reviewed quantity target after partial mark writes.
+    # Further local edits still change that target by their unit difference.
+    old_operations = old_state['job']['delta']['operations']
+    targets = {op['position_id']: old_state['baseline'][op['position_id']]['fields'].get('quantity', 0)
+               for op in old_operations}
+    for op in old_operations:
+        if op['action'] == 'quantity':
+            targets[op['position_id']] = op['after']
+    offsets = {}
+    for pid, target in targets.items():
+        if pid not in fresh_state['baseline']:
+            continue
+        live_quantity = fresh_state['baseline'][pid]['fields'].get('quantity', 0)
+        expected_quantity = old_state['job']['expected'][pid]['fields'].get('quantity', 0)
+        target = live_quantity + target - expected_quantity
+        changes = [op for op in pending_delta['operations'] if op['position_id'] == pid]
+        amounts = [units(op['code']) for op in changes]
+        if all(n is not None for n in amounts):
+            net = sum(units(op['code']) * (1 if op['action'] == 'add' else -1) for op in changes)
+            offsets[pid] = target - live_quantity - net
+    fresh_state['quantity_offsets'] = offsets
+    fresh.upd_meta = {**fresh.upd_meta, MARKER: fresh_state}
+    await db.commit()
+    return fresh
 
 
 def build_delta(doc, scans, adjust_quantities=False):
@@ -149,12 +216,13 @@ def build_delta(doc, scans, adjust_quantities=False):
                 operations.append({'action': action, 'position_id': pid, 'code': code})
                 display.append({'position_id': pid, 'product_name': row['product_name'],
                                 'code': code.get('cis'), 'units': units(code), 'package': bool(code.get('trackingCodes')) or code.get('type') != 'trackingcode'})
-        if adjust_quantities and (deletes or inserts):
+        offset = state.get('quantity_offsets', {}).get(pid, 0)
+        if adjust_quantities and (deletes or inserts or offset):
             amounts = [units(c) for c in deletes + inserts]
             if any(n is None for n in amounts):
                 raise ValueError('Количество единиц в упаковке неизвестно. Сохраните марки без изменения количества или исправьте упаковку в МойСкладе.')
             before = row['fields'].get('quantity', 0)
-            after = before + sum(units(c) for c in inserts) - sum(units(c) for c in deletes)
+            after = before + sum(units(c) for c in inserts) - sum(units(c) for c in deletes) + offset
             if after < 0:
                 raise ValueError('После исправления количество товара станет отрицательным')
             if after != before:

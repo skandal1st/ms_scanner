@@ -1164,5 +1164,6 @@ export function shipmentCorrectionsApi(terminal = false) {
     preview: (id: string, adjust_quantities: boolean) => client.post<ShipmentCorrectionDelta>(`${base}/${id}/preview`, { adjust_quantities }),
     save: (id: string, adjust_quantities: boolean, preview_hash: string) => client.post(`${base}/${id}/save`, { adjust_quantities, preview_hash }),
     cancel: (id: string) => client.post(`${base}/${id}/cancel`),
+    rebase: (id: string) => client.post<{ id: string }>(`${base}/${id}/rebase`),
   }
 }

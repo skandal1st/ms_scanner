@@ -56,6 +56,8 @@ async def owned(db, access, document_id, *, revision=False):
         raise HTTPException(404, 'Отгрузка недоступна на этом рабочем месте')
     if revision and not service.correction(doc):
         raise HTTPException(409, 'Сначала откройте исправление отгрузки')
+    if (doc.upd_meta or {}).get('superseded_by_document_id'):
+        raise HTTPException(409, 'Эта версия уже заменена. Откройте актуальное исправление из списка отгрузок.')
     return doc
 
 
@@ -255,3 +257,23 @@ async def cancel(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
     doc.upd_meta = {**doc.upd_meta, 'superseded_by_document_id': state['source_id']}
     await db.commit()
     return {'status': 'cancelled'}
+
+
+@router.post('/{document_id}/rebase')
+async def rebase(document_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
+    doc = await owned(db, access, document_id, revision=True)
+    if doc.status != DocumentStatus.draft or not service.correction(doc).get('job'):
+        raise HTTPException(409, 'Обновление состава доступно после остановки сохранения исправлений.')
+    await lock_ms_document(db, access.user.id, 'demand', doc.moysklad_id)
+    try:
+        async with processing_lock(f'process:{document_id}') as own:
+            if not own:
+                raise HTTPException(409, 'Сохранение ещё выполняется. Повторите сверку после его завершения.')
+            async with processing_lock(f'ms:{access.user.id}:demand:{doc.moysklad_id}') as acquired:
+                if not acquired:
+                    raise HTTPException(409, 'Отгрузка занята другой операцией. Повторите сверку.')
+                fresh = await service.rebase(db, doc, await _get_ms_service(access.user, db), str(access.device_id or access.user.id))
+                return {'id': str(fresh.id)}
+    except Exception as exc:
+        await db.rollback()
+        raise bad_request(exc) from exc

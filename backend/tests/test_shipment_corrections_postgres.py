@@ -75,6 +75,59 @@ async def test_baseline_persists_old_source_stays_accepted_and_cancel_is_local(m
         await engine.dispose()
 
 
+@pytest.mark.parametrize('addition_already_saved', [False, True])
+async def test_rebase_preserves_partial_writes_external_codes_and_remaining_raw_scan(monkeypatch, addition_already_saved):
+    engine, factory, user, profile, source = await seed()
+    pid = str(uuid4())
+    raw = '010460123456789021NEW123\x1d91ABCD\x1d92signature'
+    old = {'id': str(uuid4()), 'cis': 'old', 'type': 'trackingcode'}
+    baseline = {pid: {'fields': {'id': pid, 'quantity': 1}, 'product_id': 'product',
+        'product_name': 'Test', 'tracking_type': None, 'codes': [old]}}
+    remote = {'organization': {'id': 'org'}, 'store': {'id': 'store'}}
+    monkeypatch.setattr(service, 'snapshot', AsyncMock(return_value=(remote, baseline)))
+    ms = NS(build_plan=AsyncMock(return_value=[]))
+    try:
+        async with factory() as db:
+            revision = await service.start(db, await db.get(Document, source.id), ms, 'actor')
+            scans = (await db.execute(select(Scan).where(Scan.document_id == revision.id))).scalars().all()
+            await db.delete(scans[0])
+            new_scan = Scan(id=uuid4(), document_id=revision.id, code=raw, status=ScanStatus.valid)
+            db.add(new_scan)
+            state = copy.deepcopy(service.correction(revision))
+            state['add_positions'][str(new_scan.id)] = pid
+            revision.upd_meta = {service.MARKER: state}
+            delta = service.build_delta(revision, [new_scan], True)
+            expected = service.after_operation(baseline, delta['operations'][0])
+            state['job'] = {'delta': delta, 'expected': expected, 'completed': 1, 'in_flight': 1}
+            revision.upd_meta = {service.MARKER: state}
+            await db.commit()
+            actual = copy.deepcopy(expected)
+            # Another operator added a mark and changed quantity in MS.
+            actual[pid]['fields']['quantity'] = 5
+            actual[pid]['codes'].append({'id': str(uuid4()), 'cis': 'external', 'type': 'trackingcode'})
+            if addition_already_saved:
+                actual[pid]['codes'].append({**delta['operations'][1]['code'], 'id': str(uuid4())})
+            monkeypatch.setattr(service, 'snapshot', AsyncMock(return_value=(remote, actual)))
+            fresh = await service.rebase(db, revision, ms, 'actor')
+            fresh_id, old_id = fresh.id, revision.id
+        async with factory() as db:
+            fresh = await db.get(Document, fresh_id)
+            scans = (await db.execute(select(Scan).where(Scan.document_id == fresh_id))).scalars().all()
+            pending = service.build_delta(fresh, scans, True)
+            assert len(pending['added']) == (0 if addition_already_saved else 1)
+            assert pending['removed'] == []
+            assert pending['quantities'] == []  # Replacement must not increase live quantity 5.
+            assert any(scan.code == 'external' for scan in scans)
+            if not addition_already_saved:
+                assert any(scan.code == raw for scan in scans)
+            assert not service.correction(fresh).get('job')
+            await editable_document(db, fresh_id, user.id)
+            assert (await db.get(Document, old_id)).upd_meta['superseded_by_document_id'] == str(fresh_id)
+            assert (await db.get(Document, source.id)).status == DocumentStatus.accepted
+    finally:
+        await engine.dispose()
+
+
 async def test_foreign_account_profile_and_warehouse_cannot_access_revision():
     engine, factory, user, profile, source = await seed()
     try:
