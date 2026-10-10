@@ -8,6 +8,7 @@ from typing import Optional
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
+from app.services.cz_status import cz_status_error, localize_cz_error, localize_cz_verification
 from app.services.chestnyznak import (
     ChestnyZnakService,
     cis_compare_forms_for_ms,
@@ -544,7 +545,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
                     else (
                         precheck.error
                         or (
-                            f"Статус в ЧЗ: {precheck.status}"
+                            cz_status_error(precheck.status)
                             if precheck.found
                             else "Марка не найдена в ЧЗ"
                         )
@@ -1093,7 +1094,7 @@ async def _push_ws_update(
         "document_id": document_id,
         "status": status,
         "product_name": product_name,
-        "error_message": error,
+        "error_message": localize_cz_error(error),
         "gtin": gtin,
         "moysklad_product_id": moysklad_product_id,
         "is_box": is_box,
@@ -1106,7 +1107,7 @@ async def _push_ws_update(
         "child_codes": child_codes,
         "package_type": package_type,
         "keep_aggregate": keep_aggregate,
-        "verification": verification,
+        "verification": localize_cz_verification(verification),
         "verified_at": verified_at.isoformat() if verified_at else None,
     })
     await r.publish(f"ws:{user_id}", message)

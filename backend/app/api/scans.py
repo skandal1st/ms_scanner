@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from sqlalchemy.exc import IntegrityError
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
+from app.services.cz_status import localize_cz_error, localize_cz_verification
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime, timezone
@@ -67,6 +68,14 @@ class ScanResponse(BaseModel):
     duplicate: bool = False
 
     model_config = {"from_attributes": True}
+
+    @field_serializer('error_message')
+    def russian_error(self, value):
+        return localize_cz_error(value)
+
+    @field_serializer('verification')
+    def russian_verification(self, value):
+        return localize_cz_verification(value)
 
 
 class CodeSearchHit(BaseModel):

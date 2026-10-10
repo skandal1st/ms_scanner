@@ -5,6 +5,7 @@ import time
 from app.core.logging import logger
 from app.services.chestnyznak import CisCheck, verify_code_local_gs1
 from app.services.chestnyznak import cis_compare_forms_for_ms
+from app.services.cz_status import cz_status_error
 
 
 def acceptable(check):
@@ -138,7 +139,7 @@ async def check_scans(cz, scans, signature_inn=None):
                         unknown = True
                         issues.append({'code': code, 'error': 'Не удалось проверить в ЧЗ'})
                     elif not acceptable(child):
-                        issues.append({'code': code, 'error': child.error or ('Выведена из оборота' if child.mark_withdraw else f'Статус в ЧЗ: {child.status}')})
+                        issues.append({'code': code, 'error': child.error or ('Марка выведена из оборота' if child.mark_withdraw else cz_status_error(child.status))})
                 check.verified_children = children
                 check.verification.update(children_total=len(children),
                     children_checked=sum(1 for c in children if c in checks and not checks[c].uncertain),

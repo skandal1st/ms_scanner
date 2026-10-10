@@ -10,6 +10,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 import httpx
+from app.services.cz_status import cz_status_error
 
 from app.core.config import settings
 from app.core.logging import logger
@@ -727,7 +728,7 @@ class ChestnyZnakService:
                     gtin=out_gtin,
                     serial=out_serial,
                     status="IN_CIRCULATION" if valid else cis_status,
-                    error=None if valid else f"Статус: {cis_status}",
+                    error=None if valid else cz_status_error(cis_status),
                     product_name=api_name,
                 )
 

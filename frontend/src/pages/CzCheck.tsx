@@ -13,7 +13,7 @@ const KIND_LABEL: Record<DocumentKind, string> = {
   supply: 'Приёмка',
 }
 
-// Статусы КМ в ГИС МТ (cisInfo.status). Неизвестные показываем как есть.
+// Статусы КМ в ГИС МТ (cisInfo.status), отображение всегда на русском.
 const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   INTRODUCED: { label: 'В обороте', cls: 'badge--ok' },
   APPLIED: { label: 'Нанесена', cls: 'badge--warn' },
@@ -26,8 +26,8 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
 
 function statusText(item: CzCheckItem): string {
   if (!item.found) return item.error || 'Не найдена в ЧЗ'
-  if (!item.status) return 'В обороте'
-  return STATUS_LABEL[item.status]?.label ?? item.status
+  if (!item.status) return 'ЧЗ не вернул статус марки'
+  return STATUS_LABEL[item.status.toUpperCase()]?.label ?? 'Статус марки не распознан'
 }
 
 function parseCodes(text: string): string[] {
