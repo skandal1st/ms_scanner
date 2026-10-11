@@ -367,7 +367,13 @@ async def _create_scan_record(
     db.add(scan)
     if device_id:
         db.add(TsdScanAction(device_id=device_id, document_id=document_id, scan=scan))
+    remember_assignment = bool(moysklad_product_id and not is_box and gtin
+                               and local_status == ScanStatus.scanned)
     try:
+        if remember_assignment:
+            from app.services.gtin_product_store import remember_gtin_product
+            await db.flush()  # Detect duplicate scans before the map upsert.
+            await remember_gtin_product(db, current_user_id, gtin, moysklad_product_id, initial_name)
         await db.commit()
     except IntegrityError:
         # Повторный скан того же кода в ЭТОМ документе. Строку не добавляем и НЕ
@@ -389,6 +395,9 @@ async def _create_scan_record(
         return existing, True
 
     await db.refresh(scan)
+    if remember_assignment:
+        from app.worker.tasks import persist_assigned_gtin_task
+        persist_assigned_gtin_task.delay(str(current_user_id), gtin, moysklad_product_id)
     await publish_scan(current_user_id, scan)
 
     # Код-конфликт уже в финальном статусе used_in_other_doc — проверять в ЧЗ/МС

@@ -77,6 +77,13 @@ def test_conflicting_or_unit_gtins_do_not_inflate_quantity():
 
 
 async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypatch):
+    from app.services import gtin_product_store
+    from app.worker.tasks import persist_assigned_gtin_task
+    from unittest.mock import Mock
+    remember = AsyncMock()
+    queue = Mock()
+    monkeypatch.setattr(gtin_product_store, 'remember_gtin_product', remember)
+    monkeypatch.setattr(persist_assigned_gtin_task, 'delay', queue)
     doc = NS(kind="demand", plan=[
         {"gtin": "04620164405358", "product_id": "true", "product_name": "True"},
         {"gtin": "04620543080503", "product_id": "chosen", "product_name": "Выбранный товар"},
@@ -85,10 +92,12 @@ async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypa
     cached = AsyncMock()
     monkeypatch.setattr(scans, "get_gtin_product", cached)
     db = NS(execute=AsyncMock(return_value=Result(None)), add=lambda value: None,
-            commit=AsyncMock(), refresh=AsyncMock())
+            commit=AsyncMock(), refresh=AsyncMock(), flush=AsyncMock())
     raw = "010462016440535821TEST000000001\x1d93TEST"
     scan, duplicate = await scans._create_scan_record(db, uuid4(), raw, uuid4(), moysklad_product_id="chosen")
     assert not duplicate and scan.moysklad_product_id == "chosen"
     assert scan.product_name == "Выбранный товар"
     assert scan.gtin == "04620164405358" and scan.code == raw
     cached.assert_not_awaited()
+    assert remember.await_args.args[2:] == ('04620164405358', 'chosen', 'Выбранный товар')
+    assert queue.call_args.args[1:] == ('04620164405358', 'chosen')
