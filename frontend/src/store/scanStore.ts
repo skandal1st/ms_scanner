@@ -21,6 +21,8 @@ function isAdded(status: string): boolean {
 
 /** Одна строка сводки: товар (GTIN) и сколько кодов добавлено. */
 export interface ProgressRow {
+  folder_id?: string | null
+  folder_name?: string | null
   gtin: string
   gtins?: string[]
   /** UUID товара в МС из плана (для ручного выбора строки). */
@@ -251,6 +253,8 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
         gtins: aliases,
         product_id: planProductId,
         product_name: p.product_name,
+        folder_id: p.folder_id,
+        folder_name: p.folder_name,
         expected: p.expected_qty,
         scanned: 0,
         addedTotal: 0,

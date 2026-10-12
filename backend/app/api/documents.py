@@ -27,6 +27,8 @@ class PlanItem(BaseModel):
     pack_quantities: dict[str, int] = {}
     product_id: Optional[str]
     product_name: str
+    folder_id: Optional[str] = None
+    folder_name: Optional[str] = None
     expected_qty: int
     marked: Optional[bool] = None
 

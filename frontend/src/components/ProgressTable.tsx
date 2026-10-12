@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import {
   useScanStore,
@@ -38,6 +38,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
     const result = buildProgress(plan, scans)
     return sortByName ? sortShipmentProgress(result) : result
   }, [plan, scans, sortByName])
+  const hasGroups = sortByName && progress.rows.some(row => row.folder_name)
   const [deletingOff, setDeletingOff] = useState<string | null>(null)
 
   const handleDeleteOffPlan = async (row: OffPlanRow) => {
@@ -169,7 +170,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
         </div>
       )}
       {!isCollapsed && <div style={{ ...styles.list, ...(tabbed ? styles.tabbedList : { maxHeight: listHeight }) }}>
-        {progress.rows.map((item) => {
+        {progress.rows.map((item, index) => {
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
             item.expected > 0
@@ -211,6 +212,9 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
           }
 
           return (
+            <Fragment key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}>
+            {hasGroups && (index === 0 || item.folder_name !== progress.rows[index - 1].folder_name) &&
+              <div className="shipment-group-heading">{item.folder_name || 'Без группы'}</div>}
             <div
               key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}
               style={rowStyle}
@@ -259,6 +263,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
                 </div>
               )}
             </div>
+            </Fragment>
           )
         })}
       </div>}

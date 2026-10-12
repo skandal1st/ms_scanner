@@ -499,6 +499,8 @@ class MoySkladService:
                     "code": (asrt.get("code") or "").strip() or None,
                     "product_id": product_id,
                     "product_name": product_name,
+                    "folder_id": (asrt.get("productFolder") or {}).get("id") or self._id_from_href(((asrt.get("productFolder") or {}).get("meta") or {}).get("href", "")) or None,
+                    "folder_name": (asrt.get("pathName") or (asrt.get("productFolder") or {}).get("name") or "").strip() or None,
                     "expected_qty": expected_qty,
                     "pack_gtins": pack_gtins,
                     "pack_quantities": pack_quantities,

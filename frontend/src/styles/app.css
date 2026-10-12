@@ -511,6 +511,7 @@ html, body, #root { height: 100%; }
 
 /* ---------- Таблица сканов ---------- */
 .scans-table { font-variant-numeric: tabular-nums; }
+.shipment-group-heading { color: var(--ms-text-muted); font-size: 12px; font-weight: 700; padding: 10px 0 6px; border-bottom: 1px solid var(--ms-border-light); }
 .scans-table .scans-row { cursor: pointer; }
 .scans-table .scan-owner-badge { display: flex; width: fit-content; max-width: 100%; white-space: normal; margin-top: 4px; }
 .scans-table .scans-row.is-expanded > td { background: var(--brand-tint); }

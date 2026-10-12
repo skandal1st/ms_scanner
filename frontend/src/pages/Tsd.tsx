@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, tsdModeLabels, type TsdMode, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
@@ -294,6 +294,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       : query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
   const progress = useMemo(() => sortShipmentProgress(buildProgress(doc.plan, doc.scans)), [doc.plan, doc.scans])
+  const hasGroups = progress.rows.some(row => row.folder_name)
   const last = doc.scans[0]
   const rowForScan = (value: typeof last) => findProgressRowForScan(value, progress.rows)
   const lastScanned = doc.scans.find((item) => item.id === lastScannedId) || last
@@ -532,14 +533,17 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <p className="hint">Выберите позицию для привязки следующих марок. Смахните марку влево, чтобы показать корзину для удаления.</p>
         {(listView || reviewing) && <>
           <div className="tsd-position-list">
-            {progress.rows.map((row, index) => <button key={`${row.product_id || row.gtin}:${index}`} type="button"
+            {progress.rows.map((row, index) => <Fragment key={`${row.product_id || row.gtin}:${index}`}>
+              {hasGroups && (index === 0 || row.folder_name !== progress.rows[index - 1].folder_name) &&
+                <div className="shipment-group-heading">{row.folder_name || 'Без группы'}</div>}
+              <button type="button"
               ref={element => { positionRefs.current[index] = element }}
               aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}${row === lastScannedPosition ? ' tsd-recent-scan' : ''}`} onClick={() => selectPosition(index)}>
               {row === lastScannedPosition && <span className="tsd-recent-scan__label">Последняя отсканированная позиция</span>}
               <strong>{row.product_name}</strong>
               <span>{row.unmarked ? 'Штрихкод' : 'GTIN'}: {row.gtin}</span>
               <b>{row.addedTotal} / {row.expected} шт. · {progressLabels[progressState(row.addedTotal, row.expected)]}{targetProductId === row.product_id ? ' · Выбрана для сканирования' : ''}</b>
-            </button>)}
+            </button></Fragment>)}
           </div>
           <div className="tsd-input-actions">
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>

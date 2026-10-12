@@ -81,6 +81,8 @@ export interface MsDocument {
 }
 
 export interface PlanItem {
+  folder_id?: string | null
+  folder_name?: string | null
   gtin: string | null
   gtins?: string[]
   pack_gtins?: string[]
