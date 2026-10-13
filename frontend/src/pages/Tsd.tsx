@@ -321,6 +321,9 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const selectedPosition = typeof positionFilter === 'number' ? progress.rows[positionFilter] : undefined
   const current = target || (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
   const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
+  const activePack = selectedScan || lastScanned
+  const canChangePack = activePack && !activePack.is_box && !activePack.is_barcode
+    && scanPackageType(activePack) !== 'UNIT'
   const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
     || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
   const selectPosition = (value: typeof positionFilter) => {
@@ -353,6 +356,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
       setLastScannedId(result.id)
+      setSelectedScanId(null)
       setScanNavigation(value => value + 1)
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
@@ -426,8 +430,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
   })
   const packMode = useMutation({
+    networkMode: 'always',
     mutationFn: (item: typeof last) => tsdApi.packMode(doc.id, item.id, Boolean(item.keep_aggregate || !item.child_codes?.length)),
     onSuccess: ({ data }) => {
+      qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], previous => previous
+        ? { ...previous, scans: previous.scans.map(item => item.id === data.id ? data : item) } : previous)
       setMessage({ kind: 'ok', text: data.status === 'pending' ? 'Получаем состав блока из Честного Знака…' : scanPackageLabel(data) })
       refresh()
     },
@@ -436,10 +443,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   useEffect(() => {
     // Android scanners may inject through the IME and need an editable, focused input.
     // Restore focus after React applies mode changes or removes readOnly after a request.
-    if (doc.collection_started && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending && !release.isPending) {
+    if (doc.collection_started && !scan.isPending && !undo.isPending && !complete.isPending && !remove.isPending && !packMode.isPending && !release.isPending) {
       inputRef.current?.focus({ preventScroll: true })
     }
-  }, [doc.collection_started, targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, release.isPending])
+  }, [doc.collection_started, targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, packMode.isPending, release.isPending])
   const scannerBlocked = !doc.collection_started || startCollection.isPending || scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
   useTsdScannerFocus(inputRef, scannerBlocked, (value) => setCode((previous) => previous + value))
   const acceptCode = () => {
@@ -496,6 +503,18 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             }}>Режим добавления</button>}
           <button type="button" data-tsd-sound className="tsd-button" aria-label={sound.active ? 'Отключить звук' : 'Включить звук'} aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук вкл.' : 'Звук выкл.'}</button>
         </div>
+        {canChangePack && <div className="tsd-pack-control" aria-label="Обработка блока">
+          <span>{selectedScan ? 'Выбранный блок' : 'Последний блок'} · {scanPackageLabel(activePack)}</span>
+          <button type="button" className="tsd-button tsd-button--primary"
+            disabled={!online || scannerBlocked || Boolean(code.trim()) || activePack.status === 'pending'
+              || ['invalid', 'used_in_other_doc'].includes(activePack.status) || doc.status !== 'draft'}
+            onClick={() => packMode.mutate(activePack)}>
+            {activePack.status === 'pending' ? 'Получаем состав…'
+              : activePack.keep_aggregate || !activePack.child_codes?.length
+                ? 'Раскрыть блок на вложенные марки' : 'Сохранить блок целиком'}
+          </button>
+          {activePack.error_message && <span role="alert">{activePack.error_message}</span>}
+        </div>}
         {message && <div role="status" aria-live="polite" className={`tsd-dock-message tsd-dock-message--${message.kind}`}>{message.text}</div>}
       </section>
       <header className="tsd-header tsd-header--picking">
@@ -575,10 +594,6 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             <p>{scanPackageLabel(selectedScan)}</p>
             {scanUnits(selectedScan) > 1 && <p>Удаляется вся упаковка: {scanUnits(selectedScan)} шт.</p>}
             {!selectedScan.is_box && !selectedScan.is_barcode && scanPackageType(selectedScan) !== 'UNIT' && <>
-              <button type="button" className="tsd-button" disabled={!online || scannerBlocked || selectedScan.status === 'pending' || doc.status !== 'draft'}
-                onClick={() => packMode.mutate(selectedScan)}>
-                {selectedScan.status === 'pending' ? 'Получаем состав…' : selectedScan.keep_aggregate || !selectedScan.child_codes?.length ? 'Раскрыть блок на вложенные марки' : 'Сохранить блок целиком'}
-              </button>
               {selectedScan.child_codes?.length ? <details><summary>Марки внутри ({selectedScan.child_codes.length})</summary>
                 {selectedScan.child_codes.map((child) => <code key={child}>{child}</code>)}</details> : null}
             </>}
