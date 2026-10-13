@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 
@@ -17,6 +17,33 @@ type LoadState =
 
 export function MsIframePage() {
   const [state, setState] = useState<LoadState>({ kind: 'loading' })
+  const pageRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const page = pageRef.current
+    if (!page || window.parent === window) return
+
+    let previousHeight = 0
+    let frame = 0
+    const reportHeight = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        // Measure content, not the viewport: the host resizes the iframe itself.
+        const height = Math.ceil(page.getBoundingClientRect().height)
+        if (height <= 0 || height === previousHeight) return
+        previousHeight = height
+        // The official iframe expand protocol sends only { height }.
+        window.parent.postMessage({ height }, '*')
+      })
+    }
+    const observer = new ResizeObserver(reportHeight)
+    observer.observe(page)
+    reportHeight()
+    return () => {
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [state.kind])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -55,7 +82,7 @@ export function MsIframePage() {
 
   if (state.kind === 'loading') {
     return (
-      <div style={styles.centered}>
+      <div ref={pageRef} style={styles.centered}>
         <div style={styles.muted}>Подключаемся к МойСклад...</div>
       </div>
     )
@@ -63,7 +90,7 @@ export function MsIframePage() {
 
   if (state.kind === 'error') {
     return (
-      <div style={styles.centered}>
+      <div ref={pageRef} style={styles.centered}>
         <div style={styles.errorBox}>{state.message}</div>
       </div>
     )
@@ -72,7 +99,7 @@ export function MsIframePage() {
   const { employee_name, account_name } = state.payload
 
   return (
-    <div style={styles.page}>
+    <div ref={pageRef} style={styles.page}>
       <header style={styles.header}>
         <div>
           <img src="/logo.svg" alt="Скандата" style={styles.brandLogo} />
@@ -95,12 +122,10 @@ export function MsIframePage() {
 
 const styles: Record<string, CSSProperties> = {
   page: {
-    height: '100vh',
     display: 'flex',
     flexDirection: 'column',
     fontFamily: 'var(--ms-font)',
     background: 'var(--ms-bg-alt)',
-    overflow: 'hidden',
   },
   header: {
     display: 'flex',
@@ -110,9 +135,6 @@ const styles: Record<string, CSSProperties> = {
     padding: '16px 20px',
     background: 'var(--ms-bg)',
     borderBottom: '1px solid var(--ms-border-light)',
-    position: 'sticky',
-    top: 0,
-    zIndex: 10,
   },
   brandLogo: {
     height: 40,
@@ -125,13 +147,10 @@ const styles: Record<string, CSSProperties> = {
     marginTop: 2,
   },
   main: {
-    flex: 1,
-    minHeight: 0,
-    overflowY: 'auto',
     padding: '16px 20px',
   },
   centered: {
-    minHeight: '100vh',
+    minHeight: 240,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

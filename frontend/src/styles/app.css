@@ -88,6 +88,9 @@ html, body, #root { height: 100%; }
 .alert--warn  { background: var(--st-warn-bg); border-color: var(--st-warn-bd); color: var(--st-warn-fg); }
 .alert--info  { background: var(--st-info-bg); border-color: var(--st-info-bd); color: var(--st-info-fg); }
 .alert__spacer { flex: 1; }
+.alert__text { margin: 0; min-width: 0; line-height: 1.5; }
+.alert--stacked { display: block; line-height: 1.5; }
+.alert--stacked > .button { margin: 8px 8px 0 0; }
 
 /* ---------- Топ-банер (CZ token expired и т.п.) ---------- */
 .top-banner {
@@ -592,6 +595,11 @@ html, body, #root { height: 100%; }
 }
 .login-card__title { text-align: center; margin-bottom: 4px; }
 .login-card__sub { text-align: center; color: var(--ms-text-muted); margin-bottom: 20px; font-size: 13px; }
+.login-card__description { font-size: 14px; line-height: 1.5; margin: 16px 0; }
+.login-card__steps { padding-left: 20px; margin: 16px 0; font-size: 14px; line-height: 1.5; }
+.login-card__steps li + li { margin-top: 8px; }
+.login-card__direct { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--ms-border-light); }
+.login-card__direct summary { cursor: pointer; font-size: 13px; }
 .login-form { display: flex; flex-direction: column; gap: 10px; }
 .login-divider { text-align: center; color: var(--ms-text-subtle); font-size: 12px; margin: 16px 0 12px; }
 

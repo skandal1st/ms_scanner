@@ -125,10 +125,12 @@ function ScannerSection({ embedded = false }: { embedded?: boolean }) {
 
       {supported && embedded && (
         <div className="alert alert--info mt-12">
-          Подключение COM-порта выполняется в <b>окне сканирования</b> — оно откроется
-          отдельной вкладкой со страницы приёмок, отгрузок или документа
-          МойСклад. В самом окне МойСклад браузер не даёт доступ к COM-порту. Там нажмите
-          «Подключить COM-порт» и выберите сканер.
+          <p className="alert__text">
+            Подключение COM-порта выполняется в <b>окне сканирования</b> — оно откроется
+            отдельной вкладкой со страницы приёмок, отгрузок или документа
+            МойСклад. В самом окне МойСклад браузер не даёт доступ к COM-порту. Там нажмите
+            «Подключить COM-порт» и выберите сканер.
+          </p>
         </div>
       )}
 
@@ -677,7 +679,7 @@ function ChestnyZnakSection({
             <div className="hint mt-12">Проверяю наличие плагина КриптоПро…</div>
           )}
           {pluginAvailable === false && (
-            <div className="alert alert--warn mt-12">
+            <div className="alert alert--warn alert--stacked mt-12">
               <div>КриптоПро ЭЦП Browser Plug-in не обнаружен в браузере.</div>
               <ol style={{ margin: '8px 0 0 18px', padding: 0, fontSize: 12 }}>
                 <li>
