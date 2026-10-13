@@ -1606,7 +1606,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 cis_groups = await _get_cz_product_groups(db, user_id, document_id)
                 scans_data = await confirm_document_cis(scans_data, ChestnyZnakService(
                     token=cis_token, mock=False, product_groups=cis_groups,
-                ))
+                ), kind=kind)
                 if operation:
                     operation.stage = 'moysklad.write_document'
 

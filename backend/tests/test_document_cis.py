@@ -84,6 +84,43 @@ async def test_partial_response_falls_back_for_only_missing_codes(install):
     assert result == [{'code': RAW[:21]}, {'code': OTHER[:21]}]
 
 
+async def test_supply_confirms_61_applied_unit_identifiers_from_upd(install):
+    sent = []
+    def respond(request):
+        codes = json.loads(request.content)
+        sent.append((request.url.params['pg'], codes))
+        if request.url.params['pg'] != 'ncp':
+            return httpx.Response(404, json=[{'errorCode': '404'}])
+        return httpx.Response(200, json=[answer(code, status='APPLIED') for code in codes])
+    install(respond)
+    rows = [{'code': f'04680163199573{i:07d}AAAA', 'product_id': 'p1'} for i in range(61)]
+    original = copy.deepcopy(rows)
+    result = await document_cis.confirm_document_cis(rows, cz(['tobacco', 'otp', 'ncp']), kind='supply')
+    assert rows == original
+    assert result == [{**row, 'code': row['code'][:21]} for row in rows]
+    assert [pg for pg, _ in sent] == ['tobacco', 'otp', 'ncp']
+
+
+@pytest.mark.parametrize('kind', [None, 'demand', 'loss', 'salesreturn'])
+async def test_applied_identifiers_still_block_outbound_documents(install, kind):
+    install(lambda request: httpx.Response(200, json=[answer(status='APPLIED')]))
+    with pytest.raises(ValueError, match='не подтвердил'):
+        await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind=kind)
+
+
+@pytest.mark.parametrize('change', [
+    {'status': 'WITHDRAWN'}, {'status': 'RETIRED'}, {'status': 'EMITTED'},
+    {'status': None}, {'status': 'APPLIED', 'cis': OTHER[:21]},
+    {'status': 'APPLIED', 'markWithdraw': True},
+    {'status': 'APPLIED', 'generalPackageType': 'GROUP'},
+    {'status': 'APPLIED', 'child': ['child']},
+])
+async def test_supply_keeps_identity_and_withdrawal_checks(install, change):
+    install(lambda request: httpx.Response(200, json=[answer(**change)]))
+    with pytest.raises(ValueError, match='не подтвердил'):
+        await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind='supply')
+
+
 @pytest.mark.parametrize('failure', ['timeout', '503', '401'])
 async def test_transport_and_auth_failures_block(install, failure):
     def respond(request):

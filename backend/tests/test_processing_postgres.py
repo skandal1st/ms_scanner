@@ -147,10 +147,11 @@ async def test_worker_confirms_upd_cis_before_any_ms_write_and_preserves_raw(mon
             scan.moysklad_product_id = 'p1'
             await db.commit()
         update = AsyncMock(return_value={})
-        async def confirm(rows, cz):
+        async def confirm(rows, cz, *, kind=None):
             update.assert_not_awaited()
             assert rows[0]['code'] == raw
             assert cz.token == 'fake-cz'
+            assert kind == 'supply'
             if not confirmed:
                 raise ValueError('Честный Знак не подтвердил КИ')
             return [{**row, 'code': raw[:21]} for row in rows]
