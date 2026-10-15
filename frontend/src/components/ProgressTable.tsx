@@ -171,6 +171,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
       )}
       {!isCollapsed && <div style={{ ...styles.list, ...(tabbed ? styles.tabbedList : { maxHeight: listHeight }) }}>
         {progress.rows.map((item, index) => {
+          const incomplete = item.expected > 0 && item.addedTotal < item.expected
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
             item.expected > 0
@@ -181,6 +182,8 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
           const ratio = item.expected > 0 ? item.addedTotal / item.expected : item.addedTotal > 0 ? 1 : 0
           const color = overLine
             ? 'var(--st-err-fg)' // перевыполнено — красная полоска
+            : incomplete
+              ? 'var(--st-info-fg)'
             : item.addedTotal === 0 && !item.pendingCount
               ? 'var(--ms-text-subtle)'
               : ratio >= 1 && item.expected > 0
@@ -207,8 +210,9 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
             outline: isTarget || isSelected ? '2px solid var(--brand)' : undefined,
             outlineOffset: 2,
             borderRadius: 6,
-            padding: selectable ? '2px 4px' : undefined,
+            padding: incomplete ? '6px 8px' : selectable ? '2px 4px' : undefined,
             margin: selectable ? '-2px -4px' : undefined,
+            background: incomplete ? 'var(--st-info-bg)' : undefined,
           }
 
           return (
@@ -217,6 +221,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
               <div className="shipment-group-heading">{item.folder_name || 'Без группы'}</div>}
             <div
               key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}
+              className={incomplete ? 'assembly-incomplete' : undefined}
               style={rowStyle}
               role={selectable ? 'button' : undefined}
               tabIndex={selectable ? 0 : undefined}

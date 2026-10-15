@@ -979,6 +979,8 @@ html, body, #root { height: 100%; }
 .tsd-position.tsd-progress--partial b { color: var(--st-warn-fg); }
 .tsd-position.tsd-progress--done b { color: var(--st-ok-fg); }
 .tsd-position.tsd-progress--overflow b { color: var(--st-err-fg); }
+.tsd-position.assembly-incomplete, .tsd-current.assembly-incomplete { background: var(--st-info-bg); border-color: var(--st-info-bd); }
+.tsd-position.assembly-incomplete b, .tsd-position.assembly-incomplete span:not(.tsd-recent-scan__label), .tsd-current.assembly-incomplete > div:first-child, .tsd-current.assembly-incomplete > .hint { color: var(--st-info-fg); }
 .tsd-position.tsd-recent-scan, .tsd-mark.tsd-recent-scan { border-color: var(--brand); }
 .tsd-position .tsd-recent-scan__label, .tsd-mark .tsd-recent-scan__label { justify-self: start; padding: 4px 6px; border-radius: 4px; background: var(--brand); color: #fff; font-size: 12px; font-weight: 700; }
 

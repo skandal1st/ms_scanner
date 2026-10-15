@@ -538,7 +538,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <button type="button" className={`tsd-button${!listView ? ' tsd-button--primary' : ''}`} aria-pressed={!listView} onClick={() => changePickingView('card')}>Карточка товара</button>
         <button type="button" className={`tsd-button${listView ? ' tsd-button--primary' : ''}`} aria-pressed={listView} onClick={() => changePickingView('list')}>Список товаров</button>
       </div>
-      {!listView && <section className={`tsd-current tsd-progress--${progressState(current?.addedTotal || 0, current?.expected || 0)}`}>
+      {!listView && <section className={`tsd-current tsd-progress--${progressState(current?.addedTotal || 0, current?.expected || 0)}${current && current.expected > 0 && current.addedTotal < current.expected ? ' assembly-incomplete' : ''}`}>
         <div><span>{target ? 'Выбранный товар' : 'Текущий товар'}</span><small>{progress.rows.indexOf(current) + 1} из {progress.rows.length}</small></div>
         <h2>{current?.product_name || 'Сканируйте товар'}</h2>
         {last && <p className="hint">GTIN последнего скана: {effectiveGtinKey(last) || 'не распознан'}</p>}
@@ -557,7 +557,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
                 <div className="shipment-group-heading">{row.folder_name || 'Без группы'}</div>}
               <button type="button"
               ref={element => { positionRefs.current[index] = element }}
-              aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}${row === lastScannedPosition ? ' tsd-recent-scan' : ''}`} onClick={() => selectPosition(index)}>
+              aria-pressed={positionFilter === index} className={`tsd-position tsd-progress--${progressState(row.addedTotal, row.expected)}${row.expected > 0 && row.addedTotal < row.expected ? ' assembly-incomplete' : ''}${row === lastScannedPosition ? ' tsd-recent-scan' : ''}`} onClick={() => selectPosition(index)}>
               {row === lastScannedPosition && <span className="tsd-recent-scan__label">Последняя отсканированная позиция</span>}
               <strong>{row.product_name}</strong>
               <span>{row.unmarked ? 'Штрихкод' : 'GTIN'}: {row.gtin}</span>
