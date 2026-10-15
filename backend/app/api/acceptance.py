@@ -973,11 +973,12 @@ async def _import_upd_bytes_traced(
                         "product_id": product_id,
                         "product_name": product_name,
                         "expected_qty": 0,
+                        "marked": False,
                     },
                 )
                 if pos.quantity is not None:
                     try:
-                        entry["expected_qty"] += int(pos.quantity)
+                        entry["expected_qty"] += float(pos.quantity)
                     except (TypeError, ValueError):
                         pass
                 if pos.price is not None:
@@ -1200,6 +1201,7 @@ async def _import_upd_bytes_traced(
     doc.plan = new_plan
     # Keep every XML line for physical verification, including unmatched/unmarked goods.
     physical_plan = []
+    from app.api.products import _upd_position_key
     for index, pos in enumerate(positions):
         matching = [v for v in results if v.line_number == pos.line_number and v.name == pos.name]
         aliases = set(filter(None, [normalize_gtin_key(pos.gtin), *[_code_gtin(c, None) for c in pos.codes]]))
@@ -1207,6 +1209,7 @@ async def _import_upd_bytes_traced(
         pid = next(iter(product_ids)) if len(product_ids) == 1 else None
         old = existing_by_pid.get(pid, {}) if pid else {}
         physical_plan.append({'key': f'xml:{index}', 'product_id': pid,
+            'position_key': _upd_position_key(pos.line_number, pos.name, pos.article),
             'product_name': pos.name or (next((v.product_name for v in matching if v.product_name), None)) or f'Позиция {index + 1}',
             'gtins': sorted(aliases), 'expected_qty': float(pos.quantity or 0),
             'pack_gtins': old.get('pack_gtins', []), 'pack_quantities': old.get('pack_quantities', {}),

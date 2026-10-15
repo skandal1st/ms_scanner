@@ -621,6 +621,7 @@ export const productsApi = {
     line_number: number | null
     position_name: string
     article: string | null
+    gtin?: string | null
     quantity: number | null
     price: number | null
     vat: number | null

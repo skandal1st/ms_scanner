@@ -772,7 +772,9 @@ async def process_document(
     count = (await db.execute(select(func.count(Scan.id)).where(
         Scan.document_id == document_id, Scan.status.in_([ScanStatus.valid, ScanStatus.overflow])
     ))).scalar_one()
-    if not count:
+    from app.services.supply_positions import prepare_supply_rows
+    quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if doc.kind == DocumentKind.supply else []
+    if not count and not quantity_only:
         raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
     doc.status = DocumentStatus.processing
     doc.error_message = None

@@ -1378,7 +1378,9 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         )
         valid_scans = result.scalars().all()
 
-        if not valid_scans:
+        from app.services.supply_positions import prepare_supply_rows
+        quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if kind == 'supply' else []
+        if not valid_scans and not quantity_only:
             raise ValueError("Нет проверенных марок или товаров для отправки")
         unresolved = (await db.execute(select(Scan.id).where(
             Scan.document_id == document_id,
@@ -1520,7 +1522,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         # Обновление МС-документа (trackingCodes для supply и отгрузочных типов)
         if not doc.moysklad_id or not integration or not integration.moysklad_token:
             raise ValueError("МойСклад не подключён или документ не выбран")
-        if doc.moysklad_id and integration and integration.moysklad_token and valid_scans:
+        if doc.moysklad_id and integration and integration.moysklad_token and (valid_scans or quantity_only):
             ms_token = decrypt_token(integration.moysklad_token)
             ms = MoySkladService(ms_token)
 
@@ -1592,6 +1594,8 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                     )
 
             scans_data = _build_moysklad_scans_data(valid_scans, kind, gtin_to_product_id)
+            if kind == 'supply':
+                scans_data = prepare_supply_rows(scans_data, doc.plan, doc.upd_meta)
             if any(not item.get("product_id") for item in scans_data):
                 raise ValueError("Не все марки сопоставлены с товарами МойСклад. Сопоставьте товары и повторите.")
 

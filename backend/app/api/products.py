@@ -41,6 +41,7 @@ class LinkUpdPositionRequest(BaseModel):
     line_number: Optional[int] = None
     position_name: str
     article: Optional[str] = None
+    gtin: Optional[str] = None
     quantity: Optional[float] = None
     price: Optional[float] = None
     vat: Optional[int] = None
@@ -402,6 +403,7 @@ async def link_upd_position_to_product(
     key = _upd_position_key(body.line_number, position_name, body.article)
     meta = dict(doc.upd_meta or {})
     links = dict(meta.get("manual_position_links") or {})
+    old_pid = (links.get(key) or {}).get('product_id')
     links[key] = {
         "product_id": pid,
         "product_name": product_name,
@@ -409,20 +411,30 @@ async def link_upd_position_to_product(
         "article": (body.article or "").strip() or None,
     }
     meta["manual_position_links"] = links
+    physical_plan = [dict(p) for p in meta.get('physical_plan', [])]
+    legacy_matches = [p for p in physical_plan if not p.get('position_key') and p.get('product_name') == position_name]
+    for p in physical_plan:
+        if p.get('position_key') == key or (len(legacy_matches) == 1 and p is legacy_matches[0]):
+            p['product_id'] = pid
+    if physical_plan:
+        meta['physical_plan'] = physical_plan
     doc.upd_meta = meta
 
     # Добавляем/обновляем товар в плане. Для уже существующей позиции поступления
     # это только уточняет отображение; для пустого поступления сохраняет реквизиты УПД.
     plan = [dict(p) for p in (doc.plan or []) if isinstance(p, dict)]
+    if old_pid and old_pid != pid and old_pid not in {p.get('product_id') for p in links.values()}:
+        plan = [p for p in plan if p.get('product_id') != old_pid or p.get('marked') is not False]
     entry = next((p for p in plan if p.get("product_id") == pid), None)
     if entry is None:
-        entry = {"product_id": pid, "gtin": None}
+        entry = {"product_id": pid, "gtin": normalize_gtin_key(body.gtin)}
         plan.append(entry)
+    entry['marked'] = False
     if product_name:
         entry["product_name"] = product_name
     if body.quantity is not None:
         try:
-            entry["expected_qty"] = int(body.quantity)
+            entry["expected_qty"] = float(body.quantity)
         except (TypeError, ValueError):
             pass
     if body.price is not None:

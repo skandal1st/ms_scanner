@@ -560,8 +560,10 @@ class MoySkladService:
         return str(raw).strip() or None
 
     @staticmethod
-    def _scan_units(s: Dict[str, Any]) -> int:
+    def _scan_units(s: Dict[str, Any]) -> float:
         """Сколько единиц товара представляет скан: короб/штрихкод = quantity, иначе 1."""
+        if s.get('is_barcode'):
+            return float(s.get('quantity') or 0) or 1
         return int(s.get("quantity") or 0) or 1
 
     def _tracking_code_entry(
@@ -805,6 +807,11 @@ class MoySkladService:
         if len(positions) > 1000:
             raise ValueError("В документе больше 1000 позиций. Разделите его на несколько документов МойСклад.")
 
+        if kind == 'supply':
+            # Quantity-only lines and marked lines follow the same UPD order.
+            order = {pid: index for index, pid in enumerate(groups)}
+            positions.sort(key=lambda p: order.get(
+                (p.get('assortment', {}).get('meta', {}).get('href') or '').rsplit('/', 1)[-1], len(order)))
         body = {"positions": positions}
         if description:
             body["description"] = description

@@ -1,7 +1,7 @@
 """Release regressions: no lost marks, false success or blind external replay."""
 import copy
 from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
@@ -86,6 +86,70 @@ async def test_overflow_and_unplanned_products_are_all_sent(monkeypatch):
     assert put["positions"][1]["price"] == 1234
     assert sum(len(body) for method, _, body in calls if method == "POST") == 3
     assert all("trackingCodes" not in p for p in put["positions"])
+
+
+async def test_supply_accessory_quantity_price_and_xml_order(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position('second', 1, 'second-row'), position('first', 1, 'first-row')])
+    await ms.update_document('supply', 'doc', [
+        {'product_id': 'first', 'code': '', 'quantity': 200, 'is_barcode': True},
+        {'product_id': 'second', 'code': '', 'quantity': 2.5, 'is_barcode': True}],
+        position_prices={'first': {'price': 315, 'vat': 22}})
+    put = next(body for method, _, body in calls if method == 'PUT')
+    assert [p['id'] for p in put['positions']] == ['first-row', 'second-row']
+    assert [p['quantity'] for p in put['positions']] == [200, 2.5]
+    assert put['positions'][0]['price'] == 31500
+    assert put['positions'][0]['vat'] == 22
+    assert not any(method == 'POST' for method, _, _ in calls)
+
+
+async def test_supply_creates_accessories_without_tracking_codes(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [])
+    ms._load_positions_rows.side_effect = [[], [position('bowl', 200, 'new-bowl')]]
+    await ms.update_document('supply', 'doc', [
+        {'product_id': 'bowl', 'code': '', 'quantity': 200, 'is_barcode': True}],
+        position_prices={'bowl': {'price': 315, 'vat': 22}})
+    put = next(body for method, _, body in calls if method == 'PUT')
+    assert put['positions'][0]['quantity'] == 200
+    assert put['positions'][0]['price'] == 31500
+    assert not any(method == 'POST' for method, _, _ in calls)
+
+
+async def test_quantity_only_supply_can_be_queued_without_scans(monkeypatch):
+    doc = NS(id=uuid4(), status=DocumentStatus.draft, kind=DocumentKind.supply,
+             moysklad_id='ms-doc', upd_meta={},
+             plan=[{'product_id': 'bowl', 'marked': False, 'expected_qty': 200}])
+    monkeypatch.setattr(document_guard, 'editable_document', AsyncMock(return_value=doc))
+    monkeypatch.setattr(documents, '_get_ms_service', AsyncMock(return_value=NS()))
+    delay = Mock()
+    monkeypatch.setattr(tasks.process_document_task, 'delay', delay)
+    await documents.process_document(doc.id, NS(id=uuid4()), DB(0, 0, 0))
+    assert doc.status == DocumentStatus.processing
+    delay.assert_called_once()
+
+
+async def test_worker_sends_quantity_only_supply_without_cz(monkeypatch):
+    from contextlib import asynccontextmanager
+    from app.db import session
+    from app.core import security
+    from app.services import moysklad
+    doc = NS(id=uuid4(), status=DocumentStatus.processing, kind=DocumentKind.supply,
+             moysklad_id='ms-doc', upd_meta={},
+             plan=[{'product_id': 'bowl', 'marked': False, 'expected_qty': 200, 'price': 315, 'vat': 22}])
+    db = DB(doc, [], None, NS(moysklad_token='encrypted'))
+    monkeypatch.setattr(session, 'AsyncSessionLocal', lambda: db)
+    monkeypatch.setattr(security, 'decrypt_token', lambda token: 'fake')
+    update = AsyncMock(return_value={})
+    monkeypatch.setattr(moysklad, 'MoySkladService', lambda token: NS(update_document=update))
+    @asynccontextmanager
+    async def lock(key):
+        yield True
+    monkeypatch.setattr(document_guard, 'processing_lock', lock)
+    monkeypatch.setattr(tasks, 'monitoring_emit', AsyncMock())
+    await tasks._process_document_unlocked_async(str(doc.id), str(uuid4()))
+    rows = update.await_args.args[2]
+    assert rows == [{'product_id': 'bowl', 'code': '', 'is_barcode': True, 'is_box': False, 'quantity': 200}]
+    assert update.await_args.kwargs['position_prices'] == {'bowl': {'price': 315, 'vat': 22}}
+    assert doc.status == DocumentStatus.accepted
 
 
 async def test_25000_marks_use_bounded_batches_and_report_progress(monkeypatch):

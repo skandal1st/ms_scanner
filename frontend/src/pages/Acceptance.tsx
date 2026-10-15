@@ -194,21 +194,12 @@ export function AcceptancePage({
     )
   }
 
-  // Несопоставленные позиции — наверх списка (их нужно разобрать в первую очередь),
-  // внутри групп сохраняем исходный порядок УПД (стабильная сортировка).
-  const positions = useMemo(() => {
-    const src = result?.positions ?? []
-    return [...src].sort((a, b) => Number(a.matched) - Number(b.matched))
-  }, [result])
+  const positions = result?.positions ?? []
   // В панель сопоставления включаем ВСЕ строки, в том числе позиции УПД без
   // GTIN/КМ. Раньше они показывались как «нужен товар», но выбрать товар было негде.
   const unmatched = positions.filter((p) => !p.matched)
-  const unmatchedWithGtin = unmatched.filter((p) => Boolean(p.gtin))
-  // Отправку блокируют только строки, содержащие марки/упаковки. Строка без КМ
-  // может быть обычным немаркированным товаром, её ручная привязка полезна, но опциональна.
-  const blockingUnmatched = unmatched.filter(
-    (p) => Boolean(p.gtin || p.codes_count > 0 || p.packages_count > 0),
-  )
+  const unmatchedWithGtin = unmatched.filter((p) => Boolean(p.gtin) && (p.codes_count > 0 || p.packages_count > 0))
+  const blockingUnmatched = unmatched
 
   // Авто-подсказки сопоставления GTIN↔товар (МС-поиск по имени из УПД/ЧЗ).
   const sugQuery = useMatchSuggestions(docId, unmatchedWithGtin.length > 0)
@@ -456,11 +447,11 @@ export function AcceptancePage({
             {result.skipped_duplicates > 0 && (
               <> · пропущено дублей: {result.skipped_duplicates}</>
             )}
-            {result.unmatched_gtins.length > 0 && (
+            {unmatched.length > 0 && (
               <>
                 {' '}
                 · <span style={{ color: 'var(--st-warn-fg)' }}>
-                  не сопоставлено GTIN: {result.unmatched_gtins.length}
+                  не сопоставлено позиций: {unmatched.length}
                 </span>
               </>
             )}
@@ -496,9 +487,7 @@ export function AcceptancePage({
               style={{ margin: 0, marginBottom: 8, color: 'var(--st-warn-fg)' }}
             >
               Сопоставьте товары МойСклад ({unmatched.length})
-              {blockingUnmatched.length > 0
-                ? ' — позиции с маркировкой обязательны для отправки'
-                : ' — позиции без маркировки можно привязать вручную'}
+              {' — сопоставьте все позиции, включая товары без маркировки'}
             </div>
             {sugQuery.isLoading && (
               <div className="text-muted" style={{ fontSize: 11, marginBottom: 8 }}>
@@ -532,10 +521,10 @@ export function AcceptancePage({
                   {docId && (
                     <InlineProductPicker
                       documentId={docId}
-                      gtin={p.gtin ?? undefined}
-                      position={p.gtin ? undefined : p}
+                      gtin={p.codes_count || p.packages_count ? p.gtin ?? undefined : undefined}
+                      position={p.codes_count || p.packages_count ? undefined : p}
                       onLinked={(product) => {
-                        if (p.gtin) void refreshAfterLink()
+                        if (p.codes_count || p.packages_count) void refreshAfterLink()
                         else markPositionLinked(p, product)
                       }}
                       suggestion={sugFor(p.gtin)}
@@ -559,6 +548,10 @@ export function AcceptancePage({
               emptyText="В файле нет товарных позиций"
               rowClassName={(p) => (p.matched ? undefined : 'is-unmatched')}
               renderExpanded={(p) => (
+                !p.codes_count && !p.packages_count
+                  ? !alreadyAccepted && docId ? <InlineProductPicker documentId={docId} position={p}
+                      onLinked={product => markPositionLinked(p, product)} /> : <span>{p.product_name}</span>
+                  :
                 <ExpandedPosition
                   codes={p.gtin ? codesByGtin.get(p.gtin) ?? [] : []}
                   documentId={docId}
@@ -598,7 +591,7 @@ export function AcceptancePage({
             className="button button--success"
             disabled={
               !linkedToMs ||
-              scans.length === 0 ||
+              (scans.length === 0 && !positions.some(p => p.matched && (p.quantity ?? 0) > 0)) ||
               blockingUnmatched.length > 0 ||
               sending ||
             doc?.status === "processing" ||
@@ -765,6 +758,7 @@ function InlineProductPicker({
           line_number: position.line_number,
           position_name: position.name,
           article: position.article,
+          gtin: position.gtin,
           quantity: position.quantity,
           price: position.price,
           vat: position.vat,
