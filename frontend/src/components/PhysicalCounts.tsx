@@ -19,6 +19,8 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   const key = ['physical-counts', terminal, scope, mode, documentId]
   const [activeId, setActiveId] = useState<string | null>(null)
   const [store, setStore] = useState('')
+  const [folderIds, setFolderIds] = useState<string[]>([])
+  const [folderSearch, setFolderSearch] = useState('')
   const [states, setStates] = useState<string[]>([])
   const [statesEdited, setStatesEdited] = useState(false)
   const [countMethod, setCountMethod] = useState<'scan' | 'quantity'>(defaultCountMethod)
@@ -33,6 +35,10 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   const sound = useTsdSound()
   const sessions = useQuery({ queryKey: key, queryFn: () => api.list(mode, documentId).then(r => r.data), enabled: active, refetchInterval: active ? 5000 : false })
   const options = useQuery({ queryKey: [...key, 'options'], queryFn: () => api.options().then(r => r.data), enabled: active && !activeId && (mode === 'inventory' || (!terminal && Boolean(documentId))) })
+  const folders = useQuery({ queryKey: [...key, 'folders'], queryFn: () => api.folders().then(r => r.data),
+    enabled: active && !activeId && mode === 'inventory', staleTime: 60_000 })
+  const availableFolderIds = folderIds.filter(id => folders.data?.some(folder => folder.id === id))
+  const shownFolders = folders.data?.filter(folder => folder.path_name.toLocaleLowerCase().includes(folderSearch.trim().toLocaleLowerCase())) || []
   const docs = useQuery({ queryKey: [...key, 'acceptances'], queryFn: () => api.acceptances().then(r => r.data), enabled: terminal && mode === 'acceptance' && !activeId })
   const detail = useQuery({ queryKey: [...key, activeId, 'detail'], queryFn: () => api.detail(activeId!).then(r => r.data), enabled: active && Boolean(activeId),
     refetchInterval: q => active && q.state.data?.status === 'preparing' ? 2000 : false })
@@ -78,12 +84,29 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
       <p className="hint">{mode === 'acceptance' ? 'Загрузите XML на ПК, затем откройте приёмку на ТСД. Здесь сохраняется фактическая сверка позиций.' : 'Выгрузите остатки склада, добавьте проведённые отгрузки выбранных статусов и сверяйте товары по брендам.'}</p>
       {mode === 'inventory' && <div className="physical-count-setup">
         <label className="field">Склад<select value={store} onChange={e => setStore(e.target.value)}><option value="">Выберите склад</option>{options.data?.stores.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select></label>
+        <fieldset style={{ minWidth: 0 }} disabled={create.isPending || folders.isLoading || !!folders.error}>
+          <legend>Категории для инвентаризации</legend>
+          <p className="hint">Выберите одну или несколько групп МойСклада. Загрузятся только их товары и подкатегории, включая позиции с нулевым остатком.</p>
+          <input className="ui-input ui-input--block" aria-label="Поиск категории" placeholder="Найти категорию" value={folderSearch} onChange={e => setFolderSearch(e.target.value)} />
+          <div style={{ maxHeight: 240, overflowY: 'auto', marginTop: 8 }}>
+            {shownFolders.map(folder => <label className="physical-count-check" style={{ overflowWrap: 'anywhere' }} key={folder.id}>
+              <input type="checkbox" checked={folderIds.includes(folder.id)} onChange={e => setFolderIds(old => e.target.checked ? [...old, folder.id] : old.filter(id => id !== folder.id))} />
+              {folder.path_name}
+            </label>)}
+          </div>
+          {folders.isLoading && <p role="status">Загружаем категории…</p>}
+          {!folders.isLoading && !folders.error && shownFolders.length === 0 && <p className="hint">{folders.data?.length ? 'Категории не найдены.' : 'В МойСкладе нет доступных категорий.'}</p>}
+          <p className="hint">Выбрано категорий: {availableFolderIds.length}</p>
+          {availableFolderIds.length > 0 && <button type="button" className="button button--sm" onClick={() => setFolderIds([])}>Снять выбор категорий</button>}
+        </fieldset>
+        {folders.error && <p role="alert">{errorText(folders.error)} <button type="button" className="button button--sm" onClick={() => void folders.refetch()}>Повторить загрузку категорий</button></p>}
         <label className="field">Способ инвентаризации<select value={countMethod} onChange={e => setCountMethod(e.target.value as 'scan' | 'quantity')}><option value="quantity">Ввод фактического количества — без сканирования</option><option value="scan">Сканирование марок и штрихкодов</option></select></label>
         <fieldset><legend>Товары в этих отгрузках ещё на складе</legend><p className="hint">Выбор из настроек. Можно изменить для этой сверки. Добавляем только проведённые отгрузки. Непроведённые уже входят в остаток.</p>
           {options.data?.states.map(v => <label className="physical-count-check" key={v.id}><input type="checkbox" checked={states.includes(v.id)} onChange={e => { setStatesEdited(true); setStates(old => e.target.checked ? [...old, v.id] : old.filter(id => id !== v.id)) }} />{v.name}</label>)}
         </fieldset>
         <p className="hint">Остатки и отгрузки всего выбранного склада, по всем юрлицам аккаунта МойСклад.</p>
-        <button className="button button--primary" disabled={!store || create.isPending || options.isLoading || !!options.error} onClick={() => create.mutate({ mode, count_method: countMethod, store_id: store, include_state_ids: states })}>Выгрузить остатки и начать сверку</button>
+        <button className="button button--primary" disabled={!store || !availableFolderIds.length || availableFolderIds.length > 100 || create.isPending || options.isLoading || !!options.error || folders.isLoading || !!folders.error} onClick={() => create.mutate({ mode, count_method: countMethod, store_id: store, include_state_ids: states, folder_ids: availableFolderIds })}>Загрузить выбранные категории и начать сверку</button>
+        {availableFolderIds.length > 100 && <p role="alert">За одну сверку можно выбрать не более 100 категорий. Вместо подкатегорий можно выбрать общую родительскую группу.</p>}
         {options.error && <p role="alert">{errorText(options.error)}</p>}
       </div>}
       {terminal && mode === 'acceptance' && <><h3>Загруженные приёмки</h3>{docs.data?.map(v => <button className="tsd-order" key={v.id} disabled={create.isPending} onClick={() => create.mutate({ mode, document_id: v.id })}><strong>{v.name}</strong><span>{new Date(v.created_at).toLocaleDateString('ru-RU')} · {v.positions} позиций</span></button>)}{docs.data?.length === 0 && <p className="hint">Загруженных приёмок нет. Проверьте юрлицо и склад рабочего места ТСД.</p>}{docs.error && <p role="alert">{errorText(docs.error)}</p>}</>}
@@ -96,9 +119,11 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
       <h3>{data?.name || 'Загрузка…'}</h3>
       {data?.status === 'preparing' && <p role="status">Выгружаем остатки и отгрузки из МойСклада…</p>}
       {data?.error_message && <p role="alert">{data.error_message}</p>}
+      {mode === 'inventory' && data?.status === 'active' && detail.data && rows.length === 0 && <p className="hint">В выбранных категориях нет позиций для сверки. Вернитесь к списку сверок и выберите другие категории.</p>}
       {detail.error && <p role="alert">{errorText(detail.error)}</p>}
       {progress.error && <p role="alert">{errorText(progress.error)}</p>}
       {data?.settings.snapshot_at && <p className="hint">Снимок: {new Date(data.settings.snapshot_at).toLocaleString('ru-RU')} · {data.settings.store_name}{data.settings.included_states?.length ? ` · Отгрузки: ${data.settings.included_states.map(v => v.name).join(', ')}` : ''}</p>}
+      {data?.settings.included_folders?.length ? <p className="hint">Категории сверки: {data.settings.included_folders.map(folder => folder.path_name).join(', ')}. Подкатегории включены.</p> : null}
       {mode === 'inventory' && rows.length > 0 && <label className="field">Бренд / группа товаров<select value={brand} disabled={Boolean(confirmation) || scan.isPending || finishBrand.isPending} onChange={e => { setBrand(e.target.value); setSelected(undefined); setCode('') }}><option value="">Выберите бренд</option>{brands.map(v => <option key={v} value={v}>{v}{reviewed.includes(v) ? ' · проверен' : ''}</option>)}</select></label>}
       {terminal && !manual && data?.status === 'active' && <section className="tsd-scan-dock">
         <form onSubmit={e => { e.preventDefault(); if (!blocked && code.trim()) scan.mutate({ code: normalizeScannerInput(code) }) }}><input ref={input} aria-label="Код для сверки" value={code} onChange={e => setCode(e.target.value)} inputMode="none" autoComplete="off" disabled={blocked} placeholder={brand ? 'Сканируйте код' : 'Сначала выберите бренд'} /><button disabled={blocked || !code.trim()} className="tsd-button" type="submit">Добавить</button></form>

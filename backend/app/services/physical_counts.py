@@ -63,9 +63,11 @@ def identify_count_scan(plan, code, product_key=None, quantity=1):
     return row, units, identity, marked, hashlib.sha256(identity.encode()).hexdigest()
 
 
-async def prepare_inventory_plan(ms, store_id, state_ids):
-    """One warehouse snapshot + paginated catalog and applied demands of selected states."""
-    stock = await ms.get_stock_map([f'{ms.base_url}/entity/store/{store_id}'], group_by='variant', full_snapshot=True)
+async def prepare_inventory_plan(ms, store_id, state_ids, *, folder_ids=None):
+    """Filter stock and assortment at MS before paging, retain the legacy queued flow."""
+    stock_options = {'folder_ids': folder_ids} if folder_ids is not None else {}
+    stock = await ms.get_stock_map([f'{ms.base_url}/entity/store/{store_id}'],
+                                  group_by='variant', full_snapshot=True, **stock_options)
     products, demands = {}, []
     async with httpx.AsyncClient(timeout=60) as client:
         async def pages(path, params, limit=1000):
@@ -78,12 +80,25 @@ async def prepare_inventory_plan(ms, store_id, state_ids):
                 if len(page) < limit:
                     return rows
                 offset += len(page)
-        catalog = await pages('entity/product', {'filter': 'archived=false;archived=true'})
-        variants = await pages('entity/variant', {'filter': 'archived=false;archived=true'})
+        if folder_ids is not None:
+            if not folder_ids:
+                raise ValueError('Выберите категории для инвентаризации')
+            filters = ['archived=false', 'archived=true', 'type=product', 'type=variant',
+                       'withSubFolders=true', 'stockMode=all', 'quantityMode=all']
+            filters.extend(f'productFolder={ms.base_url}/entity/productfolder/{fid}' for fid in dict.fromkeys(folder_ids))
+            # expand=product supplies category information for variants without N+1 requests.
+            catalog = await pages('entity/assortment', {'filter': ';'.join(filters),
+                                 'groupBy': 'variant', 'expand': 'product'}, limit=100)
+            variants = [v for v in catalog if (v.get('meta') or {}).get('type') == 'variant']
+            catalog = [v for v in catalog if (v.get('meta') or {}).get('type') != 'variant']
+        else:
+            # Only already-queued sessions without a category selection use the old full snapshot.
+            catalog = await pages('entity/product', {'filter': 'archived=false;archived=true'})
+            variants = await pages('entity/variant', {'filter': 'archived=false;archived=true'})
         catalog_by_id = {v['id']: v for v in catalog}
         for variant in variants:
             parent = variant.get('product') or {}
-            parent = catalog_by_id.get(parent.get('id') or ms._id_from_href(parent.get('meta', {}).get('href', '')), {})
+            parent = catalog_by_id.get(parent.get('id') or ms._id_from_href(parent.get('meta', {}).get('href', '')), parent)
             catalog.append({**variant, 'pathName': parent.get('pathName') or variant.get('pathName'),
                             'productFolder': parent.get('productFolder') or variant.get('productFolder') or {}})
         for item in catalog:
@@ -99,8 +114,8 @@ async def prepare_inventory_plan(ms, store_id, state_ids):
                             packs[key] = qty if key not in packs or packs[key] == qty else 0
             products[pid] = {'key': pid, 'product_id': pid, 'product_name': item.get('name') or pid,
                 'gtins': sorted(set(v for v in aliases if v)), 'pack_gtins': list(packs), 'pack_quantities': packs,
-                'folder_name': item.get('pathName') or 'Без бренда',
-                'folder_id': ms._id_from_href((item.get('productFolder', {}).get('meta') or {}).get('href', '')),
+                'folder_name': item.get('pathName') or stock.get(pid, {}).get('folder_name') or 'Без бренда',
+                'folder_id': (item.get('productFolder') or {}).get('id') or ms._id_from_href(((item.get('productFolder') or {}).get('meta') or {}).get('href', '')),
                 'base_qty': float(stock.get(pid, {}).get('qty') or 0), 'shipment_qty': 0.0}
         if state_ids:
             # The stock report covers the entire warehouse, across organizations.
@@ -126,6 +141,8 @@ async def prepare_inventory_plan(ms, store_id, state_ids):
                 pid = ref(assortment)
                 if not pid or (assortment.get('meta', {}).get('type') or 'product') == 'service':
                     continue
+                if folder_ids is not None and pid not in products and pid not in stock:
+                    continue  # Selected demand documents may contain goods from other categories.
                 if pid not in products:
                     products[pid] = {'key': pid, 'product_id': pid, 'product_name': assortment.get('name') or pid,
                         'gtins': [], 'folder_name': assortment.get('pathName') or 'Без бренда',

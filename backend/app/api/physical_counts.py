@@ -90,6 +90,7 @@ class CreateRequest(BaseModel):
     document_id: UUID | None = None
     store_id: UUID | None = None
     include_state_ids: list[UUID] | None = Field(default=None, max_length=100)
+    folder_ids: list[UUID] | None = Field(default=None, max_length=100)
     count_method: Literal['scan', 'quantity'] = 'scan'
 
 
@@ -142,6 +143,15 @@ async def options(scope=Depends(terminal_scope), db=Depends(get_db)):
                 'default_include_state_ids': getattr(scope[1], 'inventory_include_state_ids', None) or []}
     except httpx.HTTPError as exc:
         raise HTTPException(502, 'Не удалось загрузить склады и статусы отгрузок из МойСклада') from exc
+
+
+async def folders(scope=Depends(terminal_scope), db=Depends(get_db)):
+    authorize_mode(scope, 'inventory')
+    ms = await _ms_for_user(db, scope[0].id)
+    try:
+        return await ms.get_product_folders()
+    except httpx.HTTPError as exc:
+        raise HTTPException(502, 'Не удалось загрузить категории МойСклада. Повторите попытку.') from exc
 
 
 @router.get('/tsd/acceptances')
@@ -198,6 +208,12 @@ async def create_session(body: CreateRequest, scope=Depends(terminal_scope), db=
     else:
         if not body.store_id:
             raise HTTPException(400, 'Выберите склад')
+        if not body.folder_ids:
+            raise HTTPException(400, 'Выберите хотя бы одну категорию для инвентаризации')
+        selected_folders = list(dict.fromkeys(str(value) for value in body.folder_ids))
+        available_folders = await folders(scope, db)
+        if not set(selected_folders).issubset({v['id'] for v in available_folders}):
+            raise HTTPException(400, 'Выбранная категория недоступна. Обновите список категорий.')
         available = await options(scope, db)
         store = next((v for v in available['stores'] if v['id'] == str(body.store_id)), None)
         states = list(dict.fromkeys(str(v) for v in (body.include_state_ids if body.include_state_ids is not None
@@ -209,6 +225,8 @@ async def create_session(body: CreateRequest, scope=Depends(terminal_scope), db=
             name=f'Инвентаризация · {store["name"]}', status='preparing', plan=[],
             settings={'store_id': str(body.store_id), 'store_name': store['name'],
                 'include_state_ids': states, 'all_organizations': True,
+                'folder_ids': selected_folders,
+                'included_folders': [v for v in available_folders if v['id'] in selected_folders],
                 'count_method': body.count_method,
                 'included_states': [v for v in available['states'] if v['id'] in states]})
     db.add(session)
@@ -378,7 +396,7 @@ async def export(session_id: UUID, scope=Depends(terminal_scope), db=Depends(get
 
 
 for path, endpoint, method in [('', list_sessions, 'GET'), ('', create_session, 'POST'),
-    ('/options', options, 'GET'), ('/{session_id}', detail, 'GET'),
+    ('/options', options, 'GET'), ('/folders', folders, 'GET'), ('/{session_id}', detail, 'GET'),
     ('/{session_id}/progress', get_progress, 'GET'), ('/{session_id}/export', export, 'GET')]:
     router.add_api_route('/tsd/counts' + path, endpoint, methods=[method])
 
@@ -397,6 +415,11 @@ async def desktop_create(body: CreateRequest, scope=Depends(desktop_scope), db=D
 @router.get('/physical-counts/options')
 async def desktop_options(scope=Depends(desktop_scope), db=Depends(get_db)):
     return await options(scope, db)
+
+
+@router.get('/physical-counts/folders')
+async def desktop_folders(scope=Depends(desktop_scope), db=Depends(get_db)):
+    return await folders(scope, db)
 
 
 @router.get('/physical-counts/{session_id}')

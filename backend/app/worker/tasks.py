@@ -38,7 +38,8 @@ async def _prepare_physical_count_async(session_id):
         try:
             ms = await _ms_for_user(db, session.user_id)
             config = session.settings
-            plan = await prepare_inventory_plan(ms, config['store_id'], config['include_state_ids'])
+            plan = await prepare_inventory_plan(ms, config['store_id'], config['include_state_ids'],
+                                                folder_ids=config.get('folder_ids'))
             session.plan = plan
             session.settings = {**config, 'snapshot_at': datetime.now(timezone.utc).isoformat()}
             session.status = 'active'

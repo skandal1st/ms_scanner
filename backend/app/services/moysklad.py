@@ -1106,7 +1106,24 @@ class MoySkladService:
                                         "name": st.get("name") or "", "href": href}
         return list(stores.values())
 
-    async def get_stock_map(self, store_hrefs: List[str], *, group_by: str = 'product', full_snapshot: bool = False) -> Dict[str, Dict[str, Any]]:
+    async def get_product_folders(self) -> List[Dict[str, str]]:
+        """Load category names only, without fetching their products."""
+        result, offset = [], 0
+        async with httpx.AsyncClient(timeout=30) as client:
+            while True:
+                response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/productfolder',
+                    params={'limit': 1000, 'offset': offset})
+                response.raise_for_status()
+                rows = response.json().get('rows', [])
+                result.extend({'id': row['id'], 'name': row['name'],
+                    'path_name': '/'.join(v for v in [row.get('pathName'), row['name']] if v)} for row in rows)
+                if len(rows) < 1000:
+                    break
+                offset += len(rows)
+        return sorted(result, key=lambda row: row['path_name'].casefold())
+
+    async def get_stock_map(self, store_hrefs: List[str], *, group_by: str = 'product', full_snapshot: bool = False,
+                            folder_ids: Optional[List[str]] = None) -> Dict[str, Dict[str, Any]]:
         """Учётный остаток по товарам (report/stock/all, groupBy=product) по складам.
 
         Возвращает {product_id: {qty, folder_id, folder_name}}. Пустой store_hrefs = все
@@ -1115,6 +1132,11 @@ class MoySkladService:
         Может вернуть 403, если у токена нет права на отчёт остатков — вызывающий ловит."""
         params: Dict[str, Any] = {"groupBy": group_by, "limit": 1000}
         filters = [f"store={h}" for h in store_hrefs]
+        if folder_ids is not None:
+            if not folder_ids:
+                raise ValueError('Выберите категории для инвентаризации')
+            filters.extend(f'productFolder={self.base_url}/entity/productfolder/{fid}' for fid in dict.fromkeys(folder_ids))
+            filters.append('withSubFolders=true')
         if full_snapshot:
             filters.extend(['stockMode=all', 'quantityMode=all', 'archived=false', 'archived=true'])
         if filters:

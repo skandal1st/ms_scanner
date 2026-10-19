@@ -218,7 +218,8 @@ async def test_revoked_mode_and_foreign_warehouse_block_every_report(real_contex
         assert err.value.status_code == 404
 
 
-async def test_worker_prepares_snapshot_once_and_sanitizes_external_errors(real_context, monkeypatch):
+@pytest.mark.parametrize('folder_ids', [None, ['selected-folder']])
+async def test_worker_prepares_snapshot_once_and_sanitizes_external_errors(real_context, monkeypatch, folder_ids):
     from app.worker import tasks
     from app.db import session as db_module
     from app.services import physical_counts as service
@@ -229,10 +230,11 @@ async def test_worker_prepares_snapshot_once_and_sanitizes_external_errors(real_
     monkeypatch.setattr(service, 'prepare_inventory_plan', prepare)
     async with factory() as db:
         session = PhysicalCountSession(id=uuid4(), user_id=scope[0].id, organization_profile_id=scope[1].id,
-            mode='inventory', name='Тест', status='preparing', plan=[], settings={'store_id': 'store', 'include_state_ids': []})
+            mode='inventory', name='Тест', status='preparing', plan=[], settings={'store_id': 'store', 'include_state_ids': [], 'folder_ids': folder_ids})
         db.add(session); await db.commit()
     await asyncio.gather(tasks._prepare_physical_count_async(str(session.id)), tasks._prepare_physical_count_async(str(session.id)))
     prepare.assert_awaited_once()
+    assert prepare.await_args.kwargs['folder_ids'] == folder_ids
     async with factory() as db:
         stored = await db.get(PhysicalCountSession, session.id)
         assert stored.status == 'active' and stored.plan == [row()]
