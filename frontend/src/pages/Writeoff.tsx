@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
@@ -8,6 +8,7 @@ import { DocumentSelector } from '../components/DocumentSelector'
 import { ProgressTable } from '../components/ProgressTable'
 import { FlowWorkspaceTabs, useFlowWorkspaceTab } from '../components/FlowWorkspaceTabs'
 import { ManualProductTargetBar } from '../components/ManualProductTargetBar'
+import { BulkMarksModal } from '../components/BulkMarksModal'
 import { Icon } from '../components/Icon'
 import { useScanStore } from '../store/scanStore'
 import { useLoadDocument } from '../hooks/useDocuments'
@@ -16,6 +17,7 @@ import {
   czApi,
   documentsApi,
   integrationsApi,
+  scansApi,
   WRITEOFF_REASONS,
   CZ_PRODUCT_GROUPS,
   type Document,
@@ -51,6 +53,8 @@ export function WriteoffPage({
     verifying,
     setVerifying,
     getProgress,
+    addScan,
+    unpackBox,
   } = useScanStore()
   const progress = getProgress()
   const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('writeoff_workspace_tab')
@@ -72,6 +76,39 @@ export function WriteoffPage({
   const [message, setMessage] = useState<string | null>(null)
   // Марки, которые ЧЗ не смог найти — списать их нельзя, показываем списком.
   const [unresolved, setUnresolved] = useState<UnresolvedCode[]>([])
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const importCodes = useMutation({
+    mutationFn: (id: string) => documentsApi.importShipmentCodes(id).then(r => r.data),
+    onSuccess: async (_result, id) => {
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['document', id] }),
+        qc.invalidateQueries({ queryKey: ['documents'] }),
+      ])
+    },
+  })
+  const importForCurrent = importCodes.variables === document?.id
+  const marksLocked = !document || document.status !== 'draft' || Boolean(document.cz_doc_ids?.length)
+    || verifying || bulkBusy || importCodes.isPending || ['signing', 'submitting', 'processing', 'done'].includes(phase)
+
+  const handleBulkMarks = async (codes: string[]) => {
+    if (!document || marksLocked) return
+    const documentId = document.id
+    setBulkBusy(true)
+    try {
+      const { data: created } = await scansApi.bulk(documentId, codes, unpackBox)
+      if (useScanStore.getState().document?.id === documentId) {
+        for (const scan of created) addScan(scan)
+      }
+    } finally {
+      // A bulk request can save some codes before an error; reconcile on retries too.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['document', documentId] }),
+        qc.invalidateQueries({ queryKey: ['documents'] }),
+      ])
+      setBulkBusy(false)
+    }
+  }
 
   useLoadDocument(pendingDoc?.id ?? null)
 
@@ -227,6 +264,8 @@ export function WriteoffPage({
 
   const canSubmit =
     !!document &&
+    !bulkBusy &&
+    !importCodes.isPending &&
     scans.length > 0 &&
     stats.scanned === 0 &&
     stats.valid + stats.overflow > 0 &&
@@ -239,7 +278,7 @@ export function WriteoffPage({
 
   // Пакетная проверка марок в ЧЗ перед списанием (скан — локально, проверка — тут).
   const handleVerify = async () => {
-    if (!document || verifying) return
+    if (!document || verifying || bulkBusy || importCodes.isPending) return
     setVerifying(true)
     try {
       await documentsApi.verify(document.id)
@@ -401,8 +440,29 @@ export function WriteoffPage({
               selected={document}
             />
           )}
+          {document?.kind === 'loss' && document.moysklad_id && document.status === 'draft' && (
+            <div className="section" style={{ marginTop: 12 }}>
+              <button type="button" className="button button--primary"
+                disabled={marksLocked}
+                onClick={() => importCodes.mutate(document.id)}>
+                {importCodes.isPending ? 'Загружаем марки…' : 'Загрузить марки из сборки'}
+              </button>
+              <p className="hint">Из завершённой сборки этой отгрузки. Затем проверьте марки в ЧЗ.</p>
+              {importForCurrent && importCodes.isSuccess && <p role="status" className="hint">
+                Загружено: {importCodes.data.imported}. Уже есть: {importCodes.data.skipped}.
+              </p>}
+              {importForCurrent && importCodes.error && <p role="alert" className="alert alert--error">
+                {(importCodes.error as { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Не удалось загрузить марки. Повторите попытку.'}
+              </p>}
+            </div>
+          )}
           <ManualProductTargetBar />
           <ScanInput documentId={document?.id ?? null} />
+          <button type="button" className="button"
+            style={{ marginTop: 8, width: '100%', justifyContent: 'center' }}
+            disabled={marksLocked} onClick={() => setBulkOpen(true)}>
+            <Icon name="upload" size={16} /> Загрузить список марок
+          </button>
           <StatsPanel />
 
           <div
@@ -563,7 +623,7 @@ export function WriteoffPage({
           <button
             type="button"
             className="button"
-            disabled={!document || verifying}
+            disabled={!document || verifying || bulkBusy || importCodes.isPending}
             onClick={handleVerify}
             style={{ marginRight: 8 }}
           >
@@ -584,6 +644,10 @@ export function WriteoffPage({
           {stats.scanned > 0 ? `Проверьте марки (${stats.scanned})` : phaseText[phase]}
         </button>
       </footer>
+      <BulkMarksModal key={document?.id ?? 'no-document'}
+        open={bulkOpen && Boolean(document) && document?.status === 'draft'}
+        onClose={() => setBulkOpen(false)} onSubmit={handleBulkMarks} busy={bulkBusy}
+        title="Загрузить марки в списание" />
     </div>
   )
 }

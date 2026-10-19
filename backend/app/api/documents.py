@@ -650,6 +650,16 @@ async def export_document_xlsx(
     )
 
 
+@router.post('/{document_id}/import-shipment-codes')
+async def import_shipment_codes(document_id: UUID, current_user: User = Depends(get_current_user),
+                                db: AsyncSession = Depends(get_db)):
+    from app.services.writeoff_import import import_shipment_codes as import_codes
+    result = await import_codes(db, document_id, current_user.id)
+    from app.services.scan_events import publish_event
+    await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(document_id)})
+    return result
+
+
 @router.post("/{document_id}/verify")
 async def verify_document(
     document_id: UUID,

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, get_current_user, get_active_organization_profile, require_active_subscription
 from app.api.documents import _get_ms_service, verify_document
 from app.api.scans import ScanResponse, _create_scan_record
-from app.db.models import Document, DocumentKind, DocumentStatus, Scan, User
+from app.db.models import Document, DocumentKind, DocumentStatus, Scan, TsdDocumentSession, User
 from app.db.session import get_db
 from app.core.security import decode_token
 from app.services import shipment_corrections as service
@@ -101,20 +101,39 @@ async def open_correction(source_id: UUID, access: Scope = Depends(scope), db: A
     await lock_ms_document(db, access.user.id, 'demand', source.moysklad_id)
     siblings = (await db.execute(select(Document).where(Document.user_id == access.user.id,
         Document.moysklad_id == source.moysklad_id, Document.kind == DocumentKind.demand,
-        Document.status != DocumentStatus.accepted))).scalars().all()
+        Document.status != DocumentStatus.accepted).with_for_update()
+        .execution_options(populate_existing=True))).scalars().all()
+    empty_previews = []
     for sibling in siblings:
         if (sibling.upd_meta or {}).get('superseded_by_document_id'):
             continue
         if service.correction(sibling):
             await owned(db, access, sibling.id, revision=True)
             return {'id': str(sibling.id)}
-        raise HTTPException(409, 'Для этой отгрузки уже открыта сборка. Завершите её перед исправлением.')
+        # Opening a shipment for preview creates a draft, but does not start picking.
+        # Hold its row lock until replacement commits, so a concurrent scan cannot
+        # turn an empty preview into a real assembly while we read the MS baseline.
+        if sibling.status != DocumentStatus.draft or (sibling.upd_meta or {}).get('collection_start'):
+            raise HTTPException(409, 'Для этой отгрузки уже начата сборка или выполняется отправка. Завершите её перед исправлением.')
+        has_scans = (await db.execute(select(Scan.id).where(
+            Scan.document_id == sibling.id).limit(1))).scalar_one_or_none()
+        if has_scans is not None:
+            raise HTTPException(409, 'Для этой отгрузки есть незавершённая сборка с марками. Завершите её перед исправлением.')
+        active_session = (await db.execute(select(TsdDocumentSession.id).where(
+            TsdDocumentSession.document_id == sibling.id,
+            TsdDocumentSession.status == 'active').limit(1))).scalar_one_or_none()
+        if active_session is not None:
+            raise HTTPException(409, 'Эта отгрузка открыта на ТСД. Завершите сборку или уберите её из работы на ТСД перед исправлением.')
+        empty_previews.append(sibling)
     try:
         async with processing_lock(f'ms:{access.user.id}:demand:{source.moysklad_id}') as acquired:
             if not acquired:
                 raise HTTPException(409, 'Отгрузка занята другой операцией')
             doc = await service.start(db, source, await _get_ms_service(access.user, db),
-                                      str(access.device_id or access.user.id))
+                                      str(access.device_id or access.user.id), commit=False)
+            for preview in empty_previews:
+                preview.upd_meta = {**(preview.upd_meta or {}), 'superseded_by_document_id': str(doc.id)}
+            await db.commit()
             return {'id': str(doc.id)}
     except Exception as exc:
         await db.rollback()

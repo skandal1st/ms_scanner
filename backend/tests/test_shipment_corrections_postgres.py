@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
-from app.db.models import Base, Document, DocumentKind, DocumentStatus, OrganizationProfile, Scan, ScanStatus, User
+from app.db.models import (Base, Document, DocumentKind, DocumentStatus, OrganizationProfile,
+                           Scan, ScanStatus, TsdDevice, TsdDocumentSession, User, Workplace)
 from app.services import shipment_corrections as service
 from app.api import shipment_corrections as routes
 from app.services.document_guard import editable_document
@@ -38,6 +39,153 @@ async def seed():
         db.add(source)
         await db.commit()
     return engine, factory, user, profile, source
+
+
+async def seed_preview(factory, user, profile, source, *, status=DocumentStatus.draft, meta=None, session=None, scan=False):
+    async with factory() as db:
+        preview = Document(id=uuid4(), user_id=user.id, organization_profile_id=profile.id,
+            name=source.name, kind=DocumentKind.demand, status=status, moysklad_id=source.moysklad_id,
+            moysklad_organization_id='org', moysklad_store_id='store', upd_meta=meta)
+        db.add(preview)
+        await db.flush()
+        if scan:
+            db.add(Scan(document_id=preview.id, code='unsent-mark', status=ScanStatus.invalid))
+        if session:
+            workplace = Workplace(id=uuid4(), user_id=user.id, organization_profile_id=profile.id, name='Audit')
+            db.add(workplace)
+            await db.flush()
+            device = TsdDevice(id=uuid4(), user_id=user.id, workplace_id=workplace.id)
+            db.add(device)
+            await db.flush()
+            db.add(TsdDocumentSession(device_id=device.id, document_id=preview.id, status=session))
+        await db.commit()
+        return preview.id
+
+
+@pytest.mark.parametrize('session', [None, 'completed', 'released'])
+async def test_empty_unstarted_preview_is_replaced_atomically_without_deleting_history(monkeypatch, session):
+    engine, factory, user, profile, source = await seed()
+    from app.db import session as db_session
+    monkeypatch.setattr(db_session, 'engine', engine)
+    preview_id = await seed_preview(factory, user, profile, source, meta={'keep': 'metadata'}, session=session)
+    monkeypatch.setattr(service, 'snapshot', AsyncMock(return_value=(
+        {'organization': {'id': 'org'}, 'store': {'id': 'store'}}, {})))
+    monkeypatch.setattr(routes, '_get_ms_service', AsyncMock(return_value=NS(build_plan=AsyncMock(return_value=[]))))
+    try:
+        async with factory() as db:
+            opened = await routes.open_correction(source.id, routes.Scope(user, profile.id, []), db)
+        async with factory() as db:
+            preview = await db.get(Document, preview_id)
+            revision = await db.get(Document, opened['id'])
+            assert preview.upd_meta == {'keep': 'metadata', 'superseded_by_document_id': opened['id']}
+            assert service.correction(revision)['source_id'] == str(source.id)
+            assert (await db.get(Document, source.id)).status == DocumentStatus.accepted
+            with pytest.raises(HTTPException) as error:
+                await editable_document(db, preview_id, user.id)
+            assert error.value.status_code == 409
+        async with factory() as db:
+            resumed = await routes.open_correction(source.id, routes.Scope(user, profile.id, []), db)
+            assert resumed == opened
+        service.snapshot.assert_awaited_once()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize('preview_options', [
+    {'scan': True},
+    {'meta': {'collection_start': {'done': True}}},
+    {'meta': {'collection_start': {'started_at': '2026-10-19T12:00:00Z'}}},
+    {'status': DocumentStatus.processing},
+    {'session': 'active'},
+])
+async def test_real_assembly_still_blocks_correction_without_loading_ms(monkeypatch, preview_options):
+    engine, factory, user, profile, source = await seed()
+    preview_id = await seed_preview(factory, user, profile, source, **preview_options)
+    monkeypatch.setattr(service, 'start', AsyncMock())
+    try:
+        async with factory() as db:
+            with pytest.raises(HTTPException) as error:
+                await routes.open_correction(source.id, routes.Scope(user, profile.id, []), db)
+            assert error.value.status_code == 409
+        async with factory() as db:
+            assert not ((await db.get(Document, preview_id)).upd_meta or {}).get('superseded_by_document_id')
+        service.start.assert_not_awaited()
+    finally:
+        await engine.dispose()
+
+
+async def test_failed_ms_snapshot_keeps_empty_preview_available(monkeypatch):
+    engine, factory, user, profile, source = await seed()
+    from app.db import session as db_session
+    monkeypatch.setattr(db_session, 'engine', engine)
+    preview_id = await seed_preview(factory, user, profile, source)
+    monkeypatch.setattr(routes, '_get_ms_service', AsyncMock(return_value=NS()))
+    monkeypatch.setattr(service, 'snapshot', AsyncMock(side_effect=ValueError('Ошибка загрузки МС')))
+    try:
+        async with factory() as db:
+            with pytest.raises(HTTPException):
+                await routes.open_correction(source.id, routes.Scope(user, profile.id, []), db)
+        async with factory() as db:
+            assert (await editable_document(db, preview_id, user.id)).status == DocumentStatus.draft
+            revisions = (await db.execute(select(Document).where(Document.moysklad_id == source.moysklad_id))).scalars().all()
+            assert len(revisions) == 2
+    finally:
+        await engine.dispose()
+
+
+async def test_concurrent_scan_waits_for_preview_replacement_and_cannot_write_to_old_draft(monkeypatch):
+    import asyncio
+    from app.db import session as db_session
+    engine, factory, user, profile, source = await seed()
+    monkeypatch.setattr(db_session, 'engine', engine)
+    preview_id = await seed_preview(factory, user, profile, source)
+    loading, finish_loading, editing = asyncio.Event(), asyncio.Event(), asyncio.Event()
+
+    async def snapshot(*args):
+        loading.set()
+        await finish_loading.wait()
+        return {'organization': {'id': 'org'}, 'store': {'id': 'store'}}, {}
+
+    monkeypatch.setattr(service, 'snapshot', snapshot)
+    monkeypatch.setattr(routes, '_get_ms_service', AsyncMock(return_value=NS(build_plan=AsyncMock(return_value=[]))))
+
+    async def open_revision():
+        async with factory() as db:
+            return await routes.open_correction(source.id, routes.Scope(user, profile.id, []), db)
+
+    async def scan_preview():
+        async with factory() as db:
+            editing.set()
+            try:
+                await editable_document(db, preview_id, user.id)
+                db.add(Scan(document_id=preview_id, code='concurrent-mark', status=ScanStatus.scanned))
+                await db.commit()
+                return None
+            except HTTPException as exc:
+                return exc.status_code
+
+    opening = asyncio.create_task(open_revision())
+    scanning = None
+    try:
+        await asyncio.wait_for(loading.wait(), 5)
+        scanning = asyncio.create_task(scan_preview())
+        await asyncio.wait_for(editing.wait(), 5)
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(asyncio.shield(scanning), .1)
+        finish_loading.set()
+        opened = await asyncio.wait_for(opening, 5)
+        assert await asyncio.wait_for(scanning, 5) == 409
+        async with factory() as db:
+            preview = await db.get(Document, preview_id)
+            assert preview.upd_meta['superseded_by_document_id'] == opened['id']
+            assert not (await db.execute(select(Scan.id).where(Scan.document_id == preview_id))).all()
+    finally:
+        finish_loading.set()
+        for task in [opening, scanning]:
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(*[task for task in [opening, scanning] if task is not None], return_exceptions=True)
+        await engine.dispose()
 
 
 async def test_baseline_persists_old_source_stays_accepted_and_cancel_is_local(monkeypatch):
