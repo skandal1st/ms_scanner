@@ -675,6 +675,10 @@ async def verify_document(
     """
     from app.services.document_guard import editable_document
     doc = await editable_document(db, document_id, current_user.id)
+    if getattr(doc, 'kind', None) == DocumentKind.supply:
+        from app.services.acceptance_mode import acceptance_cz_check_enabled
+        if not await acceptance_cz_check_enabled(db, doc):
+            raise HTTPException(409, 'Проверка ЧЗ для приёмки отключена в настройках юрлица.')
 
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus
@@ -726,6 +730,16 @@ async def process_document(
     if (getattr(doc, 'upd_meta', None) or {}).get('shipment_correction'):
         raise HTTPException(409, 'Сохраните изменения через раздел «Исправить отгрузку». Полная отправка исправления запрещена.')
     require_collection_started(doc)
+    skip_cz = False
+    if doc.kind == DocumentKind.supply:
+        from app.services.acceptance_mode import acceptance_cz_check_enabled
+        skip_cz = not await acceptance_cz_check_enabled(db, doc)
+        if skip_cz:
+            from app.services.supply_positions import prepare_supply_without_cz
+            try:
+                prepare_supply_without_cz(doc.plan, getattr(doc, 'upd_meta', None))
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
     if not doc.moysklad_id:
         raise HTTPException(409, "Сначала выберите документ МойСклад")
     ms = await _get_ms_service(current_user, db)
@@ -751,7 +765,7 @@ async def process_document(
         )
     )
     scanned_count = scanned_q.scalar_one()
-    if scanned_count:
+    if scanned_count and not skip_cz:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -769,7 +783,7 @@ async def process_document(
         )
     )
     unknown_count = unknown_q.scalar_one()
-    if unknown_count:
+    if unknown_count and not skip_cz:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -783,10 +797,12 @@ async def process_document(
         Scan.document_id == document_id, Scan.status.in_([ScanStatus.valid, ScanStatus.overflow])
     ))).scalar_one()
     from app.services.supply_positions import prepare_supply_rows
-    quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if doc.kind == DocumentKind.supply else []
+    quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz) if doc.kind == DocumentKind.supply else []
     if not count and not quantity_only:
         raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
     doc.status = DocumentStatus.processing
+    if doc.kind == DocumentKind.supply:
+        doc.upd_meta = {**(doc.upd_meta or {}), 'acceptance_cz_check_enabled': not skip_cz}
     doc.error_message = None
     doc.processing_progress = {"sent": 0, "total": count, "stage": "preparing"}
     await db.commit()

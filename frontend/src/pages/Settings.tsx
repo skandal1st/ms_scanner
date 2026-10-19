@@ -333,6 +333,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         </section>
 
         <ChestnyZnakSection integration={integration} />
+        <AcceptanceSettings integration={integration} />
         <WorkplaceScannerSettings />
         <ScannerSection embedded={embedded} />
         </div>
@@ -359,6 +360,28 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
       </div>
     </div>
   )
+}
+
+function AcceptanceSettings({ integration }: { integration?: Integration }) {
+  const qc = useQueryClient()
+  const save = useMutation({
+    mutationFn: (enabled: boolean) => integrationsApi.update({ acceptance_cz_check_enabled: enabled }).then(r => r.data),
+    onSuccess: (data) => qc.setQueryData(['integration'], data),
+  })
+  return <section className="section">
+    <h2>Приёмка</h2>
+    <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <input type="checkbox" checked={integration?.acceptance_cz_check_enabled !== false}
+        disabled={!integration || save.isPending} onChange={e => save.mutate(e.target.checked)} />
+      <span>Проверять приёмку через Честный Знак</span>
+    </label>
+    <p className="hint">Настройка для текущего юрлица. Если выключить, в МойСклад передаются товары,
+      количества и цены без марок. Марки из УПД сохраняются в приёмке и доступны в поиске по документам.
+      Состав упаковок через ЧЗ не запрашивается.</p>
+    {save.isPending && <p role="status" className="hint">Сохраняем…</p>}
+    {save.isSuccess && <p role="status" className="hint">Настройка приёмки сохранена.</p>}
+    {save.isError && <p role="alert" className="alert alert--error">Не удалось сохранить настройку приёмки.</p>}
+  </section>
 }
 
 function ChestnyZnakSection({

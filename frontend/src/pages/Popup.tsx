@@ -6,6 +6,8 @@ import { documentWorkplaces, preferredWorkplace } from '../lib/workplaceMode'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
 import { useScanStore } from '../store/scanStore'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
+import { CustomerOrderPicker } from '../components/CustomerOrderPicker'
+import { DocumentSelector } from '../components/DocumentSelector'
 
 /**
  * Кастомное модальное окно МойСклад (кнопка «Собрать в Скандата» на документе).
@@ -13,7 +15,8 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
  * Протокол (см. docs, «Кастомные модальные окна»):
  *  1. МС грузит эту страницу как iframe с ?contextKey=… → авторизуемся через
  *     POST /auth/ms-launch (тот же путь, что и лаунчер /ms).
- *  2. МС присылает postMessage `OpenPopup` c popupParameters={msObjectId, kind},
+ *  2. МС присылает postMessage `OpenPopup` c popupParameters={msObjectId, kind}
+ *     или {kind, entryMode: 'select'} для запуска из списка без выбора,
  *     которые вернул наш обработчик кнопки (moysklad_vendor.handle_button).
  *  3. Резолвим наш Document по (kind, msObjectId) и показываем скан-сессию.
  *  4. После «Отгрузить» окно закрываем сообщением `ClosePopup` хост-окну МС.
@@ -26,7 +29,7 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
  */
 
 interface OpenParams {
-  msObjectId: string
+  msObjectId?: string
   kind: DocumentKind
   sessionId: number
 }
@@ -34,7 +37,8 @@ interface OpenParams {
 type State =
   | { kind: 'loading'; note: string; sessionId: number }
   | { kind: 'shipment'; doc: Document; workplaces: Workplace[]; sessionId: number }
-  | { kind: 'acceptance'; msObjectId: string; sessionId: number }
+  | { kind: 'shipment-picker'; sessionId: number }
+  | { kind: 'acceptance'; msObjectId?: string; sessionId: number }
   | { kind: 'writeoff'; doc: Document; sessionId: number }
   | { kind: 'error'; message: string; sessionId: number }
 
@@ -120,6 +124,21 @@ export function PopupPage() {
     }
   }
 
+  // Both entry paths use the same workplace routing after document selection.
+  const openShipment = async (doc: Document, sessionId: number) => {
+    if (sessionIdRef.current !== sessionId) return
+    setState({ kind: 'loading', note: 'Загружаем рабочие места…', sessionId })
+    try {
+      const workplaces = documentWorkplaces((await organizationProfilesApi.list()).data, doc)
+      if (sessionIdRef.current !== sessionId) return
+      setOrganizationProfileId(doc.organization_profile_id)
+      setState({ kind: 'shipment', doc, workplaces, sessionId })
+    } catch {
+      if (sessionIdRef.current !== sessionId) return
+      setState({ kind: 'error', message: 'Не удалось загрузить рабочие места. Закройте окно и повторите.', sessionId })
+    }
+  }
+
   // Резолвим документ, когда есть и авторизация, и параметры от OpenPopup.
   const tryResolve = async () => {
     const params = paramsRef.current
@@ -134,7 +153,11 @@ export function PopupPage() {
       setState({ kind: 'acceptance', msObjectId, sessionId })
       return
     }
-    if (kind !== 'demand' && kind !== 'loss') {
+    if (kind === 'demand' && !msObjectId) {
+      setState({ kind: 'shipment-picker', sessionId })
+      return
+    }
+    if ((kind !== 'demand' && kind !== 'loss') || !msObjectId) {
       setState({
         kind: 'error',
         message: 'Этот тип документа не поддерживается в окне Скандаты.',
@@ -145,16 +168,14 @@ export function PopupPage() {
     setState({ kind: 'loading', note: 'Загружаем документ…', sessionId })
     try {
       const { data: doc } = await documentsApi.resolve(msObjectId, kind)
-      const workplaces = kind === 'demand'
-        ? documentWorkplaces((await organizationProfilesApi.list()).data, doc) : []
       // Ответ прошлого открытия не должен заменить уже открытый следующий документ.
       if (paramsRef.current?.sessionId !== sessionId) return
+      if (kind === 'demand') {
+        await openShipment(doc, sessionId)
+        return
+      }
       setOrganizationProfileId(doc.organization_profile_id)
-      setState(
-        kind === 'demand'
-          ? { kind: 'shipment', doc, workplaces, sessionId }
-          : { kind: 'writeoff', doc, sessionId },
-      )
+      setState({ kind: 'writeoff', doc, sessionId })
     } catch (e) {
       if (paramsRef.current?.sessionId !== sessionId) return
       const ax = e as { response?: { data?: { detail?: string } } }
@@ -207,10 +228,11 @@ export function PopupPage() {
       const data = ev.data
       if (!data || data.name !== 'OpenPopup') return
       const p = data.popupParameters
-      if (p && typeof p.msObjectId === 'string' && typeof p.kind === 'string') {
+      const selectMode = p?.entryMode === 'select' && (p.kind === 'demand' || p.kind === 'supply')
+      if (p && (selectMode || (typeof p.msObjectId === 'string' && p.msObjectId.length > 0)) && typeof p.kind === 'string') {
         const sessionId = ++sessionIdRef.current
         paramsRef.current = {
-          msObjectId: p.msObjectId,
+          msObjectId: selectMode ? undefined : p.msObjectId,
           kind: p.kind as DocumentKind,
           sessionId,
         }
@@ -256,6 +278,14 @@ export function PopupPage() {
         <div style={styles.errorBox}>{state.message}</div>
       </div>
     )
+  }
+  if (state.kind === 'shipment-picker') {
+    return <main key={state.sessionId} style={{ padding: 24, maxWidth: 900, margin: '0 auto' }}>
+      <h1>Выберите отгрузку</h1>
+      <p className="hint">Откройте готовую отгрузку или найдите её через заказ покупателя.</p>
+      <CustomerOrderPicker onSelect={doc => void openShipment(doc, state.sessionId)} />
+      <DocumentSelector kind="demand" selected={null} onSelect={doc => void openShipment(doc, state.sessionId)} />
+    </main>
   }
 
   const workplaces = state.kind === 'shipment' ? state.workplaces : []

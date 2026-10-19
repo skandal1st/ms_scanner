@@ -291,13 +291,16 @@ async def get_status(
     return {"status": "Activating"}
 
 
-# Кастомная кнопка на странице документа МС → открыть попап Скандаты с этим документом.
-# extensionPoint (страница) → наш kind. Приёмку/списание добавим, когда попап научится
-# их вести (им нужны доп. шаги: товарная группа / УПД).
+# Contextual buttons keep their document binding. Separate list buttons use
+# useSelected=false and deliberately ignore any selected rows.
 BUTTON_KIND_BY_EXTENSION = {
     "document.demand.edit": "demand",
     "document.supply.list": "supply",  # у поступления кнопка только в списке (XSD)
     "document.loss.edit": "loss",
+}
+UNSELECTED_BUTTONS = {
+    "open-shipments": ("document.demand.list", "demand"),
+    "open-acceptance": ("document.supply.list", "supply"),
 }
 
 
@@ -335,13 +338,19 @@ async def handle_button(
     if cached is not None:
         return cached
 
-    kind = BUTTON_KIND_BY_EXTENSION.get(body.extensionPoint)
+    unselected = UNSELECTED_BUTTONS.get(body.buttonName)
+    if unselected is not None:
+        extension, kind = unselected
+        if body.extensionPoint != extension:
+            kind = None
+    else:
+        kind = BUTTON_KIND_BY_EXTENSION.get(body.extensionPoint)
     # На карточке (*.edit) документ приходит в objectId; в списке (*.list) — в selected[].
-    object_id = body.objectId
-    if not object_id and body.selected:
+    object_id = None if unselected else body.objectId
+    if not unselected and not object_id and body.selected:
         first = body.selected[0]
         object_id = first.get("id") if isinstance(first, dict) else None
-    if kind is None or not object_id:
+    if kind is None or (not unselected and not object_id):
         logger.warning(
             "vendor.button.unsupported",
             extension=body.extensionPoint,
@@ -375,11 +384,16 @@ async def handle_button(
         kind=kind,
         object_id=object_id,
     )
+    popup_parameters = {"kind": kind}
+    if unselected:
+        popup_parameters["entryMode"] = "select"
+    else:
+        popup_parameters["msObjectId"] = object_id
     payload = {
         "action": "showPopup",
         "params": {
             "popupName": "scan-popup",
-            "popupParameters": {"msObjectId": object_id, "kind": kind},
+            "popupParameters": popup_parameters,
         },
     }
     await _save_idempotent(x_lognex_request_id, f"button:{account_id}", payload)

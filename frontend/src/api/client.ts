@@ -525,6 +525,8 @@ export interface CodeSearchHit {
   document_id: string
   document_name: string
   document_kind: string
+  document_status?: 'draft' | 'processing' | 'accepted'
+  accepted_without_cz?: boolean
   scan_id: string
   code: string
   status: ScanStatus
@@ -653,6 +655,7 @@ export interface ProductGroup {
 }
 
 export interface AcceptanceDoc {
+  cz_check_enabled?: boolean
   id: string
   name: string
   kind: string
@@ -754,6 +757,7 @@ export const acceptanceApi = {
 }
 
 export interface Integration {
+  acceptance_cz_check_enabled?: boolean
   edition: 'ms_lite' | 'full'
   has_moysklad: boolean
   moysklad_account_name: string | null
@@ -1016,6 +1020,7 @@ export interface ProductGroup {
 export const integrationsApi = {
   get: () => api.get<Integration>('/integrations/'),
   update: (data: {
+    acceptance_cz_check_enabled?: boolean
     moysklad_token?: string
     cz_box_mode_enabled?: boolean
     cz_inn?: string

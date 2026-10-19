@@ -148,6 +148,7 @@ class OrganizationProfile(Base):
     cz_cert_subject = Column(String(500), nullable=True)
     cz_auth_method = Column(String(16), nullable=False, default="mock", server_default="mock")
     cz_box_mode_enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    acceptance_cz_check_enabled = Column(Boolean, nullable=False, default=True, server_default="true")
     cz_inn = Column(String(12), nullable=True)
     cz_product_groups = Column(JSONB, nullable=False, default=list, server_default="[]")
     inventory_store_ids = Column(JSONB, nullable=False, default=list, server_default="[]")

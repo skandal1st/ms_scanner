@@ -16,6 +16,7 @@ const KIND_LABELS: Record<string, string> = {
 }
 
 const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
+  scanned: { label: 'Не проверено', cls: 'badge--pending' },
   pending: { label: 'Проверяется', cls: 'badge--pending' },
   valid: { label: 'Валиден', cls: 'badge--ok' },
   invalid: { label: 'Ошибка', cls: 'badge--error' },
@@ -132,9 +133,13 @@ export function CodeSearchModal({ open, onClose }: Props) {
                       </thead>
                       <tbody>
                         {hits.map((h) => {
-                          const st = STATUS_LABELS[h.status] ?? { label: h.status, cls: 'badge--pending' }
+                          const acceptedSupply = h.document_kind === 'supply' && h.document_status === 'accepted'
+                          const acceptedMark = acceptedSupply && (h.accepted_without_cz || ['valid', 'overflow'].includes(h.status))
+                          const st = acceptedMark
+                            ? { label: h.accepted_without_cz ? 'Принято без проверки ЧЗ' : 'Принято', cls: 'badge--ok' }
+                            : STATUS_LABELS[h.status] ?? { label: h.status, cls: 'badge--pending' }
                           return (
-                            <tr key={h.scan_id}>
+                            <tr key={h.scan_id} style={acceptedSupply ? { background: 'var(--st-ok-bg, #eef8ef)' } : undefined}>
                               <td>
                                 {h.document_name}
                                 {h.product_name ? (
@@ -142,7 +147,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
                                 ) : null}
                               </td>
                               <td>{KIND_LABELS[h.document_kind] ?? h.document_kind}</td>
-                              <td><span className={`badge ${st.cls}`}>{st.label}</span></td>
+                              <td><span className={`badge ${st.cls}`} style={acceptedSupply ? { whiteSpace: 'normal' } : undefined}>{st.label}</span></td>
                               <td className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                                 {new Date(h.scanned_at).toLocaleString('ru')}
                               </td>

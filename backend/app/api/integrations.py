@@ -82,6 +82,7 @@ class IntegrationResponse(BaseModel):
     cz_cert_subject: Optional[str] = None
     cz_auth_method: str = "mock"
     cz_box_mode_enabled: bool = False
+    acceptance_cz_check_enabled: bool = True
     cz_inn: Optional[str] = None
     cz_product_groups: list[str] = []
     organization_profile_id: Optional[UUID] = None
@@ -92,6 +93,7 @@ class UpdateIntegrationRequest(BaseModel):
     moysklad_token: Optional[str] = None
     cz_token: Optional[str] = None
     cz_box_mode_enabled: Optional[bool] = None
+    acceptance_cz_check_enabled: Optional[bool] = None
     cz_inn: Optional[str] = None
     cz_product_groups: Optional[list[str]] = None
 
@@ -124,6 +126,7 @@ def _to_response(
 ) -> IntegrationResponse:
     if not integration:
         return IntegrationResponse(
+            acceptance_cz_check_enabled=getattr(profile, 'acceptance_cz_check_enabled', True),
             edition=edition,
             has_moysklad=False,
             moysklad_account_name=None,
@@ -138,6 +141,7 @@ def _to_response(
         or cz_source.cz_token_expires_at > datetime.now(timezone.utc)
     )
     return IntegrationResponse(
+        acceptance_cz_check_enabled=getattr(profile, 'acceptance_cz_check_enabled', True),
         edition=edition,
         has_moysklad=bool(integration.moysklad_token),
         moysklad_account_name=integration.moysklad_account_name,
@@ -189,6 +193,8 @@ async def update_integration(
         profile.cz_token = encrypt_token(body.cz_token) if body.cz_token else None
     if body.cz_box_mode_enabled is not None:
         profile.cz_box_mode_enabled = body.cz_box_mode_enabled
+    if body.acceptance_cz_check_enabled is not None:
+        profile.acceptance_cz_check_enabled = body.acceptance_cz_check_enabled
     if body.cz_inn is not None:
         profile.cz_inn = body.cz_inn.strip() or None
     if body.cz_product_groups is not None:

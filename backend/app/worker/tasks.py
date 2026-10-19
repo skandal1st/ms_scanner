@@ -869,6 +869,13 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
             doc = await db.get(Document, UUID(document_id))
             if not doc or str(doc.user_id) != user_id or doc.status.value != 'draft':
                 return
+            if getattr(getattr(doc, 'kind', None), 'value', None) == 'supply':
+                from app.services.acceptance_mode import acceptance_cz_check_enabled
+                if not await acceptance_cz_check_enabled(db, doc):
+                    logger.info('verify_document.skipped', document_id=document_id,
+                                reason='Проверка приёмки через ЧЗ отключена')
+                    await _push_verify_done(user_id, document_id, checked=0, failed=0)
+                    return
             baseline_ids = list((correction(doc) or {}).get('baseline_scans', {}))
             filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
                        Scan.status.in_([ScanStatus.scanned, ScanStatus.valid, ScanStatus.overflow, ScanStatus.invalid, ScanStatus.unknown_product])
@@ -1352,8 +1359,9 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             raise ValueError('Исправление отгрузки отправляется отдельной задачей; полная запись запрещена.')
         t0 = time.monotonic()
         kind = doc.kind.value if hasattr(doc.kind, "value") else str(doc.kind)
-        # demand — отгрузка, supply — приёмка по УПД. Обе ветки пишут trackingCodes
-        # в позиции МС-документа одним и тем же механизмом (update_document).
+        skip_acceptance_cz = kind == 'supply' and (getattr(doc, 'upd_meta', None) or {}).get('acceptance_cz_check_enabled') is False
+        # Without CZ checks, supply writes only document goods/quantities; raw
+        # marks remain in Scan for history. Other flows preserve trackingCodes.
         if kind not in ("demand", "supply"):
             raise ValueError("Этот документ нельзя отправить в МойСклад через проведение")
         # Сканы для отправки: valid + overflow.
@@ -1378,15 +1386,16 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         )
         valid_scans = result.scalars().all()
 
-        from app.services.supply_positions import prepare_supply_rows
-        quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if kind == 'supply' else []
+        from app.services.supply_positions import prepare_supply_rows, prepare_supply_without_cz
+        quantity_only = (prepare_supply_without_cz(doc.plan, getattr(doc, 'upd_meta', None)) if skip_acceptance_cz
+                         else prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if kind == 'supply' else [])
         if not valid_scans and not quantity_only:
             raise ValueError("Нет проверенных марок или товаров для отправки")
         unresolved = (await db.execute(select(Scan.id).where(
             Scan.document_id == document_id,
             Scan.status.in_([ScanStatus.pending, ScanStatus.scanned]),
         ).limit(1))).first()
-        if unresolved:
+        if unresolved and not skip_acceptance_cz:
             raise ValueError("Проверка марок ещё не завершена. Дождитесь результата.")
         # Приёмка по УПД: коды упаковок (НомУпак) сохранены как is_box без раскрытия
         # (импорт УПД в API синхронно ЧЗ не дёргает). Перед записью в МС разворачиваем
@@ -1399,7 +1408,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         # Автоматическое раскрытие перед записью требуется только для приёмки по УПД.
         boxes_to_expand = (
             [s for s in valid_scans if s.is_box and not s.child_codes]
-            if kind == "supply"
+            if kind == "supply" and not skip_acceptance_cz
             else []
         )
         if boxes_to_expand:
@@ -1539,6 +1548,8 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 if s.gtin and not s.moysklad_product_id
             }
             unique_gtins.discard(None)
+            if skip_acceptance_cz:
+                unique_gtins.clear()
             gtin_to_product_id: dict[str, str] = {}
             # Кол-во/цена/НДС позиции из плана (для supply — из УПД): product_id → …
             # Используется при создании новых позиций поступления в МС.
@@ -1593,8 +1604,8 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                         document_id=document_id,
                     )
 
-            scans_data = _build_moysklad_scans_data(valid_scans, kind, gtin_to_product_id)
-            if kind == 'supply':
+            scans_data = quantity_only if skip_acceptance_cz else _build_moysklad_scans_data(valid_scans, kind, gtin_to_product_id)
+            if kind == 'supply' and not skip_acceptance_cz:
                 scans_data = prepare_supply_rows(scans_data, doc.plan, doc.upd_meta)
             if any(not item.get("product_id") for item in scans_data):
                 raise ValueError("Не все марки сопоставлены с товарами МойСклад. Сопоставьте товары и повторите.")

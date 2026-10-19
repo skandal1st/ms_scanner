@@ -425,6 +425,10 @@ export function AcceptancePage({
       </header>
 
       <div className="acc-scroll">
+      {doc?.cz_check_enabled === false && <p role="status" className="alert alert--info" style={{ margin: '12px 16px' }}>
+        Приёмка без проверки ЧЗ: в МойСклад уйдут товары и количества без марок.
+        Коды сохранятся в приёмке для поиска по документам.
+      </p>}
       {docId && <details style={{ margin: '12px 16px' }}><summary>Сверка приёмки на ТСД</summary><PhysicalCounts key={docId} mode="acceptance" documentId={docId} /></details>}
       <div style={{ padding: '12px 16px 0' }}>
         <UpdImportBar

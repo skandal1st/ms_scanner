@@ -65,6 +65,7 @@ class CreateAcceptanceDocRequest(BaseModel):
 
 
 class AcceptanceDocResponse(BaseModel):
+    cz_check_enabled: bool = True
     id: UUID
     name: str
     kind: DocumentKind
@@ -166,7 +167,7 @@ async def _maybe_cz_service(
             select(Integration).where(Integration.user_id == current_user.id)
         )
     integ = result.scalar_one_or_none()
-    if not integ or not integ.cz_token:
+    if not integ or getattr(integ, 'acceptance_cz_check_enabled', True) is False or not integ.cz_token:
         return None
     if (
         integ.cz_token_expires_at is not None
@@ -297,6 +298,7 @@ async def create_acceptance_document(
         user_id=str(current_user.id),
     )
     return AcceptanceDocResponse(
+        cz_check_enabled=getattr(profile, 'acceptance_cz_check_enabled', True),
         id=doc.id,
         name=doc.name,
         kind=doc.kind,
@@ -527,6 +529,7 @@ async def import_edo_upd(
     )
     return EdoImportResponse(
         document=AcceptanceDocResponse(
+            cz_check_enabled=getattr(profile, 'acceptance_cz_check_enabled', True),
             id=doc.id,
             name=doc.name,
             kind=doc.kind,
@@ -1474,6 +1477,8 @@ async def get_acceptance_document(
     db: AsyncSession = Depends(get_db),
 ):
     doc = await _get_acceptance_doc(document_id, current_user, db)
+    from app.services.acceptance_mode import acceptance_cz_check_enabled
+    check_enabled = await acceptance_cz_check_enabled(db, doc)
     count = int(
         (
             await db.execute(
@@ -1483,6 +1488,7 @@ async def get_acceptance_document(
         or 0
     )
     return AcceptanceDocResponse(
+        cz_check_enabled=check_enabled,
         id=doc.id,
         name=doc.name,
         kind=doc.kind,

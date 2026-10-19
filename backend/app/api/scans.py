@@ -83,6 +83,8 @@ class CodeSearchHit(BaseModel):
     document_id: UUID
     document_name: str
     document_kind: DocumentKind
+    document_status: Optional[DocumentStatus] = None
+    accepted_without_cz: bool = False
     scan_id: UUID
     code: str
     status: ScanStatus
@@ -883,12 +885,24 @@ async def search_scans_by_code(
     Объявлен ВЫШЕ ``/{document_id}``, иначе FastAPI распарсит «search» как UUID.
     """
     code = code.strip()
+    if not code:
+        return CodeSearchResponse(scans=[], upds=[])
+    from sqlalchemy import func, exists, or_, case, cast, literal
+    from sqlalchemy.dialects.postgresql import JSONB
+    from app.services.mark_search import mark_key, mark_prefixes, candidate_condition
+    key = mark_key(code)
+    prefixes = mark_prefixes(code)
+    child_codes = case((func.jsonb_typeof(Scan.child_codes) == 'array', Scan.child_codes),
+                       else_=cast(literal('[]'), JSONB))
+    child = func.jsonb_array_elements_text(child_codes).table_valued('value')
+    child_match = exists(select(1).select_from(child).where(
+        candidate_condition(child.c.value, prefixes)).correlate(Scan))
     result = await db.execute(
         select(Scan, Document)
         .join(Document, Scan.document_id == Document.id)
         .where(
             Document.user_id == current_user.id,
-            (Scan.code == code) | (Scan.child_codes.contains([code])),
+            or_(candidate_condition(Scan.code, prefixes), child_match),
         )
         .order_by(Scan.scanned_at.desc())
     )
@@ -897,6 +911,9 @@ async def search_scans_by_code(
             document_id=doc.id,
             document_name=doc.name,
             document_kind=doc.kind,
+            document_status=doc.status,
+            accepted_without_cz=doc.kind == DocumentKind.supply and doc.status == DocumentStatus.accepted
+                and (doc.upd_meta or {}).get('acceptance_cz_check_enabled') is False,
             scan_id=scan.id,
             code=scan.code,
             status=scan.status,
@@ -904,6 +921,7 @@ async def search_scans_by_code(
             scanned_at=scan.scanned_at,
         )
         for scan, doc in result.all()
+        if any(mark_key(raw) == key for raw in [scan.code, *(scan.child_codes or [])])
     ]
 
     # УПД из ЭДО: матч по каноническому CIS (edo_marks.cis_canonical).
@@ -915,7 +933,7 @@ async def search_scans_by_code(
             .join(EdoDocument, EdoMark.document_id == EdoDocument.id)
             .where(
                 EdoMark.user_id == current_user.id,
-                EdoMark.cis_canonical == canon,
+                candidate_condition(EdoMark.cis_canonical, prefixes),
             )
             .order_by(EdoDocument.created_at.desc())
         )
@@ -932,6 +950,7 @@ async def search_scans_by_code(
                 gtin=mark.gtin,
             )
             for mark, ed in upd_rows.all()
+            if mark_key(mark.cis_canonical) == key
         ]
 
     return CodeSearchResponse(scans=scans, upds=upds)

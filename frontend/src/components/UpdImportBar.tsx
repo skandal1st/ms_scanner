@@ -101,7 +101,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
       ) : (
         <div className="upd-bar__field">
           <label className="field-label" htmlFor="upd-supply">
-            Поступление в МойСклад (куда записать КМ)
+            Поступление в МойСклад
           </label>
           <input
             className="ui-input ui-input--block"
@@ -121,7 +121,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
             <option value="">
               {suppliesLoading
                 ? 'Загружаю поступления…'
-                : '— без записи в МС (только проверка) —'}
+                : '— без записи в МС —'}
             </option>
             {(supplies ?? []).map((m) => (
               <option key={m.id} value={m.id}>

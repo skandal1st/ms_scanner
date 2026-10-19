@@ -14,9 +14,19 @@
                 <document.demand.edit/>
             </locations>
         </button>
+        <button name="open-shipments" title="Открыть отгрузки в Скандата" useSelected="false">
+            <locations>
+                <document.demand.list/>
+            </locations>
+        </button>
         <!-- У поступления XSD разрешает кнопку только на СПИСКЕ (document.supply.list),
              не на карточке. Кнопка получает выбранное поступление в selected[]. -->
         <button name="start-acceptance" title="Принять в Скандата">
+            <locations>
+                <document.supply.list/>
+            </locations>
+        </button>
+        <button name="open-acceptance" title="Открыть приёмку в Скандата" useSelected="false">
             <locations>
                 <document.supply.list/>
             </locations>
