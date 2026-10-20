@@ -16,6 +16,7 @@ from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
 from app.services.collection_start import collection_started, require_collection_started
 from app.services.shipment_labels import update_shipment_metadata, shipment_display_name
+from app.services.shipment_sessions import shipment_session_query, visible_documents
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -241,7 +242,7 @@ async def list_documents(
     result = await db.execute(query)
     documents = result.scalars().all()
     counts = await _scan_counts(db, [d.id for d in documents])
-    return [_doc_to_response(d, counts.get(d.id, 0)) for d in documents]
+    return [_doc_to_response(d, counts.get(d.id, 0)) for d in visible_documents(documents, counts)]
 
 
 def _plan_source_kind(doc_kind: str) -> str:
@@ -317,11 +318,10 @@ async def create_document(
             ensure_active_shipment(verified_ms_doc)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
-        existing = (await db.execute(select(Document).where(
-            Document.user_id == current_user.id, Document.moysklad_id == body.moysklad_id,
-            Document.kind == DocumentKind.demand, Document.status != DocumentStatus.accepted,
-        ).order_by(Document.created_at.desc()))).scalars().first()
+        existing = (await db.execute(shipment_session_query(current_user.id, body.moysklad_id))).scalars().first()
         if existing is not None:
+            if existing.status == DocumentStatus.accepted:
+                return _doc_to_response(existing, await _scan_count(db, existing.id))
             await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
                                           existing.moysklad_customer_order_id, body.moysklad_id)
             update_shipment_metadata(existing, verified_ms_doc)
@@ -389,9 +389,8 @@ async def resolve_document(
 ):
     """Найти-или-создать наш Document по документу МС (kind + moysklad_id).
 
-    Для попапа, открытого из кнопки МС: повторное открытие той же отгрузки не
-    должно плодить дубли. Берём самый свежий незавершённый документ с этим
-    moysklad_id; если нет — создаём с именем и планом из МС."""
+    Повторное открытие отгрузки возвращает сохранённую сборку, включая завершённую.
+    Из заказа завершённую сборку нельзя запускать повторно."""
     _ensure_supported_kind(body.kind.value)
 
     order_name = None
@@ -427,18 +426,16 @@ async def resolve_document(
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
 
+    existing_query = (shipment_session_query(current_user.id, body.moysklad_id,
+                      profile.id if body.customer_order_id else None)
+                      if body.kind == DocumentKind.demand else
+                      select(Document).where(Document.user_id == current_user.id,
+                          Document.moysklad_id == body.moysklad_id, Document.kind == body.kind,
+                          Document.status != DocumentStatus.accepted).order_by(Document.created_at.desc()))
     existing = (
         (
             await db.execute(
-                select(Document)
-                .where(
-                    Document.user_id == current_user.id,
-                    *([Document.organization_profile_id == profile.id] if body.customer_order_id else []),
-                    Document.moysklad_id == body.moysklad_id,
-                    Document.kind == body.kind,
-                    *([] if body.customer_order_id else [Document.status != DocumentStatus.accepted]),
-                )
-                .order_by(Document.created_at.desc())
+                existing_query
             )
         )
         .scalars()
@@ -447,6 +444,8 @@ async def resolve_document(
     if existing is not None:
         if body.customer_order_id and existing.status == DocumentStatus.accepted:
             raise HTTPException(409, 'Отгрузка уже собрана. Обновите список отгрузок заказа.')
+        if body.kind == DocumentKind.demand and existing.status == DocumentStatus.accepted:
+            return _doc_to_response(existing, await _scan_count(db, existing.id))
         if body.kind == DocumentKind.demand:
             await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
                                           body.customer_order_id or existing.moysklad_customer_order_id,

@@ -113,7 +113,7 @@ async def open_correction(source_id: UUID, access: Scope = Depends(scope), db: A
         # Opening a shipment for preview creates a draft, but does not start picking.
         # Hold its row lock until replacement commits, so a concurrent scan cannot
         # turn an empty preview into a real assembly while we read the MS baseline.
-        if sibling.status != DocumentStatus.draft or (sibling.upd_meta or {}).get('collection_start'):
+        if sibling.status != DocumentStatus.draft:
             raise HTTPException(409, 'Для этой отгрузки уже начата сборка или выполняется отправка. Завершите её перед исправлением.')
         has_scans = (await db.execute(select(Scan.id).where(
             Scan.document_id == sibling.id).limit(1))).scalar_one_or_none()
@@ -124,6 +124,9 @@ async def open_correction(source_id: UUID, access: Scope = Depends(scope), db: A
             TsdDocumentSession.status == 'active').limit(1))).scalar_one_or_none()
         if active_session is not None:
             raise HTTPException(409, 'Эта отгрузка открыта на ТСД. Завершите сборку или уберите её из работы на ТСД перед исправлением.')
+        marker = (sibling.upd_meta or {}).get('collection_start')
+        if marker and marker != (source.upd_meta or {}).get('collection_start'):
+            raise HTTPException(409, 'Для этой отгрузки уже начата сборка. Завершите её перед исправлением.')
         empty_previews.append(sibling)
     try:
         async with processing_lock(f'ms:{access.user.id}:demand:{source.moysklad_id}') as acquired:

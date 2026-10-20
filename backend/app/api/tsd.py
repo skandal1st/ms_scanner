@@ -461,6 +461,7 @@ async def get_tsd_order_shipments(
         Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
         Document.kind == DocumentKind.demand, Document.moysklad_id.in_([row["id"] for row in rows]),
     ))).scalars().all()
+    completed_ids = {doc.moysklad_id for doc in local_docs if doc.status == DocumentStatus.accepted}
     docs = {doc.moysklad_id: doc for doc in local_docs}
     scans = (await db.execute(select(Scan).where(Scan.document_id.in_([doc.id for doc in local_docs])))).scalars().all() if local_docs else []
     sessions = (await db.execute(select(TsdDocumentSession).where(
@@ -469,7 +470,7 @@ async def get_tsd_order_shipments(
     shipments = []
     for row in rows:
         doc = docs.get(row["id"])
-        if doc and doc.status == DocumentStatus.accepted:
+        if row['id'] in completed_ids:
             continue
         if doc:
             doc.moysklad_customer_order_id = str(order_id)
@@ -515,13 +516,15 @@ async def list_tsd_documents(
                 Document.user_id == device.user_id,
                 Document.organization_profile_id == profile.id,
                 Document.kind == DocumentKind.demand,
-                Document.status != DocumentStatus.accepted,
             )
         )
     ).scalars().all()
     if allowed_stores:
         local_docs = [d for d in local_docs if d.moysklad_store_id in allowed_stores]
     local_docs = [d for d in local_docs if not (getattr(d, 'upd_meta', None) or {}).get('superseded_by_document_id')]
+    completed_ids = {d.moysklad_id for d in local_docs if d.status == DocumentStatus.accepted}
+    rows = [r for r in rows if r['id'] not in completed_ids]
+    local_docs = [d for d in local_docs if d.status != DocumentStatus.accepted and d.moysklad_id not in completed_ids]
     by_ms = {d.moysklad_id: d for d in local_docs}
     listed_ids = {r["id"] for r in rows}
     query = (search or "").strip().casefold()
@@ -613,17 +616,10 @@ async def select_tsd_document(
 ):
     _, workplace, profile = await _device_scope(db, device)
     await lock_ms_document(db, device.user_id, DocumentKind.demand, body.moysklad_id)
+    from app.services.shipment_sessions import shipment_session_query
     doc = (
         await db.execute(
-            select(Document)
-            .where(
-                Document.user_id == device.user_id,
-                Document.organization_profile_id == profile.id,
-                Document.moysklad_id == body.moysklad_id,
-                Document.kind == DocumentKind.demand,
-                Document.status != DocumentStatus.accepted,
-            )
-            .order_by(Document.created_at.desc())
+            shipment_session_query(device.user_id, body.moysklad_id, profile.id)
         )
     ).scalars().first()
     ms = await _ms_for_user(db, device.user_id)
@@ -658,6 +654,8 @@ async def select_tsd_document(
         if workplace.store_ids and store_id not in workplace.store_ids:
             raise HTTPException(403, "Отгрузка относится к другому складу")
     await ensure_no_stranded_scans(db, ms, device.user_id, profile.id, order_id, body.moysklad_id)
+    if doc is not None and doc.status == DocumentStatus.accepted:
+        raise HTTPException(409, 'Отгрузка уже собрана. Откройте её на ПК для просмотра или исправления.')
     if doc is None:
         doc = Document(
             user_id=device.user_id,
