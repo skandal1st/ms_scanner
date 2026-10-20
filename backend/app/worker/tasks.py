@@ -1223,6 +1223,12 @@ async def _push_writeoff_status(
     await r.aclose()
 
 
+@celery_app.task(name='refresh_mark_history')
+def refresh_mark_history_task(snapshot_id: str, refresh_id: str):
+    from app.services.mark_history_refresh import refresh_snapshot
+    _run(refresh_snapshot(snapshot_id, refresh_id))
+
+
 @celery_app.task(name="process_document")
 def process_document_task(document_id: str, user_id: str):
     """

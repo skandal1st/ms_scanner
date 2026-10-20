@@ -1062,3 +1062,36 @@ html, body, #root { height: 100%; }
 .physical-count .field { display: grid; gap: 6px; margin: 12px 0; }
 .physical-count .field select, .physical-count .field input { box-sizing: border-box; min-height: 44px; padding: 8px; border: 1px solid #dce3ec; border-radius: 6px; font: inherit; background: #fff; max-width: 100%; }
 .physical-count fieldset { border: 1px solid #dce3ec; border-radius: 8px; padding: 12px; }
+/* Search history: source-labelled events and a separately dated CZ observation. */
+.mark-chronology { margin-top: 24px; color: var(--ms-text); }
+.mark-chronology__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mark-chronology h2 { font-size: 16px; margin: 0; }
+.mark-chronology h3 { font-size: 13px; margin: 8px 0 4px; }
+.mark-chronology p { margin: 6px 0; overflow-wrap: anywhere; }
+.mark-chronology .hint { color: var(--ms-text-muted); }
+.mark-chronology__layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; margin-top: 16px; align-items: start; }
+.mark-chronology__summary { grid-column: 2; grid-row: 1; padding: 16px; background: var(--surface-2); border-radius: var(--r-md); overflow-wrap: anywhere; }
+.mark-chronology__summary h3 { margin-top: 0; }
+.mark-chronology__summary dl { margin: 16px 0; }
+.mark-chronology__summary dt { color: var(--ms-text-muted); margin-top: 14px; font-size: 12px; }
+.mark-chronology__summary dd { margin: 3px 0 0; line-height: 1.5; }
+.mark-chronology__line { display: block; margin-top: 2px; font-size: 12px; }
+.mark-chronology__events { grid-column: 1; grid-row: 1; min-width: 0; }
+.mark-timeline { list-style: none; padding: 0; margin: 16px 0; }
+.mark-timeline > li { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--ms-border-light); }
+.mark-timeline__date { font-variant-numeric: tabular-nums; }
+.mark-timeline__date span { display: block; margin-top: 4px; font-size: 11px; }
+.mark-timeline__content { min-width: 0; overflow-wrap: anywhere; }
+.mark-timeline__content h3 { margin-top: 8px; }
+.mark-timeline details { margin-top: 8px; font-size: 12px; }
+.mark-timeline summary, .mark-document-details > summary { cursor: pointer; color: var(--brand-strong); }
+.mark-chronology__gap { border: 1px dashed var(--ms-border); padding: 12px; border-radius: var(--r-sm); margin-top: 16px; color: var(--ms-text-muted); }
+.mark-chronology__gap strong { color: var(--ms-text); font-weight: 600; }
+.mark-document-details { margin-top: 24px; border-top: 1px solid var(--ms-border-light); padding-top: 16px; }
+@media (max-width: 760px) {
+  .mark-chronology__layout { display: flex; flex-direction: column; gap: 16px; }
+  .mark-chronology__summary, .mark-chronology__events { width: 100%; box-sizing: border-box; }
+  .mark-timeline > li { grid-template-columns: 1fr; gap: 6px; }
+  .mark-timeline__date { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+  .mark-timeline__date span { margin-top: 0; }
+}

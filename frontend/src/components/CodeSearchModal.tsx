@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { scansApi, type CodeSearchHit, type UpdSearchHit } from '../api/client'
+import { scansApi, markHistoryApi, type CodeSearchHit, type UpdSearchHit, type MarkHistoryResponse } from '../api/client'
 import { normalizeScannerInput } from '../lib/scannerLayout'
+import { MarkChronology } from './MarkChronology'
 
 type Props = {
   open: boolean
@@ -42,6 +43,10 @@ export function CodeSearchModal({ open, onClose }: Props) {
   const [unparsedOutgoing, setUnparsedOutgoing] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [searchedCode, setSearchedCode] = useState('')
+  const [history, setHistory] = useState<MarkHistoryResponse | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const requestId = useRef(0)
 
@@ -55,10 +60,58 @@ export function CodeSearchModal({ open, onClose }: Props) {
       setEdoSyncedAt(null)
       setUnparsedOutgoing(0)
       setError(null)
+      setSearchedCode('')
+      setHistory(null)
+      setHistoryLoading(false)
+      setHistoryError(null)
       const timer = setTimeout(() => inputRef.current?.focus(), 0)
       return () => { clearTimeout(timer); requestId.current += 1 }
     }
   }, [open])
+
+  useEffect(() => {
+    if (!open || !searchedCode || !history?.refreshing) return
+    const id = requestId.current
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const started = Date.now()
+    const poll = async () => {
+      let again = true
+      try {
+        const { data } = await markHistoryApi.get(searchedCode)
+        if (stopped || id !== requestId.current) return
+        setHistory(data)
+        setHistoryError(null)
+        again = data.refreshing
+      } catch {
+        if (stopped || id !== requestId.current) return
+        setHistoryError('Не удалось прочитать обновление ЧЗ. Сохранённые сведения показаны ниже.')
+      }
+      if (again && !stopped && id === requestId.current) {
+        if (Date.now() - started > 120000) {
+          setHistory(previous => previous ? { ...previous, refreshing: false } : previous)
+          setHistoryError('Обновление ЧЗ занимает больше времени. Повторите запрос позже.')
+        } else timer = setTimeout(() => void poll(), 1500)
+      }
+    }
+    timer = setTimeout(() => void poll(), 1000)
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [open, searchedCode, history?.refreshing])
+
+  const loadHistory = async (code: string, id: number, force = false) => {
+    setHistoryLoading(true)
+    setHistoryError(null)
+    try {
+      const { data } = await markHistoryApi.refresh(code, force)
+      if (id === requestId.current) setHistory(data)
+    } catch (err) {
+      if (id !== requestId.current) return
+      const detail = (err as { response?: { data?: { detail?: unknown } } }).response?.data?.detail
+      setHistoryError(typeof detail === 'string' ? detail : 'Не удалось запустить обновление ЧЗ. Наши документы доступны отдельно.')
+    } finally {
+      if (id === requestId.current) setHistoryLoading(false)
+    }
+  }
 
   const runSearch = async (raw: string) => {
     const code = raw.trim()
@@ -68,6 +121,11 @@ export function CodeSearchModal({ open, onClose }: Props) {
     setError(null)
     setEdoSyncedAt(null)
     setUnparsedOutgoing(0)
+    setHits(null)
+    setUpds([])
+    setSearchedCode(code)
+    setHistory(null)
+    void loadHistory(code, id)
     try {
       const { data } = await scansApi.searchByCode(code)
       if (id !== requestId.current) return
@@ -91,14 +149,14 @@ export function CodeSearchModal({ open, onClose }: Props) {
   return (
     <div className="popup">
       <div className="popup__overlay" onClick={onClose} />
-      <dialog className="popup__body" style={{ width: 'calc(100vw - 32px)', maxWidth: 960, maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto' }} open>
+      <dialog className="popup__body" aria-label="Поиск марки и хронология" style={{ width: 'calc(100vw - 32px)', maxWidth: 1120, maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto' }} open>
         <button
           type="button"
           className="popup__close"
           onClick={onClose}
           aria-label="Закрыть"
         />
-        <div className="popup__title">Поиск марки по документам</div>
+        <div className="popup__title">Поиск марки и хронология</div>
         <div className="popup__content">
           <div className="flex-row gap-8">
             <input
@@ -115,7 +173,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
               className="scan-input__field"
               autoComplete="off"
               spellCheck={false}
-              style={{ flex: 1 }}
+              style={{ flex: 1, minWidth: 0 }}
             />
             <button
               type="button"
@@ -129,6 +187,12 @@ export function CodeSearchModal({ open, onClose }: Props) {
 
           {error && <p className="hint" style={{ color: 'var(--ms-error)' }}>{error}</p>}
 
+          {searchedCode && <MarkChronology scans={hits || []} upds={upds} history={history}
+            loading={historyLoading} documentsLoading={loading} error={historyError}
+            onRefresh={() => void loadHistory(searchedCode, requestId.current, true)} />}
+
+          <details className="mark-document-details">
+            <summary>Документы списком{hits !== null ? ` (${hits.length + upds.length})` : ''}</summary>
           {hits !== null && !loading && (
             hits.length === 0 && upds.length === 0 ? (
               <p className="hint" style={{ marginTop: 12 }}>
@@ -228,6 +292,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
             <p>Поиск по УПД использует марки, загруженные из ЭДО.{edoSyncedAt ? ` Последняя синхронизация: ${new Date(edoSyncedAt).toLocaleString('ru')}.` : ' Дата синхронизации недоступна.'}</p>
             {unparsedOutgoing > 0 && <p role="status">Исходящих УПД без загруженных марок: {unparsedOutgoing}. Поиск по этим документам пока неполон.</p>}
           </div>}
+          </details>
         </div>
       </dialog>
     </div>

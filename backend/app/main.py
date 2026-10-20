@@ -110,6 +110,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(documents.router, dependencies=[Depends(require_active_subscription)])
 app.include_router(scans.router, dependencies=[Depends(require_active_subscription)])
+from app.api import mark_history
+app.include_router(mark_history.router, dependencies=[Depends(require_active_subscription)])
 app.include_router(integrations.router)
 app.include_router(organization_profiles.router)
 app.include_router(tsd.router)

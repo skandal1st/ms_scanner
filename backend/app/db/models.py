@@ -392,6 +392,26 @@ class Scan(Base):
     document = relationship("Document", back_populates="scans")
 
 
+class MarkHistorySnapshot(Base):
+    __tablename__ = 'mark_history_snapshots'
+    __table_args__ = (UniqueConstraint('organization_profile_id', 'mark_key', name='uq_mark_history_profile_key'),)
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id', ondelete='CASCADE'), nullable=False, index=True)
+    organization_profile_id = Column(UUID(as_uuid=True), ForeignKey('organization_profiles.id', ondelete='CASCADE'), nullable=False)
+    mark_key = Column(Text, nullable=False)
+    lookup_code = Column(Text, nullable=False)
+    current = Column(JSONB, nullable=True)
+    events = Column(JSONB, nullable=True)
+    info_checked_at = Column(DateTime(timezone=True), nullable=True)
+    history_checked_at = Column(DateTime(timezone=True), nullable=True)
+    requested_at = Column(DateTime(timezone=True), nullable=True)
+    refresh_id = Column(UUID(as_uuid=True), nullable=True)
+    refreshing = Column(Boolean, nullable=False, default=False, server_default='false')
+    info_error = Column(Text, nullable=True)
+    history_error = Column(Text, nullable=True)
+
+
 class GtinProductMap(Base):
     """Запоминание соответствия GTIN → товар МС для приёмки по УПД.
 

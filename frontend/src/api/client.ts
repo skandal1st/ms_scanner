@@ -559,6 +559,51 @@ export interface CodeSearchResponse {
   edo_unparsed_outgoing_documents?: number
 }
 
+export interface MarkCurrentInfo {
+  cis: string | null
+  product_name: string | null
+  status: string | null
+  status_label: string
+  owner_name: string | null
+  owner_inn: string | null
+  owner_checked_at?: string | null
+  owner_is_stale?: boolean
+  owner_address: string | null
+  region: string | null
+  region_source: 'cz' | 'address' | null
+  withdrawn: boolean
+  withdraw_reason: string | null
+  withdraw_reason_label: string | null
+}
+
+export interface MarkHistoryEvent {
+  operation_at: string | null
+  recorded_at: string | null
+  status: string | null
+  status_label: string
+  owner_inn: string | null
+  document_id: string | null
+  parent: string | null
+}
+
+export interface MarkHistoryResponse {
+  organization_profile_id: string
+  organization_name: string
+  current: MarkCurrentInfo | null
+  events: MarkHistoryEvent[] | null
+  info_checked_at: string | null
+  history_checked_at: string | null
+  requested_at: string | null
+  refreshing: boolean
+  info_error: string | null
+  history_error: string | null
+}
+
+export const markHistoryApi = {
+  refresh: (code: string, force = false) => api.post<MarkHistoryResponse>('/marks/history', { code, force }),
+  get: (code: string) => api.get<MarkHistoryResponse>('/marks/history', { params: { code } }),
+}
+
 export const scansApi = {
   create: (document_id: string, code: string, moysklad_product_id?: string | null) =>
     api.post<Scan>('/scans/', {
