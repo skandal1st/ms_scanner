@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { StatsPanel } from '../components/StatsPanel'
@@ -42,6 +42,8 @@ export function ShipmentPage({
   onSent,
 }: ShipmentPageProps = {}) {
   const modal = useModal()
+  const navigate = useNavigate()
+  const location = useLocation()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
   const progress = getProgress()
   useScanUpdates(terminalMode ? document?.id ?? null : null)
@@ -60,6 +62,10 @@ export function ShipmentPage({
   const [bulkBusy, setBulkBusy] = useState(false)
   const openingRef = useRef(false)
   const [opening, setOpening] = useState(false)
+  const [openingWriteoff, setOpeningWriteoff] = useState(false)
+  const writeoffRequestId = useRef(0)
+  const writeoffBusy = useRef(false)
+  useEffect(() => () => { writeoffRequestId.current += 1 }, [])
   const [correctionsOpen, setCorrectionsOpen] = useState(false)
   const collectionReady = Boolean(document && (!document.moysklad_id || document.collection_started))
   const {
@@ -91,6 +97,29 @@ export function ShipmentPage({
   }
 
   const clearMutation = useClearDocumentScans()
+
+  const handleOpenWriteoff = async () => {
+    if (!document?.moysklad_id || writeoffBusy.current) return
+    const sourceId = document.id
+    const requestId = ++writeoffRequestId.current
+    writeoffBusy.current = true
+    setOpeningWriteoff(true)
+    try {
+      const { data } = await documentsApi.openShipmentWriteoff(sourceId)
+      if (requestId !== writeoffRequestId.current || useScanStore.getState().document?.id !== sourceId) return
+      setOrganizationProfileId(data.organization_profile_id)
+      reset()
+      const path = location.pathname.startsWith('/scan/') ? '/scan/writeoff' : '/writeoff'
+      navigate(`${path}?doc=${encodeURIComponent(data.id)}`)
+    } catch (error) {
+      if (requestId !== writeoffRequestId.current || useScanStore.getState().document?.id !== sourceId) return
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      modal.alert(detail || 'Не удалось открыть вывод из оборота. Повторите попытку.', { variant: 'error' })
+    } finally {
+      writeoffBusy.current = false
+      if (requestId === writeoffRequestId.current) setOpeningWriteoff(false)
+    }
+  }
 
   // Владелец подписи (ИНН из сертификата ЧЗ) — для сверки владельца марок в отгрузке.
   const { data: integration } = useIntegration()
@@ -350,8 +379,8 @@ export function ShipmentPage({
         <div className="acc-left" style={{ width: leftWidth }}>
           {!embedded && (
             <>
-              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || sending || bulkBusy || document?.status === 'processing'} />
-              <fieldset disabled={opening} style={{border: 0, padding: 0, margin: 0, minWidth: 0}}>
+              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || openingWriteoff || sending || bulkBusy || document?.status === 'processing'} />
+              <fieldset disabled={opening || openingWriteoff} style={{border: 0, padding: 0, margin: 0, minWidth: 0}}>
                 <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
               </fieldset>
               {opening && <p role="status" className="hint">Подождите…</p>}
@@ -370,6 +399,13 @@ export function ShipmentPage({
             <Icon name="upload" size={16} /> Загрузить список марок
           </button>
           <StatsPanel />
+          {!embedded && <button type="button" className="button"
+            style={{ width: '100%', justifyContent: 'center', flexShrink: 0 }}
+            disabled={!document?.moysklad_id || document.kind !== 'demand' || document.status === 'processing' || opening || openingWriteoff || sending || bulkBusy || verifying}
+            onClick={() => void handleOpenWriteoff()}>
+            <Icon name="writeoff" size={16} />
+            {openingWriteoff ? 'Готовим вывод из оборота…' : 'Создать вывод из оборота'}
+          </button>}
         </div>
 
         <div

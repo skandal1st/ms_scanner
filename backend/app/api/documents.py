@@ -650,6 +650,49 @@ async def export_document_xlsx(
     )
 
 
+@router.post('/{document_id}/writeoff', response_model=DocumentResponse)
+async def open_shipment_writeoff(document_id: UUID, current_user: User = Depends(get_current_user),
+                                 db: AsyncSession = Depends(get_db)):
+    """Open one local writeoff draft and copy marks from this exact completed shipment."""
+    import copy
+    from app.services.document_guard import lock_ms_document
+    from app.services.writeoff_import import import_shipment_codes as import_codes
+    source = (await db.execute(select(Document).where(
+        Document.id == document_id, Document.user_id == current_user.id))).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(404, 'Отгрузка не найдена')
+    if source.kind != DocumentKind.demand or not source.moysklad_id:
+        raise HTTPException(400, 'Выберите отгрузку, связанную с МойСкладом.')
+    await lock_ms_document(db, current_user.id, DocumentKind.loss, source.moysklad_id)
+    target = (await db.execute(select(Document).where(
+        Document.user_id == current_user.id, Document.kind == DocumentKind.loss,
+        Document.organization_profile_id == source.organization_profile_id,
+        Document.moysklad_id == source.moysklad_id, Document.status != DocumentStatus.accepted,
+        Document.upd_meta['superseded_by_document_id'].astext.is_(None),
+    ).order_by(Document.created_at.desc()).limit(1).with_for_update())).scalar_one_or_none()
+    if target is None:
+        # Freeze the plan snapshot against a simultaneous refresh before copying it.
+        source = (await db.execute(select(Document).where(
+            Document.id == document_id, Document.user_id == current_user.id)
+            .with_for_update().execution_options(populate_existing=True))).scalar_one()
+        target = Document(user_id=current_user.id, kind=DocumentKind.loss, name=source.name,
+            moysklad_id=source.moysklad_id, organization_profile_id=source.organization_profile_id,
+            moysklad_organization_id=source.moysklad_organization_id, moysklad_store_id=source.moysklad_store_id,
+            plan=copy.deepcopy(source.plan or []), upd_meta={'source_shipment_document_id': str(source.id)})
+        db.add(target)
+        await db.flush()
+    try:
+        await import_codes(db, target.id, current_user.id, source_id=source.id)
+    except Exception:
+        # Do not leave an empty draft if the source is unfinished or import is blocked.
+        await db.rollback()
+        raise
+    await db.refresh(target)
+    from app.services.scan_events import publish_event
+    await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(target.id)})
+    return _doc_to_response(target, await _scan_count(db, target.id))
+
+
 @router.post('/{document_id}/import-shipment-codes')
 async def import_shipment_codes(document_id: UUID, current_user: User = Depends(get_current_user),
                                 db: AsyncSession = Depends(get_db)):

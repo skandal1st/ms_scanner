@@ -9,7 +9,7 @@ from app.services.document_guard import editable_document
 from app.services.moysklad import MoySkladService
 
 
-async def import_shipment_codes(db, document_id, user_id):
+async def import_shipment_codes(db, document_id, user_id, *, source_id=None):
     target = await editable_document(db, document_id, user_id)
     if target.kind != DocumentKind.loss or not target.moysklad_id:
         raise HTTPException(400, 'Выберите списание, привязанное к отгрузке.')
@@ -25,6 +25,7 @@ async def import_shipment_codes(db, document_id, user_id):
         Document.organization_profile_id == target.organization_profile_id,
         Document.moysklad_id == target.moysklad_id,
         Document.kind == DocumentKind.demand,
+        *([Document.id == source_id] if source_id is not None else []),
         Document.upd_meta['superseded_by_document_id'].astext.is_(None),
         or_(Document.status == DocumentStatus.accepted,
             (Document.status == DocumentStatus.draft) & completed & ~active

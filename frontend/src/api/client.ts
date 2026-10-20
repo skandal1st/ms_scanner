@@ -452,6 +452,7 @@ export const documentsApi = {
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   importShipmentCodes: (id: string) =>
     api.post<{ imported: number; skipped: number; source_name: string }>(`/documents/${id}/import-shipment-codes`),
+  openShipmentWriteoff: (id: string) => api.post<Document>(`/documents/${id}/writeoff`),
   verify: (id: string, recheckAll = false) =>
     api.post<{ status: string; document_id: string; count: number }>(
       `/documents/${id}/verify`, undefined, { params: { recheck_all: recheckAll } },

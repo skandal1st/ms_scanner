@@ -13,9 +13,116 @@ from app.core.config import settings
 from app.db.models import (Base, Document, DocumentKind, DocumentStatus, OrganizationProfile,
                            Scan, ScanStatus, TsdDevice, TsdDocumentSession, User, Workplace)
 from app.services.writeoff_import import import_shipment_codes
+from app.services.document_guard import lock_ms_document as real_lock_ms_document
 
 pytestmark = pytest.mark.skipif(os.getenv('AUDIT_POSTGRES') != '1', reason='isolated PostgreSQL required')
 RAW = '04670163000207Hm7&lkpAAAAi2gC'
+
+
+async def test_shipment_shortcut_creates_bound_draft_with_exact_source_marks_and_preserves_source():
+    from app.api.documents import open_shipment_writeoff
+    engine, factory, user, source, old_target = await seed()
+    try:
+        async with factory() as db:
+            await db.delete(await db.get(Document, old_target))
+            original = await db.get(Document, source)
+            original.name = '166907'
+            original.moysklad_organization_id = 'organization'
+            original.plan = [{'gtin': '04670163000207', 'product_id': 'product',
+                'product_name': 'Wild strawberry', 'expected_qty': 1, 'pack_quantities': {RAW[:14]: 10}}]
+            newer = Document(id=uuid4(), user_id=user, kind=DocumentKind.demand, name='Another assembly',
+                organization_profile_id=original.organization_profile_id, moysklad_id=original.moysklad_id,
+                status=DocumentStatus.accepted)
+            db.add(newer)
+            await db.flush()
+            db.add(Scan(document_id=newer.id, code='other-mark', status=ScanStatus.valid))
+            await db.commit()
+        async with factory() as db:
+            opened = await open_shipment_writeoff(source, await db.get(User, user), db)
+            target_id = opened.id
+            assert opened.kind == DocumentKind.loss and opened.status == DocumentStatus.draft
+            assert opened.name == '166907' and opened.scan_count == 1
+            assert opened.plan[0].product_id == 'product'
+            assert opened.moysklad_organization_id == 'organization' and opened.moysklad_store_id == 'store'
+        async with factory() as db:
+            copied = (await db.execute(select(Scan).where(Scan.document_id == target_id))).scalar_one()
+            assert copied.code == RAW and copied.status == ScanStatus.scanned and copied.verification is None
+            original_scan = (await db.execute(select(Scan).where(Scan.document_id == source))).scalar_one()
+            assert original_scan.status == ScanStatus.valid and original_scan.verification == {'owner_result': 'match'}
+            assert (await db.get(Document, target_id)).upd_meta['shipment_codes_import']['source_id'] == str(source)
+            repeated = await open_shipment_writeoff(source, await db.get(User, user), db)
+            assert repeated.id == target_id and repeated.scan_count == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_shortcut_concurrent_open_creates_only_one_draft(monkeypatch):
+    from app.api.documents import open_shipment_writeoff
+    from app.services import document_guard
+    monkeypatch.setattr(document_guard, 'lock_ms_document', real_lock_ms_document)
+    engine, factory, user, source, target = await seed()
+    try:
+        async with factory() as db:
+            await db.delete(await db.get(Document, target))
+            await db.commit()
+        async def open_one():
+            async with factory() as db:
+                return await open_shipment_writeoff(source, await db.get(User, user), db)
+        first, second = await asyncio.gather(open_one(), open_one())
+        assert first.id == second.id and first.scan_count == second.scan_count == 1
+        async with factory() as db:
+            assert len((await db.execute(select(Document).where(Document.user_id == user, Document.kind == DocumentKind.loss))).scalars().all()) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize('session', [None, 'active'])
+async def test_unfinished_shortcut_rolls_back_new_draft(session):
+    from app.api.documents import open_shipment_writeoff
+    engine, factory, user, source, target = await seed(ready=False, session=session)
+    try:
+        async with factory() as db:
+            await db.delete(await db.get(Document, target))
+            await db.commit()
+        async with factory() as db:
+            with pytest.raises(HTTPException) as exc:
+                await open_shipment_writeoff(source, await db.get(User, user), db)
+            assert exc.value.status_code == 409
+        async with factory() as db:
+            assert not (await db.execute(select(Document.id).where(Document.user_id == user, Document.kind == DocumentKind.loss))).all()
+    finally:
+        await engine.dispose()
+
+
+async def test_completed_tsd_shortcut_reuses_draft_and_protects_submitted_writeoff():
+    from app.api.documents import open_shipment_writeoff
+    engine, factory, user, source, target = await seed(ready=False, session='completed')
+    try:
+        async with factory() as db:
+            result = await open_shipment_writeoff(source, await db.get(User, user), db)
+            assert result.id == target and result.scan_count == 1
+            stored = await db.get(Document, target)
+            stored.cz_doc_ids = [{'id': 'submitted'}]
+            await db.commit()
+        async with factory() as db:
+            with pytest.raises(HTTPException) as exc:
+                await open_shipment_writeoff(source, await db.get(User, user), db)
+            assert exc.value.status_code == 409
+    finally:
+        await engine.dispose()
+
+
+async def test_shortcut_hides_other_users_shipment():
+    from app.api.documents import open_shipment_writeoff
+    from types import SimpleNamespace
+    engine, factory, _, source, _ = await seed()
+    try:
+        async with factory() as db:
+            with pytest.raises(HTTPException) as exc:
+                await open_shipment_writeoff(source, SimpleNamespace(id=uuid4()), db)
+            assert exc.value.status_code == 404
+    finally:
+        await engine.dispose()
 
 
 async def seed(*, ready=True, session=None):
