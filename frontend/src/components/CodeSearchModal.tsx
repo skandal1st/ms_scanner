@@ -30,40 +30,59 @@ function isIncoming(direction: string | null): boolean {
   return (direction ?? '').toLowerCase().startsWith('вход')
 }
 
+function isOutgoing(direction: string | null): boolean {
+  return (direction ?? '').toLowerCase().startsWith('исход')
+}
+
 export function CodeSearchModal({ open, onClose }: Props) {
   const [value, setValue] = useState('')
   const [hits, setHits] = useState<CodeSearchHit[] | null>(null)
   const [upds, setUpds] = useState<UpdSearchHit[]>([])
+  const [edoSyncedAt, setEdoSyncedAt] = useState<string | null>(null)
+  const [unparsedOutgoing, setUnparsedOutgoing] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const requestId = useRef(0)
 
   useEffect(() => {
+    requestId.current += 1
     if (open) {
       setValue('')
+      setLoading(false)
       setHits(null)
       setUpds([])
+      setEdoSyncedAt(null)
+      setUnparsedOutgoing(0)
       setError(null)
-      setTimeout(() => inputRef.current?.focus(), 0)
+      const timer = setTimeout(() => inputRef.current?.focus(), 0)
+      return () => { clearTimeout(timer); requestId.current += 1 }
     }
   }, [open])
 
   const runSearch = async (raw: string) => {
     const code = raw.trim()
     if (!code) return
+    const id = ++requestId.current
     setLoading(true)
     setError(null)
+    setEdoSyncedAt(null)
+    setUnparsedOutgoing(0)
     try {
       const { data } = await scansApi.searchByCode(code)
+      if (id !== requestId.current) return
       setHits(data.scans)
       setUpds(data.upds)
+      setEdoSyncedAt(data.edo_synced_at ?? null)
+      setUnparsedOutgoing(data.edo_unparsed_outgoing_documents ?? 0)
     } catch (e) {
+      if (id !== requestId.current) return
       console.error('Code search error:', e)
       setError('Не удалось выполнить поиск. Попробуйте ещё раз.')
       setHits(null)
       setUpds([])
     } finally {
-      setLoading(false)
+      if (id === requestId.current) setLoading(false)
     }
   }
 
@@ -72,7 +91,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
   return (
     <div className="popup">
       <div className="popup__overlay" onClick={onClose} />
-      <dialog className="popup__body" open>
+      <dialog className="popup__body" style={{ width: 'calc(100vw - 32px)', maxWidth: 960, maxHeight: 'calc(100dvh - 32px)', overflowY: 'auto' }} open>
         <button
           type="button"
           className="popup__close"
@@ -113,7 +132,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
           {hits !== null && !loading && (
             hits.length === 0 && upds.length === 0 ? (
               <p className="hint" style={{ marginTop: 12 }}>
-                Марка не найдена ни в одном документе.
+                Марка не найдена в документах приложения и загруженных марках УПД.
               </p>
             ) : (
               <>
@@ -122,12 +141,12 @@ export function CodeSearchModal({ open, onClose }: Props) {
                     <div style={{ marginTop: 12, fontWeight: 600, fontSize: 13 }}>
                       В документах приложения
                     </div>
-                    <table className="ui-table" style={{ marginTop: 6 }}>
+                    <div style={{ overflowX: 'auto' }}><table className="ui-table" style={{ marginTop: 6 }}>
                       <thead>
                         <tr>
                           <th>Документ</th>
                           <th>Тип</th>
-                          <th>Статус</th>
+                          <th>Статус марки</th>
                           <th>Время</th>
                         </tr>
                       </thead>
@@ -155,27 +174,28 @@ export function CodeSearchModal({ open, onClose }: Props) {
                           )
                         })}
                       </tbody>
-                    </table>
+                    </table></div>
                   </>
                 )}
 
                 {upds.length > 0 && (
                   <>
                     <div style={{ marginTop: 16, fontWeight: 600, fontSize: 13 }}>
-                      В УПД (ЭДО)
+                      Во входящих и исходящих УПД (ЭДО)
                     </div>
-                    <table className="ui-table" style={{ marginTop: 6 }}>
+                    <div style={{ overflowX: 'auto' }}><table className="ui-table" style={{ marginTop: 6 }}>
                       <thead>
                         <tr>
                           <th>Направление</th>
                           <th>УПД</th>
                           <th>Контрагент</th>
+                          <th>Статус УПД</th>
                           <th>Дата</th>
                         </tr>
                       </thead>
                       <tbody>
                         {upds.map((u, i) => (
-                          <tr key={`${u.edo_document_id}-${i}`}>
+                          <tr key={`${u.edo_document_id}-${i}`} style={isOutgoing(u.direction) ? { background: 'var(--st-warn-bg, #fff8e6)' } : undefined}>
                             <td>
                               <span className={`badge ${isIncoming(u.direction) ? 'badge--ok' : 'badge--warn'}`}>
                                 {u.direction ?? '—'}
@@ -191,18 +211,23 @@ export function CodeSearchModal({ open, onClose }: Props) {
                                 <div className="text-muted" style={{ fontSize: 11 }}>ИНН {u.counterparty_inn}</div>
                               ) : null}
                             </td>
+                            <td>{u.state_name || 'Статус неизвестен'}</td>
                             <td className="text-muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                               {u.doc_date ?? '—'}
                             </td>
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </table></div>
                   </>
                 )}
               </>
             )
           )}
+          {hits !== null && !loading && <div className="hint" style={{ marginTop: 12 }}>
+            <p>Поиск по УПД использует марки, загруженные из ЭДО.{edoSyncedAt ? ` Последняя синхронизация: ${new Date(edoSyncedAt).toLocaleString('ru')}.` : ' Дата синхронизации недоступна.'}</p>
+            {unparsedOutgoing > 0 && <p role="status">Исходящих УПД без загруженных марок: {unparsedOutgoing}. Поиск по этим документам пока неполон.</p>}
+          </div>}
         </div>
       </dialog>
     </div>

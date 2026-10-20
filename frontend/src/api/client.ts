@@ -543,6 +543,8 @@ export interface UpdSearchHit {
   doc_date: string | null
   counterparty_name: string | null
   counterparty_inn: string | null
+  state_code?: number | null
+  state_name?: string | null
   cis_raw: string
   gtin: string | null
 }
@@ -551,6 +553,8 @@ export interface UpdSearchHit {
 export interface CodeSearchResponse {
   scans: CodeSearchHit[]
   upds: UpdSearchHit[]
+  edo_synced_at?: string | null
+  edo_unparsed_outgoing_documents?: number
 }
 
 export const scansApi = {

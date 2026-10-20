@@ -101,6 +101,8 @@ class UpdSearchHit(BaseModel):
     doc_date: Optional[str] = None        # «ДД.ММ.ГГГГ» как в Saby
     counterparty_name: Optional[str] = None
     counterparty_inn: Optional[str] = None
+    state_code: Optional[int] = None
+    state_name: Optional[str] = None
     cis_raw: str
     gtin: Optional[str] = None
 
@@ -109,6 +111,8 @@ class CodeSearchResponse(BaseModel):
     """Ответ /scans/search: марка в документах приложения + в УПД ЭДО (вход./исход.)."""
     scans: List[CodeSearchHit]
     upds: List[UpdSearchHit]
+    edo_synced_at: Optional[datetime] = None
+    edo_unparsed_outgoing_documents: int = 0
 
 
 class CreateScanRequest(BaseModel):
@@ -933,6 +937,7 @@ async def search_scans_by_code(
             .join(EdoDocument, EdoMark.document_id == EdoDocument.id)
             .where(
                 EdoMark.user_id == current_user.id,
+                EdoDocument.user_id == current_user.id,
                 candidate_condition(EdoMark.cis_canonical, prefixes),
             )
             .order_by(EdoDocument.created_at.desc())
@@ -946,6 +951,8 @@ async def search_scans_by_code(
                 doc_date=ed.doc_date,
                 counterparty_name=ed.counterparty_name,
                 counterparty_inn=ed.counterparty_inn,
+                state_code=ed.state_code,
+                state_name=ed.state_name,
                 cis_raw=mark.cis_raw,
                 gtin=mark.gtin,
             )
@@ -953,7 +960,15 @@ async def search_scans_by_code(
             if mark_key(mark.cis_canonical) == key
         ]
 
-    return CodeSearchResponse(scans=scans, upds=upds)
+    # A UPD can carry both a full mark and its identification form.
+    upds = list({hit.edo_document_id: hit for hit in upds}.values())
+    synced_at = (await db.execute(select(Integration.saby_synced_at).where(
+        Integration.user_id == current_user.id))).scalar_one_or_none()
+    unparsed = (await db.execute(select(func.count()).select_from(EdoDocument).where(
+        EdoDocument.user_id == current_user.id, EdoDocument.direction == 'Исходящий',
+        EdoDocument.marks_parsed.is_(False)))).scalar_one()
+    return CodeSearchResponse(scans=scans, upds=upds, edo_synced_at=synced_at,
+                              edo_unparsed_outgoing_documents=unparsed)
 
 
 @router.get("/{document_id}", response_model=List[ScanResponse])

@@ -126,6 +126,53 @@ async def test_search_finds_receipt_short_code_children_and_edo_without_prefix_f
         await engine.dispose()
 
 
+async def test_mark_search_includes_outgoing_upd_state_once_and_reports_incomplete_sync():
+    from datetime import datetime, timezone
+    engine, factory, user_id, _, doc_id = await seed()
+    try:
+        async with factory() as db:
+            synced_at = datetime(2026, 10, 20, 8, 30, tzinfo=timezone.utc)
+            integration = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one()
+            integration.saby_synced_at = synced_at
+            incoming = EdoDocument(user_id=user_id, external_id=str(uuid4()), number='IN', direction='Входящий', marks_parsed=True)
+            outgoing = EdoDocument(user_id=user_id, external_id=str(uuid4()), number='OUT', direction='Исходящий',
+                state_code=3, state_name='Ожидает подписи', counterparty_name='Покупатель', doc_date='20.10.2026', marks_parsed=True)
+            missing = EdoDocument(user_id=user_id, external_id=str(uuid4()), direction='Исходящий', marks_parsed=False)
+            db.add_all([incoming, outgoing, missing])
+            await db.flush()
+            db.add_all([
+                EdoMark(user_id=user_id, document_id=incoming.id, cis_raw=RAW, cis_canonical=RAW),
+                EdoMark(user_id=user_id, document_id=outgoing.id, cis_raw=RAW, cis_canonical=RAW),
+                EdoMark(user_id=user_id, document_id=outgoing.id, cis_raw=RAW[:21], cis_canonical=RAW[:21]),
+            ])
+            other = User(id=uuid4(), email=f'{uuid4()}@example.test', password_hash='test')
+            db.add(other)
+            await db.flush()
+            foreign = EdoDocument(user_id=other.id, external_id=str(uuid4()), direction='Исходящий', marks_parsed=False)
+            db.add(foreign)
+            await db.flush()
+            # Even inconsistent imported mark ownership must not reveal another user's UPD.
+            db.add(EdoMark(user_id=user_id, document_id=foreign.id, cis_raw=RAW, cis_canonical=RAW))
+            await db.commit()
+            user = await db.get(User, user_id)
+            for code in [RAW, RAW[:21], '01' + RAW[:14] + '21' + RAW[14:21]]:
+                found = await scans.search_scans_by_code(code, user, db)
+                assert len(found.upds) == 2
+                assert {hit.number for hit in found.upds} == {'IN', 'OUT'}
+                hit = next(hit for hit in found.upds if hit.direction == 'Исходящий')
+                assert (hit.state_code, hit.state_name, hit.counterparty_name) == (3, 'Ожидает подписи', 'Покупатель')
+                assert found.edo_synced_at == synced_at
+                assert found.edo_unparsed_outgoing_documents == 1
+            absent = await scans.search_scans_by_code('not-found', user, db)
+            assert not absent.scans and not absent.upds
+            assert absent.edo_synced_at == synced_at and absent.edo_unparsed_outgoing_documents == 1
+            foreign_user = await db.get(User, other.id)
+            isolated = await scans.search_scans_by_code(RAW, foreign_user, db)
+            assert not isolated.scans and not isolated.upds and isolated.edo_synced_at is None
+    finally:
+        await engine.dispose()
+
+
 async def test_setting_is_scoped_to_organization_and_persists_without_cz_token():
     engine, factory, user_id, profile_id, _ = await seed(enabled=True)
     try:
