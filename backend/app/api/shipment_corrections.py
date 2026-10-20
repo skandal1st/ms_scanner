@@ -1,6 +1,7 @@
 """Shared PC/TSD correction workspace. Every request checks organization/warehouse scope."""
 import copy
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -150,6 +151,7 @@ async def detail(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
     scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id).order_by(Scan.scanned_at.desc()))).scalars().all()
     return {'id': str(doc.id), 'name': doc.name, 'status': doc.status.value, 'error_message': doc.error_message,
         'locked': bool(state.get('job')), 'processing_progress': doc.processing_progress,
+        'baseline_mark_count': len(state['baseline_scans']),
         'positions': [{'id': pid, 'name': row['product_name'], 'quantity': row['fields'].get('quantity', 0)} for pid, row in state['baseline'].items() if row['product_id']],
         'scans': [{**ScanResponse.model_validate(scan).model_dump(mode='json'),
             'position_id': (state['baseline_scans'].get(str(scan.id)) or {}).get('position_id') or state['add_positions'].get(str(scan.id)),
@@ -161,7 +163,8 @@ async def detail(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
 
 class AddCode(BaseModel):
     code: str = Field(min_length=1, max_length=4096)
-    position_id: UUID
+    position_id: UUID | None = None
+    replace_scan_id: UUID | None = None
 
 
 @router.post('/{document_id}/scans')
@@ -169,12 +172,35 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
     doc = await owned(db, access, document_id, revision=True)
     await editable_document(db, doc.id, access.user.id)
     state = copy.deepcopy(service.correction(doc))
-    pid = str(body.position_id)
+    from app.services.chestnyznak import strip_ai_brackets, extract_gtin, normalize_gtin_key
+    from app.services.scan_input import decode_base64_mark
+    decoded = decode_base64_mark(body.code)
+    raw = strip_ai_brackets(decoded or body.code).strip()
+    pid = str(body.position_id) if body.position_id else None
+    if pid is None:
+        gtin = normalize_gtin_key(extract_gtin(raw))
+        products = {item.get('product_id') for item in (doc.plan or []) if gtin and gtin in {
+            normalize_gtin_key(g) for g in [item.get('gtin'), *(item.get('gtins') or [])]}}
+        candidates = [key for key, item in state['baseline'].items() if item['product_id'] in products]
+        if len(candidates) != 1:
+            raise HTTPException(400, 'Не удалось однозначно выбрать позицию по GTIN. Выберите товар вручную в составе отгрузки.')
+        pid = candidates[0]
     row = state['baseline'].get(pid)
     if not row or not row['product_id']:
         raise HTTPException(400, 'Выберите существующую позицию отгрузки')
-    from app.services.chestnyznak import strip_ai_brackets
-    raw = strip_ai_brackets(body.code).strip()
+    replaced_scan = None
+    if body.replace_scan_id:
+        replaced_scan = (await db.execute(select(Scan).where(
+            Scan.id == body.replace_scan_id, Scan.document_id == doc.id))).scalar_one_or_none()
+        if not replaced_scan:
+            raise HTTPException(404, 'Заменяемая марка не найдена. Обновите список марок.')
+        saved = state['baseline_scans'].get(str(replaced_scan.id)) or {}
+        original_position = saved.get('position_id') or state['add_positions'].get(str(replaced_scan.id))
+        if original_position != pid:
+            raise HTTPException(400, 'Заменяющая марка должна остаться в той же позиции отгрузки')
+        if replaced_scan.is_box or (saved.get('code') or {}).get('trackingCodes') or (
+                saved and saved['code'].get('type') != 'trackingcode'):
+            raise HTTPException(400, 'Заменяйте отдельные марки. Состав упаковок исправляется в МойСкладе.')
     if not raw.startswith('01') and not (len(raw) == 29 and raw[:14].isdigit()):
         raise HTTPException(400, 'Добавляйте отдельную марку товара. Состав упаковок исправляется в МойСкладе.')
     candidate = service.MoySkladService('')._tracking_code_entry({'code': raw}, row['tracking_type'])
@@ -186,7 +212,8 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
             {'code': current.code}, state['baseline'].get(current_pos, row)['tracking_type'])
         if service.code_key(entry) == service.code_key(candidate):
             return {'duplicate': True, 'id': str(current.id)}
-    scan, duplicate = await _create_scan_record(db, doc.id, raw, access.user.id, row['product_id'])
+    scan_input = body.code if decoded else raw
+    scan, duplicate = await _create_scan_record(db, doc.id, scan_input, access.user.id, row['product_id'])
     await db.refresh(doc)
     # Core scanning commits before returning; preserve current state under a fresh row lock.
     doc = await owned(db, access, document_id, revision=True)
@@ -195,8 +222,17 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
         raise HTTPException(409, 'Сохранение исправления уже началось')
     if str(scan.id) not in state['baseline_scans'] and str(scan.id) not in state['add_positions']:
         state['add_positions'][str(scan.id)] = pid
-        await service.save_state(db, doc, state)
-    return {'duplicate': duplicate, 'id': str(scan.id)}
+    # Keep the original when the replacement is invalid or belongs elsewhere.
+    # Both the new binding and removal are committed together, before any MS write.
+    replaced = False
+    if replaced_scan and not duplicate and scan.status.value in ('scanned', 'valid', 'overflow'):
+        original = (await db.execute(select(Scan).where(
+            Scan.id == body.replace_scan_id, Scan.document_id == doc.id))).scalar_one_or_none()
+        if original:
+            await db.delete(original)
+            replaced = True
+    await service.save_state(db, doc, state)
+    return {'duplicate': duplicate, 'id': str(scan.id), 'replaced': replaced}
 
 
 @router.delete('/{document_id}/scans/{scan_id}')
@@ -218,7 +254,7 @@ async def verify(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
 
 
 class PreviewRequest(BaseModel):
-    adjust_quantities: bool = False
+    adjust_quantities: Literal[False] = False
     preview_hash: str | None = None
 
 
@@ -241,6 +277,8 @@ async def save(document_id: UUID, body: PreviewRequest, access: Scope = Depends(
     if doc.status != DocumentStatus.draft:
         raise HTTPException(409, 'Исправление уже сохраняется или завершено')
     state = copy.deepcopy(service.correction(doc))
+    if state.get('job') and any(op['action'] == 'quantity' for op in state['job']['delta']['operations']):
+        raise HTTPException(409, 'Старая версия исправления меняет количество товаров. Обновите состав из МС и просмотрите изменения заново.')
     if not state.get('job'):
         scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalars().all()
         try:

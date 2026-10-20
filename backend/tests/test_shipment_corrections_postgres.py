@@ -21,6 +21,68 @@ from app.services.document_guard import editable_document
 pytestmark = pytest.mark.skipif(os.getenv('AUDIT_POSTGRES') != '1', reason='isolated PostgreSQL required')
 
 
+@pytest.mark.parametrize('mode', ['valid', 'invalid', 'duplicate', 'base64', 'wrong_position', 'auto', 'ambiguous'])
+async def test_replace_preserves_baseline_and_only_removes_original_for_a_new_valid_code(monkeypatch, mode):
+    import base64
+    from unittest.mock import Mock
+    from app.worker.tasks import persist_assigned_gtin_task
+    monkeypatch.setattr(persist_assigned_gtin_task, 'delay', Mock())
+    engine, factory, user, profile, source = await seed()
+    pos_id, other_pos, product_id = str(uuid4()), str(uuid4()), str(uuid4())
+    old_code, new_code = '04603743309261GKgWkbWAAAAdW6a', '04603743309261BBBXCJJAAAAem7G'
+    baseline = {pos_id: {'fields': {'id': pos_id, 'quantity': 1, 'price': 12500},
+        'product_id': product_id, 'product_name': 'Test', 'tracking_type': None,
+        'codes': [{'id': str(uuid4()), 'cis': old_code, 'type': 'trackingcode'}]}}
+    baseline[other_pos] = {**copy.deepcopy(baseline[pos_id]), 'codes': []}
+    if mode == 'auto':
+        baseline[other_pos]['product_id'] = str(uuid4())
+    monkeypatch.setattr(service, 'snapshot', AsyncMock(return_value=(
+        {'organization': {'id': 'org'}, 'store': {'id': 'store'}}, baseline)))
+    ms = NS(build_plan=AsyncMock(return_value=[{'product_id': product_id, 'gtin': '04603743309261', 'product_name': 'Test', 'expected_qty': 1}]))
+    access = routes.Scope(user, profile.id, ['store'])
+    try:
+        async with factory() as db:
+            revision = await service.start(db, await db.get(Document, source.id), ms, 'actor')
+            revision_id = revision.id
+            old = (await db.execute(select(Scan).where(Scan.document_id == revision_id))).scalar_one()
+            old_id = old.id
+        raw = old_code if mode == 'duplicate' else '010460374330926221BAD' if mode == 'invalid' else new_code
+        if mode == 'base64':
+            raw = base64.b64encode(raw.encode()).decode()
+        async with factory() as db:
+            body = routes.AddCode(code=raw,
+                position_id=None if mode in ('auto', 'ambiguous') else other_pos if mode == 'wrong_position' else pos_id,
+                replace_scan_id=old_id if mode not in ('auto', 'ambiguous') else None)
+            if mode in ('wrong_position', 'ambiguous'):
+                with pytest.raises(HTTPException) as error:
+                    await routes.add_code(revision_id, body, access, db)
+                assert error.value.status_code == 400
+            else:
+                result = await routes.add_code(revision_id, body, access, db)
+                assert result.get('replaced', False) == (mode in ('valid', 'base64'))
+        async with factory() as db:
+            revision = await db.get(Document, revision_id)
+            assert service.correction(revision)['baseline'] == baseline
+            scans = (await db.execute(select(Scan).where(Scan.document_id == revision_id))).scalars().all()
+            if mode in ('valid', 'base64'):
+                assert len(scans) == 1 and scans[0].code == new_code and scans[0].status == ScanStatus.scanned
+                if mode == 'base64':
+                    assert scans[0].original_code == raw
+                scans[0].status = ScanStatus.valid
+                delta = service.build_delta(revision, scans)
+                assert len(delta['removed']) == 1 and len(delta['added']) == 1
+                assert not delta['quantities']
+            elif mode == 'auto':
+                assert len(scans) == 2
+                new = next(s for s in scans if s.code == new_code)
+                assert service.correction(revision)['add_positions'][str(new.id)] == pos_id
+            else:
+                assert any(s.id == old_id for s in scans)
+                assert len(scans) == (2 if mode == 'invalid' else 1)
+    finally:
+        await engine.dispose()
+
+
 async def seed():
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     async with engine.begin() as connection:

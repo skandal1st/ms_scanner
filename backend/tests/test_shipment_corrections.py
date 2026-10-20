@@ -6,6 +6,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.db.models import DocumentKind, DocumentStatus, ScanStatus
 from app.services import shipment_corrections as service
@@ -53,6 +54,21 @@ def test_delete_all_and_optional_quantity_change():
     delta = service.build_delta(doc, [], True)
     assert len(delta['removed']) == 2
     assert delta['quantities'] == [{'product_name': 'Товар', 'before': 3, 'after': 1}]
+
+
+def test_correction_api_rejects_quantity_changes_even_from_an_old_client():
+    with pytest.raises(ValidationError):
+        routes.PreviewRequest(adjust_quantities=True)
+
+
+async def test_previously_frozen_quantity_job_cannot_be_resumed(monkeypatch):
+    doc, state, _ = fixture()
+    state['job'] = {'delta': {'operations': [{'action': 'quantity'}]}}
+    monkeypatch.setattr(routes, 'owned', AsyncMock(return_value=doc))
+    with pytest.raises(HTTPException) as error:
+        await routes.save(doc.id, routes.PreviewRequest(), NS(), NS())
+    assert error.value.status_code == 409
+    assert 'количество' in error.value.detail
 
 
 def test_moving_mark_between_same_product_rows_uses_position_identity():

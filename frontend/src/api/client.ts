@@ -1221,6 +1221,7 @@ export interface ShipmentCorrectionDelta {
 export interface ShipmentCorrectionDetail {
   id: string; name: string; status: string; error_message: string | null; locked: boolean
   processing_progress: { sent: number; total: number } | null
+  baseline_mark_count: number
   positions: { id: string; name: string; quantity: number }[]
   scans: (Scan & { position_id: string; existing: boolean; package: boolean })[]
   delta: ShipmentCorrectionDelta | null
@@ -1233,11 +1234,11 @@ export function shipmentCorrectionsApi(terminal = false) {
     list: () => client.get<{ id: string; name: string; resume: boolean }[]>(base),
     open: (id: string) => client.post<{ id: string }>(`${base}/${id}/open`),
     get: (id: string) => client.get<ShipmentCorrectionDetail>(`${base}/${id}`),
-    scan: (id: string, code: string, position_id: string) => client.post<{ duplicate: boolean }>(`${base}/${id}/scans`, { code, position_id }),
+    scan: (id: string, code: string, position_id?: string, replace_scan_id?: string) => client.post<{ duplicate: boolean; replaced?: boolean }>(`${base}/${id}/scans`, { code, position_id, replace_scan_id }),
     remove: (id: string, scanId: string) => client.delete(`${base}/${id}/scans/${scanId}`),
     verify: (id: string) => client.post(`${base}/${id}/verify`),
-    preview: (id: string, adjust_quantities: boolean) => client.post<ShipmentCorrectionDelta>(`${base}/${id}/preview`, { adjust_quantities }),
-    save: (id: string, adjust_quantities: boolean, preview_hash: string) => client.post(`${base}/${id}/save`, { adjust_quantities, preview_hash }),
+    preview: (id: string) => client.post<ShipmentCorrectionDelta>(`${base}/${id}/preview`, { adjust_quantities: false }),
+    save: (id: string, preview_hash: string) => client.post(`${base}/${id}/save`, { adjust_quantities: false, preview_hash }),
     cancel: (id: string) => client.post(`${base}/${id}/cancel`),
     rebase: (id: string) => client.post<{ id: string }>(`${base}/${id}/rebase`),
   }
