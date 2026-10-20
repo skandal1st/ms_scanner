@@ -351,6 +351,7 @@ class Scan(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id"), nullable=False, index=True)
     code = Column(Text, nullable=False)
+    original_code = Column(Text, nullable=True)  # Scanner input before Base64 envelope decoding.
     gtin = Column(String(14), nullable=True)
     serial = Column(String(50), nullable=True)
     # Явный товар МС (UUID), если кладовщик выбрал строку вручную — приоритет при process.

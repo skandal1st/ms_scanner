@@ -480,6 +480,7 @@ export interface Scan {
   id: string
   document_id: string
   code: string
+  original_code?: string | null
   gtin: string | null
   status: ScanStatus
   product_name: string | null

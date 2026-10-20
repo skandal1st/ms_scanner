@@ -66,7 +66,7 @@ async def import_shipment_codes(db, document_id, user_id, *, source_id=None):
             raise HTTPException(409, f'Марки уже используются в списании «{conflict}». Проверьте его перед загрузкой.')
 
     for scan in additions:
-        db.add(Scan(document_id=target.id, code=scan.code, gtin=scan.gtin, serial=scan.serial,
+        db.add(Scan(document_id=target.id, code=scan.code, original_code=scan.original_code, gtin=scan.gtin, serial=scan.serial,
             moysklad_product_id=scan.moysklad_product_id, product_name=scan.product_name,
             is_box=scan.is_box, box_quantity=scan.box_quantity, package_type=scan.package_type,
             keep_aggregate=scan.keep_aggregate, child_codes=copy.deepcopy(scan.child_codes),

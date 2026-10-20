@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, field_serializer
 from app.services.cz_status import localize_cz_error, localize_cz_verification
@@ -33,6 +33,7 @@ from app.services.chestnyznak import (
     verify_code_local_gs1,
 )
 from app.services.gtin_cz_group import get_cached_pg
+from app.services.scan_input import decode_base64_mark
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -41,6 +42,7 @@ class ScanResponse(BaseModel):
     id: UUID
     document_id: UUID
     code: str
+    original_code: Optional[str] = None
     gtin: Optional[str] = None
     status: ScanStatus
     product_name: Optional[str] = None
@@ -241,7 +243,9 @@ async def _create_scan_record(
     ``gtin_override`` (из ЧЗ sscc_check, у SSCC своего GTIN в коде нет), а проверку
     делает ``verify_box_task`` вместо ``verify_code_task``.
     """
-    code = code.strip()
+    decoded = decode_base64_mark(code) if not is_box else None
+    original_code = code if decoded is not None else None
+    code = decoded if decoded is not None else code.strip()
     gtin = gtin_override if is_box else extract_gtin(code)
 
     doc_obj = await editable_document(db, document_id, current_user_id)
@@ -277,7 +281,6 @@ async def _create_scan_record(
         .limit(1)
     )
     if (getattr(doc_obj, 'upd_meta', None) or {}).get('shipment_correction'):
-        from sqlalchemy import or_
         conflict_statement = conflict_statement.where(or_(Document.moysklad_id.is_(None), Document.moysklad_id != doc_obj.moysklad_id))
     conflict_q = await db.execute(conflict_statement)
     conflict_doc_name = conflict_q.scalar_one_or_none()
@@ -356,9 +359,10 @@ async def _create_scan_record(
             if nm_name:
                 initial_name = (nm_name or "").strip() or None
 
-    scan = Scan(
+    scan_values = dict(
         document_id=document_id,
         code=code,
+        original_code=original_code,
         gtin=gtin,
         serial=local_serial,
         moysklad_product_id=resolved_pid,
@@ -370,7 +374,25 @@ async def _create_scan_record(
         package_type="BOX" if is_sscc(code) else ("GROUP" if is_box or (box_quantity and box_quantity > 1) else "UNIT"),
         keep_aggregate=bool(not is_box and box_quantity and box_quantity > 1),
     )
-    db.add(scan)
+    scan = None
+    if original_code is not None:
+        canonical_exists = (await db.execute(select(Scan.id).where(
+            Scan.document_id == document_id, Scan.code == code))).scalar_one_or_none()
+        if canonical_exists is None:
+            # Re-scanning a formerly rejected envelope repairs that row instead of
+            # leaving a stale format error alongside a second copy of the same mark.
+            scan = (await db.execute(select(Scan).where(
+                Scan.document_id == document_id, Scan.code == original_code.strip(),
+                Scan.status == ScanStatus.invalid, Scan.verified_at.is_(None),
+                or_(Scan.verification.is_(None), func.jsonb_typeof(Scan.verification) == 'null'),
+                Scan.is_box.is_(False), Scan.is_barcode.is_(False),
+            ))).scalar_one_or_none()
+    if scan is None:
+        scan = Scan(**scan_values)
+        db.add(scan)
+    else:
+        for name, value in scan_values.items():
+            setattr(scan, name, value)
     if device_id:
         db.add(TsdScanAction(device_id=device_id, document_id=document_id, scan=scan))
     remember_assignment = bool(moysklad_product_id and not is_box and gtin
@@ -392,6 +414,10 @@ async def _create_scan_record(
             )
         )
         existing = existing_q.scalar_one()
+        if original_code is not None and existing.original_code is None:
+            existing.original_code = original_code
+            await db.commit()
+            await db.refresh(existing)
         logger.info(
             "scan.duplicate",
             document_id=str(document_id),
@@ -405,6 +431,9 @@ async def _create_scan_record(
         from app.worker.tasks import persist_assigned_gtin_task
         persist_assigned_gtin_task.delay(str(current_user_id), gtin, moysklad_product_id)
     await publish_scan(current_user_id, scan)
+    if original_code is not None:
+        logger.info('scan.input_decoded', document_id=str(document_id), scan_id=str(scan.id),
+                    encoding='base64', input_length=len(original_code), code_length=len(code))
 
     # Код-конфликт уже в финальном статусе used_in_other_doc — проверять в ЧЗ/МС
     # не нужно (в документ при проведении он всё равно не уйдёт).

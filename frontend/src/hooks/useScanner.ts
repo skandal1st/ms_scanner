@@ -51,7 +51,7 @@ export function useScanner(documentId: string | null) {
       // Режим удаления: ищем существующий скан с тем же кодом и удаляем его.
       if (state.deleteMode) {
         const existing = state.scans.find(
-          (s) => s.document_id === documentId && s.code === trimmed,
+          (s) => s.document_id === documentId && (s.code === trimmed || s.original_code === trimmed),
         )
         if (!existing) {
           playBeep('error')
