@@ -210,6 +210,6 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
         </div>
       </dialog></div>}
     </>}
-    {!terminal && <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />}
+    {!terminal && <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} serial={serial} />}
   </main>
 }

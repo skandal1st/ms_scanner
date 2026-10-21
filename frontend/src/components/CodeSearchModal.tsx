@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { scansApi, markHistoryApi, type CodeSearchHit, type UpdSearchHit, type MarkHistoryResponse } from '../api/client'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { MarkChronology } from './MarkChronology'
+import { captureSerialScans } from '../lib/serialScanCapture'
+import { SerialScannerStatus } from './SerialScannerStatus'
+import type { UseSerialScannerResult } from '../hooks/useSerialScanner'
 
 type Props = {
   open: boolean
   onClose: () => void
+  serial: UseSerialScannerResult
 }
 
 const KIND_LABELS: Record<string, string> = {
@@ -35,7 +39,7 @@ function isOutgoing(direction: string | null): boolean {
   return (direction ?? '').toLowerCase().startsWith('исход')
 }
 
-export function CodeSearchModal({ open, onClose }: Props) {
+export function CodeSearchModal({ open, onClose, serial }: Props) {
   const [value, setValue] = useState('')
   const [hits, setHits] = useState<CodeSearchHit[] | null>(null)
   const [upds, setUpds] = useState<UpdSearchHit[]>([])
@@ -50,7 +54,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const requestId = useRef(0)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     requestId.current += 1
     if (open) {
       setValue('')
@@ -114,7 +118,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
   }
 
   const runSearch = async (raw: string) => {
-    const code = raw.trim()
+    const code = normalizeScannerInput(raw).trim()
     if (!code) return
     const id = ++requestId.current
     setLoading(true)
@@ -144,6 +148,16 @@ export function CodeSearchModal({ open, onClose }: Props) {
     }
   }
 
+  const scannedSearch = useRef<(code: string) => void>(() => {})
+  scannedSearch.current = code => {
+    setValue(normalizeScannerInput(code))
+    void runSearch(code)
+  }
+  useLayoutEffect(() => {
+    if (!open) return
+    return captureSerialScans(code => scannedSearch.current(code))
+  }, [open])
+
   if (!open) return null
 
   return (
@@ -158,6 +172,7 @@ export function CodeSearchModal({ open, onClose }: Props) {
         />
         <div className="popup__title">Поиск марки и хронология</div>
         <div className="popup__content">
+          <SerialScannerStatus serial={serial} />
           <div className="flex-row gap-8">
             <input
               ref={inputRef}

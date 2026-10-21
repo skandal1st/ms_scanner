@@ -188,7 +188,7 @@ export function ScanInput({ documentId, inactiveHint = 'Выберите док�
       {!documentId && (
         <p className="hint">{inactiveHint}</p>
       )}
-      <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <CodeSearchModal open={searchOpen} onClose={() => setSearchOpen(false)} serial={serial} />
     </div>
   )
 }

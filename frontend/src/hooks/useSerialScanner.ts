@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SerialLineBuffer, normalizeGs } from '../lib/serialLineBuffer'
 import { isWebSerialSupported } from '../lib/scannerMode'
+import { deliverCapturedSerialScan } from '../lib/serialScanCapture'
 
 // Хардкод параметров порта: дефолт большинства промышленных сканеров (Honeywell/Datalogic/Zebra).
 // Если конкретная модель отличается — настраивается сервисными штрих-кодами из мануала сканера.
@@ -46,7 +47,7 @@ interface UseSerialScannerArgs {
   onCode: (code: string) => void
 }
 
-interface UseSerialScannerResult {
+export interface UseSerialScannerResult {
   supported: boolean
   connected: boolean
   error: string | null
@@ -186,7 +187,7 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
           for (const line of lines) {
             // normalizeGs: подменный GS-байт сканера (0xF8) → каноничный 0x1D.
             const code = normalizeGs(line).trim()
-            if (code) onCodeRef.current(code)
+            if (code && !deliverCapturedSerialScan(code)) onCodeRef.current(code)
           }
         }
       } catch (e) {

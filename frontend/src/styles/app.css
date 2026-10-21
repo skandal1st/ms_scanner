@@ -798,6 +798,8 @@ html, body, #root { height: 100%; }
 }
 
 .correction-scan-form { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.serial-scanner-status { margin-bottom: 12px; }
+.serial-scanner-status .hint { margin: 6px 0 0; color: var(--ms-text-muted); }
 
 .correction-workspace { min-height: 0; }
 .correction-workspace .hint { color: var(--ms-text-muted); }

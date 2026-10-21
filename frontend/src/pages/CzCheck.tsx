@@ -6,6 +6,9 @@ import {
   type CzCheckItem,
   type DocumentKind,
 } from '../api/client'
+import { useSerialScanner } from '../hooks/useSerialScanner'
+import { normalizeScannerInput } from '../lib/scannerLayout'
+import { SerialScannerStatus } from '../components/SerialScannerStatus'
 
 const KIND_LABEL: Record<DocumentKind, string> = {
   demand: 'Отгрузка',
@@ -75,6 +78,10 @@ export function CzCheckPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [needCz, setNeedCz] = useState(false)
+  const serial = useSerialScanner({ enabled: true, onCode: raw => {
+    const code = normalizeScannerInput(raw).trim()
+    if (code) setText(previous => `${previous.trimEnd()}${previous.trim() ? '\n' : ''}${code}\n`)
+  } })
 
   const { data: integration } = useQuery({
     queryKey: ['integration'],
@@ -123,15 +130,20 @@ export function CzCheckPage() {
       )}
 
       <div className="section">
-        <label className="field-label">
+        <SerialScannerStatus serial={serial} />
+        <label className="field-label" htmlFor="cz-check-codes">
           Отсканируйте марку или вставьте список (по одной в строке)
         </label>
         <textarea
+          id="cz-check-codes"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => setText(normalizeScannerInput(e.target.value))}
           placeholder="01046403403908892121(qbFHlf..."
           className="ui-input ui-input--block"
           rows={5}
+          autoFocus
+          autoComplete="off"
+          spellCheck={false}
           style={{ fontFamily: 'monospace', fontSize: 12, resize: 'vertical' }}
         />
         <div className="flex-row gap-8" style={{ marginTop: 8, alignItems: 'center' }}>
