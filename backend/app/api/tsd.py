@@ -7,7 +7,7 @@ from typing import Optional, Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from pydantic import BaseModel, Field
@@ -385,16 +385,21 @@ async def get_tsd_order_filters(device: TsdDevice = Depends(get_shipping_device)
 async def list_tsd_orders(
     search: Optional[str] = None, offset: int = 0,
     device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db),
-    filter_id: Optional[UUID] = None,
+    filter_id: Optional[UUID] = None, cursor: Optional[int] = None, response: Response = None,
 ):
-    if offset < 0:
+    if offset < 0 or (cursor is not None and cursor < 0):
         raise HTTPException(400, "Некорректная страница списка заказов")
     _, workplace, profile = await _device_scope(db, device)
     selected_filter = resolve_order_filter(profile, filter_id)
     ms = await _ms_for_user(db, device.user_id)
     try:
-        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset,
-                                            **({"order_filter": selected_filter} if selected_filter else {}))
+        conditions = {"order_filter": selected_filter} if selected_filter else {}
+        if cursor is not None:
+            rows, next_cursor = await ms.get_customer_order_page(profile.moysklad_organization_id, search,
+                                                                 cursor=cursor, **conditions)
+            response.headers["X-Next-Offset"] = str(next_cursor) if next_cursor is not None else ""
+        else:
+            rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset, **conditions)
     except Exception as exc:
         logger.warning("tsd.orders.moysklad_failed", device_id=str(device.id), error=str(exc))
         raise _order_ms_error(exc) from exc

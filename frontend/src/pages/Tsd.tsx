@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { useOrderSearch } from '../hooks/useOrderSearch'
+import { orderSearchPage, useOrderSearch } from '../hooks/useOrderSearch'
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, tsdModeLabels, type TsdMode, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
@@ -143,12 +143,16 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
   const [orderChoice, setOrderChoice] = useState<TsdOrderShipments | null>(null)
   const qrRef = useRef<HTMLInputElement>(null)
   const { data: me } = useQuery({ queryKey: ['tsd-me'], queryFn: () => tsdApi.me().then((r) => r.data) })
-  const { data: orderPages, isLoading, error: listError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
+  const { data: orderPages, isLoading, isFetching, error: listError, refetch, hasNextPage, fetchNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ['tsd-orders', deferredSearch, activeFilterId], enabled: !filters.isLoading,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => tsdApi.orders(deferredSearch.trim(), pageParam, activeFilterId).then((r) => r.data),
-    getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined,
+    queryFn: ({ pageParam }) => tsdApi.orders(deferredSearch.trim(), pageParam, activeFilterId).then(orderSearchPage),
+    getNextPageParam: last => last.nextCursor,
   })
+  const orderRows = orderPages?.pages.flatMap(page => page.rows) || []
+  useEffect(() => {
+    if (online && orderRows.length === 0 && hasNextPage && !isFetching && !listError) void fetchNextPage()
+  }, [online, orderRows.length, hasNextPage, isFetching, listError, fetchNextPage])
   const select = useMutation({
     networkMode: 'always',
     mutationFn: (value: { id: string; orderId?: string }) => tsdApi.selectDocument(value.id, value.orderId).then((r) => r.data),
@@ -168,7 +172,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
   useEffect(() => {
     if (qrMode) qrRef.current?.focus()
   }, [qrMode])
-  const filtered = (orderPages?.pages.flat() || []).filter((item) => tab === 'work'
+  const filtered = orderRows.filter((item) => tab === 'work'
     ? (item.active_on_this_device ?? item.in_work) : !(item.active_on_this_device ?? item.in_work))
   const submitQr = (event: FormEvent) => {
     event.preventDefault()
@@ -229,7 +233,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
         {chooseOrder.isPending || select.isPending ? <p role="status" className="tsd-empty">Открываем отгрузки заказа…</p> : null}
         {!isLoading && !listError && filtered.length === 0 ? (
           <div className="tsd-empty">
-            <p>{tab === 'work' ? 'На этом ТСД нет сборок в работе на этой странице' : 'Нет доступных заказов на этой странице'}</p>
+            <p>{hasNextPage && orderRows.length === 0 ? 'Ищем в более ранних заказах…' : tab === 'work' ? 'На этом ТСД нет сборок в работе на этой странице' : 'Нет доступных заказов на этой странице'}</p>
             <button type="button" className="tsd-button" onClick={() => refetch()}>Обновить</button>
           </div>
         ) : null}

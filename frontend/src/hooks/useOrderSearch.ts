@@ -10,3 +10,8 @@ export function useOrderSearch(value: string) {
   }, [query])
   return search
 }
+
+export function orderSearchPage<T>(response: { data: T[]; headers: Record<string, unknown> }) {
+  const cursor = response.headers['x-next-offset']
+  return { rows: response.data, nextCursor: cursor === '' || cursor == null ? undefined : Number(cursor) }
+}

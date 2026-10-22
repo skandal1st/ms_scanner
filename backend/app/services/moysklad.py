@@ -310,6 +310,35 @@ class MoySkladService:
                     return matches[offset:offset + params["limit"]]
                 source_offset += len(page)
 
+    async def get_customer_order_page(self, organization_id: Optional[str], search: Optional[str] = None,
+                                      cursor: int = 0, *, order_filter: Optional[dict] = None) -> tuple[list[dict], Optional[int]]:
+        """Bound each search request; cursor counts source rows, not matches.
+
+        Return matches as soon as available rather than scan years of history to
+        fill 50 results. Empty intermediate pages carry a continuation cursor.
+        """
+        query = (search or "").strip().casefold()
+        extra = {"order_filter": order_filter} if order_filter else {}
+        if not query or query.isdecimal():
+            rows = await self.get_customer_orders(organization_id, search, offset=cursor, **extra)
+            return rows, cursor + len(rows) if len(rows) == 50 else None
+        for _ in range(3):
+            page = await self.get_customer_orders(organization_id, limit=100, offset=cursor, **extra)
+            matches = []
+            for index, row in enumerate(page):
+                fields = (row.get("name"), row.get("description"), (row.get("agent") or {}).get("name"))
+                if any(query in str(value or "").casefold() for value in fields):
+                    matches.append(row)
+                if len(matches) == 50:
+                    consumed = index + 1
+                    return matches, cursor + consumed if consumed < len(page) or len(page) == 100 else None
+            cursor += len(page)
+            if len(page) < 100:
+                return matches, None
+            if matches:
+                return matches, cursor
+        return [], cursor
+
     async def get_customer_order_filter_options(self) -> dict:
         result = {"projects": [], "sale_values": [], "states": [], "sale_attribute_id": None,
                   "sale_dictionary_id": None, "marking_values": [], "marking_attribute_id": None, "marking_dictionary_id": None,

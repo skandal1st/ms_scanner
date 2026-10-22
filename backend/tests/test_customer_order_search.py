@@ -89,3 +89,71 @@ async def test_failed_later_page_is_not_returned_as_empty_search():
     ms._request_with_retry = request
     with pytest.raises(httpx.HTTPStatusError):
         await ms.get_customer_orders("org", "тула")
+
+
+async def test_cursor_returns_recent_match_without_scanning_whole_history():
+    ms = MoySkladService("fake")
+    order = dict(id="target", name="28072", agent={"name": "(Тула)ИП Габибов"})
+    calls = source(ms, [order] + [dict(id=str(i)) for i in range(5000)])
+    rows, cursor = await ms.get_customer_order_page("org", "тула")
+    assert rows == [order] and cursor == 100
+    assert len(calls) == 1
+
+
+async def test_cursor_paginates_all_matches_without_loss_or_duplicates():
+    ms = MoySkladService("fake")
+    rows = [dict(id=str(i), agent={"name": "Тула"}) for i in range(205)]
+    source(ms, rows)
+    found, cursor = [], 0
+    while cursor is not None:
+        page, cursor = await ms.get_customer_order_page("org", "тула", cursor)
+        assert len(page) <= 50
+        found.extend(page)
+    assert found == rows
+
+
+async def test_empty_cursor_page_is_bounded_and_can_continue_to_old_match():
+    ms = MoySkladService("fake")
+    order = dict(id="old", agent={"name": "Тула"})
+    calls = source(ms, [dict(id=str(i)) for i in range(350)] + [order])
+    assert await ms.get_customer_order_page("org", "тула") == ([], 300)
+    assert len(calls) == 3
+    assert await ms.get_customer_order_page("org", "тула", 300) == ([order], None)
+
+
+async def test_cursor_preserves_scope_and_saved_filters():
+    from tests.test_customer_order_filters import multi_preset
+    from app.services.customer_order_filters import moysklad_order_filter_conditions
+    ms = MoySkladService("fake")
+    calls = source(ms, [])
+    preset = multi_preset()
+    assert await ms.get_customer_order_page("org", "тула", order_filter=preset) == ([], None)
+    for condition in moysklad_order_filter_conditions(ms.base_url, preset):
+        assert condition in calls[0]["filter"]
+
+
+async def test_tsd_cursor_response_exposes_continuation(monkeypatch):
+    from fastapi import Response
+    from unittest.mock import AsyncMock
+    from app.api import tsd
+    from tests.test_tsd_orders import context
+    device, _, _, ms, db = context(monkeypatch, ([],))
+    ms.get_customer_order_page = AsyncMock(return_value=([dict(id="target", name="28072")], 100))
+    response = Response()
+    result = await tsd.list_tsd_orders(search="тула", cursor=0, response=response, device=device, db=db)
+    assert result[0].name == "28072" and response.headers["X-Next-Offset"] == "100"
+    ms.get_customer_order_page.assert_awaited_once_with("org", "тула", cursor=0)
+
+
+async def test_pc_cursor_response_marks_end_of_search(monkeypatch):
+    from fastapi import Response
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace as NS
+    from app.api import documents
+    ms = NS(get_customer_order_page=AsyncMock(return_value=([], None)))
+    monkeypatch.setattr(documents, "_get_ms_service", AsyncMock(return_value=ms))
+    response = Response()
+    rows = await documents.list_customer_orders(search="тула", cursor=300, response=response,
+        current_user=NS(), profile=NS(moysklad_organization_id="org"), db=NS())
+    assert rows == [] and response.headers["X-Next-Offset"] == ""
+    ms.get_customer_order_page.assert_awaited_once_with("org", "тула", cursor=300)

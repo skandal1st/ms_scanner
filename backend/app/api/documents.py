@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
@@ -154,13 +154,20 @@ async def list_customer_orders(
     search: Optional[str] = None, offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_user),
     profile: OrganizationProfile = Depends(get_active_organization_profile), db: AsyncSession = Depends(get_db),
-    filter_id: Optional[UUID] = None,
+    filter_id: Optional[UUID] = None, cursor: Optional[int] = None, response: Response = None,
 ):
+    if cursor is not None and cursor < 0:
+        raise HTTPException(400, "Некорректная страница списка заказов")
     selected_filter = resolve_order_filter(profile, filter_id)
     ms = await _get_ms_service(current_user, db)
     try:
-        rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset,
-                                            **({"order_filter": selected_filter} if selected_filter else {}))
+        conditions = {"order_filter": selected_filter} if selected_filter else {}
+        if cursor is not None:
+            rows, next_cursor = await ms.get_customer_order_page(profile.moysklad_organization_id, search,
+                                                                 cursor=cursor, **conditions)
+            response.headers["X-Next-Offset"] = str(next_cursor) if next_cursor is not None else ""
+        else:
+            rows = await ms.get_customer_orders(profile.moysklad_organization_id, search, offset=offset, **conditions)
     except Exception as exc:
         raise _customer_order_error(exc) from exc
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера",

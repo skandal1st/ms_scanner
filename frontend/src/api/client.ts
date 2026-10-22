@@ -433,7 +433,7 @@ export interface InventoryMatchResult {
 
 export const documentsApi = {
   customerOrders: (search: string, offset = 0, filterId?: string) =>
-    api.get<MsDocument[]>('/documents/customer-orders', { params: { search, offset, filter_id: filterId || undefined } }),
+    api.get<MsDocument[]>('/documents/customer-orders', { params: { search, cursor: offset, filter_id: filterId || undefined } }),
   orderShipments: (orderId: string) =>
     api.get<MsDocument[]>(`/documents/customer-orders/${orderId}/shipments`),
   listMs: (kind: DocumentKind, search?: string) =>
@@ -1040,7 +1040,7 @@ export const tsdApi = {
   me: () => tsdClient.get<TsdContext>('/tsd/me'),
   orderFilters: () => tsdClient.get<CustomerOrderFilter[]>('/tsd/order-filters'),
   orders: (search?: string, offset = 0, filterId?: string) =>
-    tsdClient.get<TsdOrderItem[]>('/tsd/orders', { params: { search: search || undefined, offset, filter_id: filterId || undefined } }),
+    tsdClient.get<TsdOrderItem[]>('/tsd/orders', { params: { search: search || undefined, cursor: offset, filter_id: filterId || undefined } }),
   orderShipments: (orderId: string) => tsdClient.get<TsdOrderShipments>(`/tsd/orders/${orderId}/shipments`),
   documents: (search?: string) =>
     tsdClient.get<TsdDocumentItem[]>('/tsd/documents', {

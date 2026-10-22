@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useOrderSearch } from '../hooks/useOrderSearch'
+import { useEffect, useState } from 'react'
+import { orderSearchPage, useOrderSearch } from '../hooks/useOrderSearch'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, organizationProfilesApi } from '../api/client'
 import { CustomerOrderFilterSelect } from './CustomerOrderFilterSelect'
@@ -28,9 +28,15 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
   const orders = useInfiniteQuery({
     queryKey: ['customer-orders', getOrganizationProfileId(), deferredSearch, activeFilterId], enabled: open && !filters.isLoading,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => documentsApi.customerOrders(deferredSearch, pageParam, activeFilterId).then(r => r.data),
-    getNextPageParam: (last, pages) => last.length === 50 ? pages.length * 50 : undefined,
+    queryFn: ({ pageParam }) => documentsApi.customerOrders(deferredSearch, pageParam, activeFilterId).then(orderSearchPage),
+    getNextPageParam: last => last.nextCursor,
   })
+  const orderRows = orders.data?.pages.flatMap(page => page.rows) || []
+  useEffect(() => {
+    if (open && orderRows.length === 0 && orders.hasNextPage && !orders.isFetching && !orders.error) {
+      void orders.fetchNextPage()
+    }
+  }, [open, orderRows.length, orders.hasNextPage, orders.isFetching, orders.error, orders.fetchNextPage])
   const resolve = useMutation({
     networkMode: 'always',
     mutationFn: ({ shipment, order }: { shipment: MsDocument; order: MsDocument }) =>
@@ -69,8 +75,8 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
           value={search} disabled={busy} onChange={event => setSearch(event.target.value)} />
         {orders.isLoading && <p role="status" className="hint">Загружаем заказы…</p>}
         {orders.error && <div className="alert alert--error">{errorMessage(orders.error)} <button type="button" className="button button--sm" onClick={() => orders.refetch()}>Повторить</button></div>}
-        {!orders.isLoading && !orders.error && orders.data?.pages.flat().length === 0 && <p className="hint">Заказы не найдены.</p>}
-        <div className="doc-list">{orders.data?.pages.flat().map(order => <button key={order.id} type="button" className="doc-list__item" disabled={busy}
+        {!orders.isLoading && !orders.error && orderRows.length === 0 && <p className="hint">{orders.hasNextPage ? 'Ищем в более ранних заказах…' : 'Заказы не найдены.'}</p>}
+        <div className="doc-list">{orderRows.map(order => <button key={order.id} type="button" className="doc-list__item" disabled={busy}
           onClick={() => choose.mutate(order)}><span>Заказ {order.name}<small style={{ display: 'block' }}>{order.agent_name || 'Контрагент не указан'}</small></span><span className="customer-order-picker__summary"><OrderStatusBadge name={order.state_name} color={order.state_color} /><small className="doc-list__item-count">{order.shipment_count === null ? 'Проверить отгрузки' : order.shipment_count ? `Отгрузок: ${order.shipment_count}` : order.retail_sale_count ? 'Розничная продажа' : order.shipment_count === 0 ? 'Нет отгрузки' : 'Открыть'}</small></span></button>)}</div>
         {orders.hasNextPage && <button type="button" className="button button--sm" disabled={busy || orders.isFetchingNextPage} onClick={() => orders.fetchNextPage()}>Показать ещё заказы</button>}
       </>}
