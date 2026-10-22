@@ -77,9 +77,8 @@ def _build_moysklad_scans_data(
     """Подготовить сканы к записи в позиции документа МойСклад.
 
     Для отгрузки SSCC, который пользователь выбрал как «короб целиком»
-    (``is_box=True``), всегда остаётся одним ``transportpack``. Состав короба может
-    быть сохранён в ``child_codes`` после проверки в ЧЗ, но это справочная
-    информация и не должно превращать выбранный пользователем короб в пачки.
+    (``is_box=True, box_expanded=False``), остаётся одним ``transportpack``.
+    Само наличие ``child_codes`` не меняет режим: раскрытие выбирает пользователь.
 
     При приёмке агрегаты по-прежнему разворачиваются: этот поток импортирует коды
     упаковок из УПД и записывает в МС вложенные марки.
@@ -94,7 +93,11 @@ def _build_moysklad_scans_data(
                 else None
             )
         )
-        send_whole_box = kind == "demand" and bool(scan.is_box or getattr(scan, "keep_aggregate", False))
+        expanded_sscc = scan.is_box and getattr(scan, "box_expanded", False)
+        if expanded_sscc and not scan.child_codes:
+            raise ValueError("Состав раскрытого SSCC-короба не получен. Раскройте короб повторно.")
+        send_whole_box = kind == "demand" and bool(
+            (scan.is_box and not expanded_sscc) or (not scan.is_box and getattr(scan, "keep_aggregate", False)))
         if scan.child_codes and not send_whole_box:
             # Развёрнутый агрегат: в МС пишем КМ вложенных пачек поштучно.
             for child_code in scan.child_codes:
@@ -451,13 +454,19 @@ async def _unpack_scan_async(scan_id, user_id, old_status):
         try:
             token = await _get_cz_token(db, user_id, scan.document_id)
             if not token:
-                raise ValueError("Войдите в Честный Знак для получения состава блока")
+                raise ValueError("Войдите в Честный Знак для получения состава упаковки")
             groups = await _get_cz_product_groups(db, user_id, scan.document_id)
-            info = await ChestnyZnakService(token=token, mock=False, product_groups=groups).get_code_info(scan.code)
-            if not info or not info.children:
-                raise ValueError("Честный Знак не вернул состав упаковки. Блок сохранён целиком.")
-            children = list(dict.fromkeys(info.children))
-            kind = package_type(info.package_type)
+            cz = ChestnyZnakService(token=token, mock=False, product_groups=groups)
+            if scan.is_box:
+                # SSCC must never pass through the individual-CIS normalizer.
+                children = list(dict.fromkeys(await cz.unpack_box(normalize_sscc(scan.code))))
+                kind = 'BOX'
+            else:
+                info = await cz.get_code_info(scan.code)
+                children = list(dict.fromkeys(info.children)) if info else []
+                kind = package_type(info.package_type) if info else None
+            if not children:
+                raise ValueError("Честный Знак не вернул состав упаковки. Упаковка сохранена целиком.")
         except Exception as exc:
             logger.warning('scan.unpack_failed', scan_id=scan_id, error=str(exc))
             error = str(exc) if isinstance(exc, ValueError) else "Не удалось получить состав упаковки. Повторите попытку."
@@ -475,12 +484,15 @@ async def _unpack_scan_async(scan_id, user_id, old_status):
             scan.box_quantity = len(children)
             scan.package_type = kind or 'GROUP'
             scan.keep_aggregate = False
+            if scan.is_box:
+                scan.box_expanded = True
         await db.commit()
         await _push_ws_update(user_id, scan_id, scan.status.value, scan.product_name,
                               scan.error_message, document_id=str(scan.document_id), gtin=scan.gtin,
                               moysklad_product_id=scan.moysklad_product_id, is_box=scan.is_box,
                               box_quantity=scan.box_quantity, child_codes=scan.child_codes,
-                              package_type=scan.package_type, keep_aggregate=scan.keep_aggregate)
+                              package_type=scan.package_type, keep_aggregate=scan.keep_aggregate,
+                              box_expanded=getattr(scan, 'box_expanded', False))
 
 
 async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
@@ -1129,6 +1141,7 @@ async def _push_ws_update(
     child_codes: Optional[list] = None,
     package_type: Optional[str] = None,
     keep_aggregate: Optional[bool] = None,
+    box_expanded: Optional[bool] = None,
     verification: Optional[dict] = None,
     verified_at=None,
 ):
@@ -1156,6 +1169,7 @@ async def _push_ws_update(
         "child_codes": child_codes,
         "package_type": package_type,
         "keep_aggregate": keep_aggregate,
+        "box_expanded": box_expanded,
         "verification": localize_cz_verification(verification),
         "verified_at": verified_at.isoformat() if verified_at else None,
     })
@@ -1409,7 +1423,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         # такие агрегаты в листовые КМ пачек через ЧЗ (cises/info + aggregated/list,
         # «короб→блоки→пачки»), иначе в МС уйдёт код блока как одна штука. Сканы
         # отгрузки (demand) уже развёрнуты в verify_code_task — у них child_codes есть.
-        # В отгрузке is_box означает явный выбор «Короб: целиком»: такой SSCC
+        # В отгрузке SSCC без box_expanded означает выбор «Короб: целиком»: такой SSCC
         # отправляем одним transportpack и не раскрываем здесь повторно. Для режима
         # «раскрывать» /scans/box сразу создаёт отдельные сканы пачек (is_box=False).
         # Автоматическое раскрытие перед записью требуется только для приёмки по УПД.

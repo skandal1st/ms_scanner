@@ -92,9 +92,10 @@ interface ScanStore {
   /** Истёк/отсутствует токен ЧЗ — нужен вход для распознавания кодов (баннер). */
   czTokenExpired: boolean
   setCzTokenExpired: (v: boolean) => void
-  /** id строки для кратковременной подсветки (повторный скан существующего кода). */
+  /** Last repeated scan stays highlighted until the next accepted scan. */
   flashScanId: string | null
-  /** Подсветить строку скана: выставить id и через ~1.2с сбросить. */
+  flashScanVersion: number
+  /** Reveal a repeated scan, including consecutive repeats of the same mark. */
   flashScan: (id: string) => void
   /** Идёт пакетная проверка марок в ЧЗ (между «Проверить марки» и событием verify_done). */
   verifying: boolean
@@ -373,6 +374,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   unpackBox: true,
   czTokenExpired: false,
   flashScanId: null,
+  flashScanVersion: 0,
   verifying: false,
   writeoffResult: null,
 
@@ -389,15 +391,9 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),
   setCzTokenExpired: (v) => set({ czTokenExpired: v }),
-  flashScan: (id) => {
-    set({ flashScanId: id })
-    setTimeout(() => {
-      // Сбрасываем только если за это время не подсветили другую строку.
-      if (get().flashScanId === id) set({ flashScanId: null })
-    }, 1200)
-  },
+  flashScan: (id) => set(state => ({ flashScanId: id, flashScanVersion: state.flashScanVersion + 1, selection: null })),
 
-  setDocument: (doc) => set({ document: doc, targetProductId: null, selection: null, deleteMode: false }),
+  setDocument: (doc) => set({ document: doc, targetProductId: null, selection: null, deleteMode: false, flashScanId: null }),
 
   setScans: (scans) => set({ scans, stats: calcStats(scans) }),
 
@@ -410,7 +406,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
         idx >= 0
           ? state.scans.map((s) => (s.id === scan.id ? scan : s))
           : [scan, ...state.scans]
-      return { scans, stats: calcStats(scans) }
+      return { scans, stats: calcStats(scans), flashScanId: null }
     }),
 
   updateScan: (id, update) =>
@@ -433,6 +429,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       targetProductId: null,
       selection: null,
       deleteMode: false,
+      flashScanId: null,
       verifying: false,
     }),
 

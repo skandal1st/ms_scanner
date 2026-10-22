@@ -359,10 +359,9 @@ class Scan(Base):
     status = Column(Enum(ScanStatus), default=ScanStatus.pending, nullable=False)
     product_name = Column(String(500), nullable=True)
     error_message = Column(Text, nullable=True)
-    # Короб SSCC, сохранённый «целиком» (без раскрытия на штучные КМ).
-    # is_box=True → code хранит SSCC, box_quantity = число SGTIN внутри (из ЧЗ sscc_check).
-    # В МС такой скан пишется одним trackingCode type=transportpack с quantity=box_quantity.
+    # SSCC identity survives switching between transportpack and individual marks.
     is_box = Column(Boolean, nullable=False, default=False, server_default="false")
+    box_expanded = Column(Boolean, nullable=False, default=False, server_default="false")
     box_quantity = Column(Integer, nullable=True)
     package_type = Column(String(16), nullable=True)
     # GROUP/BOX aggregate can be sent intact without becoming an SSCC transportpack.
@@ -372,8 +371,7 @@ class Scan(Base):
     # позиции без trackingCode.
     is_barcode = Column(Boolean, nullable=False, default=False, server_default="false")
     # Состав агрегата (блок/групповая упаковка): КМ вложенных пачек из ЧЗ cises/info.
-    # Непустой → скан представляет box_quantity единиц и при process разворачивается
-    # в эти коды поштучно (is_box=False; в отличие от SSCC-transportpack).
+    # Composition alone does not change the write mode of an intact SSCC.
     child_codes = Column(JSONB, nullable=True)
     # Владелец и производитель КМ из ЧЗ (cises/info) — для отображения при проверке.
     owner_name = Column(String(500), nullable=True)

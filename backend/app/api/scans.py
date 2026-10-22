@@ -50,6 +50,7 @@ class ScanResponse(BaseModel):
     error_message: Optional[str] = None
     scanned_at: datetime
     is_box: bool = False
+    box_expanded: bool = False
     package_type: Optional[str] = None
     keep_aggregate: bool = False
     box_quantity: Optional[int] = None
@@ -135,8 +136,8 @@ async def set_scan_pack_mode(db, scan, user_id, unpack):
     await editable_document(db, scan.document_id, user_id)
     await db.refresh(scan)
     from app.services.scan_packaging import scan_package_type
-    if scan.is_box or scan.is_barcode or scan_package_type(scan) not in {"GROUP", "BOX"}:
-        raise HTTPException(400, "Выберите блок или групповую упаковку")
+    if scan.is_barcode or scan_package_type(scan) not in {"GROUP", "BOX"}:
+        raise HTTPException(400, "Выберите блок или короб")
     if scan.status in {ScanStatus.pending, ScanStatus.invalid, ScanStatus.used_in_other_doc}:
         raise HTTPException(409, "Дождитесь проверки упаковки или устраните ошибку марки")
     if unpack and not scan.child_codes:
@@ -153,6 +154,11 @@ async def set_scan_pack_mode(db, scan, user_id, unpack):
             raise HTTPException(503, "Не удалось запустить раскрытие упаковки. Повторите попытку.") from exc
     else:
         scan.keep_aggregate = not unpack
+        if scan.is_box:
+            scan.box_expanded = unpack
+            if unpack:
+                scan.child_codes = list(dict.fromkeys(scan.child_codes))
+                scan.box_quantity = len(scan.child_codes)
         scan.error_message = None
         await db.commit()
     await db.refresh(scan)

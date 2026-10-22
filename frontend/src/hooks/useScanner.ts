@@ -78,16 +78,17 @@ export function useScanner(documentId: string | null) {
             state.unpackBox,
           )
           let hadError = false
+          let repeatedId: string | null = null
           boxScans.forEach((s) => {
+            addScan(s)
             if (s.duplicate) {
-              // Повторный скан в этом документе — строку не добавляем, подсвечиваем существующую.
-              flashScan(s.id)
+              repeatedId = s.id
               hadError = true
             } else {
-              addScan(s)
               if (s.status === 'used_in_other_doc') hadError = true
             }
           })
+          if (repeatedId) flashScan(repeatedId)
           if (hadError) playBeep('error')
           return
         }
@@ -100,6 +101,7 @@ export function useScanner(documentId: string | null) {
         )
         if (scan.duplicate) {
           // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
+          addScan(scan)
           flashScan(scan.id)
           playBeep('error')
           return

@@ -9,7 +9,7 @@ const source = fs.readFileSync(path.join(root, 'src/lib/scanPackaging.ts'), 'utf
 const exportsObject = {};
 vm.runInNewContext(ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,
   {exports:exportsObject, require:req});
-const {scanPackageLabel,scanPackageType} = exportsObject;
+const {scanPackageLabel,scanPackageType,shouldUnpack,packActionLabel} = exportsObject;
 test('pack GTIN displays a block of ten independently of the SSCC flag',()=>{
  const scan={package_type:'GROUP',is_box:false,box_quantity:10,keep_aggregate:true};
  assert.equal(scanPackageType(scan),'GROUP');
@@ -23,4 +23,15 @@ test('transport boxes, unit marks and unmarked barcode quantities remain distinc
  assert.equal(scanPackageLabel({is_box:true,box_quantity:20}),'Короб · 20 шт. · целиком');
  assert.equal(scanPackageLabel({}),'Отдельная марка · 1 шт.');
  assert.equal(scanPackageLabel({is_barcode:true,box_quantity:10}),'Штрихкод · 10 шт.');
+});
+
+test('legacy SSCC with known composition stays whole until explicitly expanded',()=>{
+ const scan={is_box:true,box_quantity:20,child_codes:['a','b'],keep_aggregate:false};
+ assert.equal(scanPackageLabel(scan),'Короб · 20 шт. · целиком');
+ assert.equal(shouldUnpack(scan),true);
+ assert.equal(packActionLabel(scan),'Раскрыть короб на вложенные марки');
+ const expanded={...scan,box_expanded:true,box_quantity:2};
+ assert.equal(scanPackageLabel(expanded),'Короб · 2 шт. · вложенные марки');
+ assert.equal(shouldUnpack(expanded),false);
+ assert.equal(packActionLabel(expanded),'Сохранить короб целиком');
 });

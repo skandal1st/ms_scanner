@@ -18,7 +18,7 @@ import { applyScanEvent } from '../lib/scanEvents'
 import { parseTsdDocumentCode } from '../lib/tsdLinks'
 import { Icon } from '../components/Icon'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
-import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
+import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 
 function progressState(added: number, expected: number) {
@@ -327,7 +327,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const current = target || (last && rowForScan(last)) || progress.rows.find((row) => row.addedTotal < row.expected) || progress.rows[0]
   const selectedScan = doc.scans.find((item) => item.id === selectedScanId)
   const activePack = selectedScan || lastScanned
-  const canChangePack = activePack && !activePack.is_box && !activePack.is_barcode
+  const canChangePack = activePack && !activePack.is_barcode
     && scanPackageType(activePack) !== 'UNIT'
   const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
     || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
@@ -436,11 +436,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   })
   const packMode = useMutation({
     networkMode: 'always',
-    mutationFn: (item: typeof last) => tsdApi.packMode(doc.id, item.id, Boolean(item.keep_aggregate || !item.child_codes?.length)),
+    mutationFn: (item: typeof last) => tsdApi.packMode(doc.id, item.id, shouldUnpack(item)),
     onSuccess: ({ data }) => {
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], previous => previous
         ? { ...previous, scans: previous.scans.map(item => item.id === data.id ? data : item) } : previous)
-      setMessage({ kind: 'ok', text: data.status === 'pending' ? 'Получаем состав блока из Честного Знака…' : scanPackageLabel(data) })
+      setMessage({ kind: 'ok', text: data.status === 'pending' ? 'Получаем состав упаковки из Честного Знака…' : scanPackageLabel(data) })
       refresh()
     },
     onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },
@@ -508,15 +508,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             }}>Режим добавления</button>}
           <button type="button" data-tsd-sound className="tsd-button" aria-label={sound.active ? 'Отключить звук' : 'Включить звук'} aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук вкл.' : 'Звук выкл.'}</button>
         </div>
-        {canChangePack && <div className="tsd-pack-control" aria-label="Обработка блока">
-          <span>{selectedScan ? 'Выбранный блок' : 'Последний блок'} · {scanPackageLabel(activePack)}</span>
+        {canChangePack && <div className="tsd-pack-control" aria-label="Обработка упаковки">
+          <span>{selectedScan ? 'Выбранная упаковка' : 'Последняя упаковка'} · {scanPackageLabel(activePack)}</span>
           <button type="button" className="tsd-button tsd-button--primary"
             disabled={!online || scannerBlocked || Boolean(code.trim()) || activePack.status === 'pending'
               || ['invalid', 'used_in_other_doc'].includes(activePack.status) || doc.status !== 'draft'}
             onClick={() => packMode.mutate(activePack)}>
-            {activePack.status === 'pending' ? 'Получаем состав…'
-              : activePack.keep_aggregate || !activePack.child_codes?.length
-                ? 'Раскрыть блок на вложенные марки' : 'Сохранить блок целиком'}
+            {activePack.status === 'pending' ? 'Получаем состав…' : packActionLabel(activePack)}
           </button>
           {activePack.error_message && <span role="alert">{activePack.error_message}</span>}
         </div>}
@@ -598,7 +596,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             <strong>Выбранный скан</strong><code>{selectedScan.code}</code>
             <p>{scanPackageLabel(selectedScan)}</p>
             {scanUnits(selectedScan) > 1 && <p>Удаляется вся упаковка: {scanUnits(selectedScan)} шт.</p>}
-            {!selectedScan.is_box && !selectedScan.is_barcode && scanPackageType(selectedScan) !== 'UNIT' && <>
+            {!selectedScan.is_barcode && scanPackageType(selectedScan) !== 'UNIT' && <>
               {selectedScan.child_codes?.length ? <details><summary>Марки внутри ({selectedScan.child_codes.length})</summary>
                 {selectedScan.child_codes.map((child) => <code key={child}>{child}</code>)}</details> : null}
             </>}

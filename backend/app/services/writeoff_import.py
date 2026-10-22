@@ -68,7 +68,8 @@ async def import_shipment_codes(db, document_id, user_id, *, source_id=None):
     for scan in additions:
         db.add(Scan(document_id=target.id, code=scan.code, original_code=scan.original_code, gtin=scan.gtin, serial=scan.serial,
             moysklad_product_id=scan.moysklad_product_id, product_name=scan.product_name,
-            is_box=scan.is_box, box_quantity=scan.box_quantity, package_type=scan.package_type,
+            is_box=scan.is_box, box_expanded=scan.box_expanded,
+            box_quantity=scan.box_quantity, package_type=scan.package_type,
             keep_aggregate=scan.keep_aggregate, child_codes=copy.deepcopy(scan.child_codes),
             status=ScanStatus.scanned))
     target.upd_meta = {**(target.upd_meta or {}), 'shipment_codes_import': {'source_id': str(source.id)}}

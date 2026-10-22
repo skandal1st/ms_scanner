@@ -1,6 +1,9 @@
-import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useScanStore } from '../store/scanStore'
 
 export type FlowWorkspaceTab = 'summary' | 'marks'
+const MarksPanelVisible = createContext(true)
+export const useMarksPanelVisible = () => useContext(MarksPanelVisible)
 
 interface FlowWorkspaceTabsProps {
   summaryLabel: string
@@ -15,6 +18,8 @@ interface FlowWorkspaceTabsProps {
 }
 
 export function useFlowWorkspaceTab(storageKey: string) {
+  const repeatId = useScanStore(state => state.flashScanId)
+  const repeatVersion = useScanStore(state => state.flashScanVersion)
   const [active, setActive] = useState<FlowWorkspaceTab>(() =>
     sessionStorage.getItem(storageKey) === 'marks' ? 'marks' : 'summary',
   )
@@ -22,6 +27,9 @@ export function useFlowWorkspaceTab(storageKey: string) {
   useEffect(() => {
     sessionStorage.setItem(storageKey, active)
   }, [active, storageKey])
+  useEffect(() => {
+    if (repeatId) setActive('marks')
+  }, [repeatId, repeatVersion])
 
   return [active, setActive] as const
 }
@@ -102,7 +110,7 @@ export function FlowWorkspaceTabs({
         className="flow-tabs__panel"
         hidden={active !== 'marks'}
       >
-        {marks}
+        <MarksPanelVisible.Provider value={active === 'marks'}>{marks}</MarksPanelVisible.Provider>
       </div>
     </section>
   )

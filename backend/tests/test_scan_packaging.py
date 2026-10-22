@@ -13,10 +13,13 @@ from tests.test_release_processing import Result
 
 
 def pack(**changes):
-    return NS(id=uuid4(), document_id=uuid4(), status=ScanStatus.valid, is_box=False,
+    values = dict(id=uuid4(), document_id=uuid4(), status=ScanStatus.valid, is_box=False,
         is_barcode=False, box_quantity=10, child_codes=None, keep_aggregate=True,
+        box_expanded=False,
         package_type='GROUP', code='010466051533035921TEST\x1d93TEST', gtin='04660515330359',
-        moysklad_product_id='flavor', product_name='Аромат', error_message=None, **changes)
+        moysklad_product_id='flavor', product_name='Аромат', error_message=None)
+    values.update(changes)
+    return NS(**values)
 
 
 def test_group_and_transport_pack_are_distinct():
@@ -32,20 +35,24 @@ def test_group_and_transport_pack_are_distinct():
     assert len(children) == 2 and all(row['quantity'] == 1 for row in children)
 
 
-async def test_pack_mode_with_known_children_never_calls_cz(monkeypatch):
-    p = pack()
+@pytest.mark.parametrize('is_box', [False, True])
+async def test_pack_mode_with_known_children_never_calls_cz(monkeypatch, is_box):
+    p = pack(is_box=is_box, package_type='BOX' if is_box else 'GROUP')
     p.child_codes = ['child']
     monkeypatch.setattr(scans, 'editable_document', AsyncMock())
     db = NS(commit=AsyncMock(), refresh=AsyncMock())
     monkeypatch.setattr(scans.ScanResponse, 'model_validate', Mock(side_effect=lambda s: s))
     await scans.set_scan_pack_mode(db, p, uuid4(), True)
     assert not p.keep_aggregate and p.child_codes == ['child']
+    assert p.box_expanded == is_box
     await scans.set_scan_pack_mode(db, p, uuid4(), False)
-    assert p.keep_aggregate and p.box_quantity == 10
+    assert p.keep_aggregate and p.box_quantity == (1 if is_box else 10)
+    assert not p.box_expanded and p.is_box == is_box
 
 
-async def test_pack_mode_queues_work_without_external_api(monkeypatch):
-    p = pack()
+@pytest.mark.parametrize('is_box', [False, True])
+async def test_pack_mode_queues_work_without_external_api(monkeypatch, is_box):
+    p = pack(is_box=is_box, package_type='BOX' if is_box else 'GROUP')
     monkeypatch.setattr(scans, 'editable_document', AsyncMock())
     queue = Mock()
     monkeypatch.setattr(tasks.unpack_scan_task, 'delay', queue)
@@ -53,7 +60,45 @@ async def test_pack_mode_queues_work_without_external_api(monkeypatch):
     db = NS(commit=AsyncMock(), refresh=AsyncMock())
     await scans.set_scan_pack_mode(db, p, uuid4(), True)
     assert p.status == ScanStatus.pending and p.keep_aggregate
+    assert not p.box_expanded
     queue.assert_called_once()
+
+
+async def test_sscc_cached_composition_switches_ms_payload_and_keeps_identity(monkeypatch):
+    from app.services.moysklad import MoySkladService
+    p = pack(is_box=True, keep_aggregate=False, package_type='BOX', code='00046402759700334510',
+             child_codes=['010464027597309621UNIT001', '010464027597309621UNIT002', '010464027597309621UNIT001'])
+    monkeypatch.setattr(scans, 'editable_document', AsyncMock())
+    monkeypatch.setattr(scans.ScanResponse, 'model_validate', Mock(side_effect=lambda s: s))
+    db = NS(commit=AsyncMock(), refresh=AsyncMock())
+    # Legacy boxes have keep_aggregate=False but must stay intact until explicitly opened.
+    assert tasks._build_moysklad_scans_data([p], 'demand', {})[0]['is_box']
+    await scans.set_scan_pack_mode(db, p, uuid4(), True)
+    rows = tasks._build_moysklad_scans_data([p], 'demand', {})
+    assert p.is_box and p.code == '00046402759700334510' and p.box_quantity == 2
+    assert [r['code'] for r in rows] == p.child_codes and len(rows) == 2
+    assert all(not r['is_box'] and r['quantity'] == 1 for r in rows)
+    ms = MoySkladService('fake')
+    assert all(ms._tracking_code_entry(row, 'TOBACCO')['type'] == 'trackingcode' for row in rows)
+    await scans.set_scan_pack_mode(db, p, uuid4(), False)
+    rows = tasks._build_moysklad_scans_data([p], 'demand', {})
+    assert len(rows) == 1 and rows[0]['quantity'] == 2
+    assert ms._tracking_code_entry(rows[0], 'TOBACCO')['type'] == 'transportpack'
+
+
+async def test_sscc_queue_failure_keeps_whole_box(monkeypatch):
+    p = pack(is_box=True, package_type='BOX')
+    monkeypatch.setattr(scans, 'editable_document', AsyncMock())
+    monkeypatch.setattr(tasks.unpack_scan_task, 'delay', Mock(side_effect=RuntimeError('broker unavailable')))
+    with pytest.raises(HTTPException) as error:
+        await scans.set_scan_pack_mode(NS(commit=AsyncMock(), refresh=AsyncMock()), p, uuid4(), True)
+    assert error.value.status_code == 503 and p.status == ScanStatus.valid
+    assert not p.box_expanded and p.is_box and p.box_quantity == 10
+
+
+def test_expanded_sscc_without_contents_cannot_silently_send_whole_box():
+    with pytest.raises(ValueError, match='Состав раскрытого SSCC'):
+        tasks._build_moysklad_scans_data([pack(is_box=True, box_expanded=True)], 'demand', {})
 
 
 async def test_unit_and_frozen_document_cannot_change_pack_mode(monkeypatch):
@@ -71,8 +116,10 @@ async def test_unit_and_frozen_document_cannot_change_pack_mode(monkeypatch):
 
 
 @pytest.mark.parametrize('children', [[], ['first', 'second']])
-async def test_unpack_task_keeps_whole_pack_until_composition_received(monkeypatch, children):
-    p = pack()
+@pytest.mark.parametrize('is_box', [False, True])
+async def test_unpack_task_keeps_whole_pack_until_composition_received(monkeypatch, children, is_box):
+    p = pack(is_box=is_box, package_type='BOX' if is_box else 'GROUP',
+             code='00046402759700334510' if is_box else '010466051533035921TEST\x1d93TEST')
     p.status = ScanStatus.pending
     db = NS(execute=AsyncMock(side_effect=[Result(p), Result(NS(status=DocumentStatus.draft)), Result(p)]),
             rollback=AsyncMock(), commit=AsyncMock())
@@ -83,15 +130,23 @@ async def test_unpack_task_keeps_whole_pack_until_composition_received(monkeypat
     monkeypatch.setattr(app.db.session, 'AsyncSessionLocal', session)
     monkeypatch.setattr(tasks, '_get_cz_token', AsyncMock(return_value='fake'))
     monkeypatch.setattr(tasks, '_get_cz_product_groups', AsyncMock(return_value=['tobacco']))
-    monkeypatch.setattr(tasks, 'ChestnyZnakService', Mock(return_value=NS(
-        get_code_info=AsyncMock(return_value=NS(children=children, package_type='GROUP')))))
+    cz = NS(get_code_info=AsyncMock(return_value=NS(children=children, package_type='GROUP')),
+            unpack_box=AsyncMock(return_value=children))
+    monkeypatch.setattr(tasks, 'ChestnyZnakService', Mock(return_value=cz))
     monkeypatch.setattr(tasks, '_push_ws_update', AsyncMock())
     await tasks._unpack_scan_async(str(p.id), str(uuid4()), 'valid')
     assert p.status == ScanStatus.valid
+    if is_box:
+        cz.unpack_box.assert_awaited_once_with(p.code)
+        cz.get_code_info.assert_not_awaited()
     if children:
         assert p.child_codes == children and p.box_quantity == 2 and not p.keep_aggregate
+        assert p.box_expanded == is_box
+        update = tasks._push_ws_update.call_args.kwargs
+        assert update['box_expanded'] == is_box and update['is_box'] == is_box
     else:
         assert p.keep_aggregate and p.box_quantity == 10 and p.error_message
+        assert not p.box_expanded
 
 
 async def test_opening_legacy_plan_updates_pack_metadata_and_existing_counts():

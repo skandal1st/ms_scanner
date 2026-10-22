@@ -491,6 +491,7 @@ export interface Scan {
   is_box?: boolean
   package_type?: 'UNIT' | 'GROUP' | 'BOX' | null
   keep_aggregate?: boolean
+  box_expanded?: boolean
   /** Скан обычного штрихкода немаркированного товара (не КМ): box_quantity — кол-во. */
   is_barcode?: boolean
   /** Число SGTIN внутри короба/блока (из ЧЗ) либо кол-во для штрихкодового скана. */

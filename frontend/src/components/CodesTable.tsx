@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import {
   useScanStore,
   effectiveGtinKey,
@@ -8,7 +8,8 @@ import {
 import { scansApi, type Scan } from '../api/client'
 import { verificationLabel, ownerCheckLabel, ownerBadgeLabel } from '../lib/scanVerification'
 import { Icon } from './Icon'
-import { scanPackageLabel, scanPackageType } from '../lib/scanPackaging'
+import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
+import { useMarksPanelVisible } from './FlowWorkspaceTabs'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
@@ -26,6 +27,7 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
     scans,
     removeScan,
     flashScanId,
+    flashScanVersion,
     selection,
     setSelection,
     setTargetProductId,
@@ -86,6 +88,7 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
                 signatureInn={signatureInn}
                 isExpanded={expanded === scan.id}
                 isFlash={flashScanId === scan.id}
+                flashVersion={flashScanVersion}
                 isSelected={Boolean(selection && selectionMatchesScan(selection, scan))}
                 onToggle={() => {
                   setExpanded(expanded === scan.id ? null : scan.id)
@@ -142,6 +145,7 @@ function ScanRow({
   signatureInn,
   isExpanded,
   isFlash,
+  flashVersion,
   isSelected,
   onToggle,
   onDelete,
@@ -150,6 +154,7 @@ function ScanRow({
   signatureInn?: string | null
   isExpanded: boolean
   isFlash: boolean
+  flashVersion: number
   isSelected: boolean
   onToggle: () => void
   onDelete: () => void
@@ -161,14 +166,22 @@ function ScanRow({
   const [changingPack, setChangingPack] = useState(false)
   const [packError, setPackError] = useState('')
   const document = useScanStore((state) => state.document)
+  const rowRef = useRef<HTMLTableRowElement>(null)
+  const marksVisible = useMarksPanelVisible()
+  useEffect(() => {
+    if (!isFlash || !marksVisible) return
+    // Let the marks tab become visible before locating the row; keep scanner focus.
+    const frame = requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: 'center', behavior: 'instant' }))
+    return () => cancelAnimationFrame(frame)
+  }, [isFlash, flashVersion, marksVisible])
   const changePack = async () => {
     setChangingPack(true)
     setPackError('')
     try {
-      const { data } = await scansApi.packMode(scan.id, Boolean(scan.keep_aggregate || !scan.child_codes?.length))
+      const { data } = await scansApi.packMode(scan.id, shouldUnpack(scan))
       useScanStore.getState().updateScan(scan.id, data)
     } catch (error: any) {
-      setPackError(String(error.response?.data?.detail || 'Не удалось изменить обработку блока'))
+      setPackError(String(error.response?.data?.detail || 'Не удалось изменить обработку упаковки'))
     } finally { setChangingPack(false) }
   }
   // Сверка владельца марки с владельцем подписи (только отгрузка). Подсветка, не блокировка.
@@ -177,15 +190,16 @@ function ScanRow({
     owner === 'mismatch' ? 'is-owner-mismatch' : owner === 'unknown' ? 'is-owner-unknown' : ''
   // Марка выведена из оборота / заблокирована (ЧЗ). Подсветка + предупреждение, не блокирует.
   const withdrawnCls = scan.withdrawn ? 'is-withdrawn' : ''
-  // Агрегат (блок/короб): развёрнут в единицы — box_quantity/child_codes без is_box.
+  // Aggregate controls apply to both group packs and SSCC transport boxes.
   // Штрихкод немаркированного товара (is_barcode) — не агрегат: box_quantity = кол-во.
   const childCount = scan.child_codes?.length ?? 0
   const isAggregate =
-    !scan.is_box && !scan.is_barcode && scanPackageType(scan) !== 'UNIT'
+    !scan.is_barcode && scanPackageType(scan) !== 'UNIT'
 
   return (
     <>
       <tr
+        ref={rowRef}
         className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''} ${ownerCls} ${withdrawnCls}`}
         onClick={onToggle}
       >
@@ -204,11 +218,6 @@ function ScanRow({
           ) : (
             <span className="text-muted">—</span>
           )}
-          {scan.is_box ? (
-            <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
-              {scanPackageLabel(scan)}
-            </div>
-          ) : null}
           {isAggregate ? (
             <div style={{ fontSize: 10, marginTop: 2, color: 'var(--brand)' }}>
               {scanPackageLabel(scan)}
@@ -226,6 +235,7 @@ function ScanRow({
           ) : null}
         </td>
         <td>
+          {isFlash && <span role="status" className="badge badge--warn scan-repeat-badge">Повторный скан</span>}
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
           {scan.withdrawn && (
             <span
@@ -273,11 +283,11 @@ function ScanRow({
       {isExpanded && (
         <tr>
           <td colSpan={4} className="scans-expanded">
-            {!scan.is_box && !scan.is_barcode && scanPackageType(scan) !== 'UNIT' && <div className="scans-expanded__row">
+            {isAggregate && <div className="scans-expanded__row">
               <span>{scanPackageLabel(scan)}</span>
               <button type="button" className="button" disabled={changingPack || scan.status === 'pending' || document?.status !== 'draft'}
                 onClick={() => void changePack()}>
-                {changingPack || scan.status === 'pending' ? 'Получаем состав…' : scan.keep_aggregate || !childCount ? 'Раскрыть блок на вложенные марки' : 'Сохранить блок целиком'}
+                {changingPack || scan.status === 'pending' ? 'Получаем состав…' : packActionLabel(scan)}
               </button>
               {packError && <span role="alert">{packError}</span>}
             </div>}
