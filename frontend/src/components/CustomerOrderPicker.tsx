@@ -1,4 +1,5 @@
-import { useDeferredValue, useState } from 'react'
+import { useState } from 'react'
+import { useOrderSearch } from '../hooks/useOrderSearch'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { documentsApi, organizationProfilesApi } from '../api/client'
 import { CustomerOrderFilterSelect } from './CustomerOrderFilterSelect'
@@ -21,7 +22,7 @@ export function CustomerOrderPicker({ onSelect, disabled }: { onSelect: (doc: Do
   const filters = useQuery({ queryKey: ['customer-order-filters', getOrganizationProfileId()], enabled: open,
     queryFn: () => organizationProfilesApi.orderFilters().then(r => r.data), refetchInterval: open ? 30_000 : false })
   const activeFilterId = filters.data?.some(f => f.id === filterId) ? filterId : ''
-  const deferredSearch = useDeferredValue(search.trim())
+  const deferredSearch = useOrderSearch(search)
   const [choice, setChoice] = useState<{ order: MsDocument; shipments: MsDocument[] } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const orders = useInfiniteQuery({

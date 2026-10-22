@@ -1,4 +1,5 @@
-import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useOrderSearch } from '../hooks/useOrderSearch'
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { tsdApi, tsdModeLabels, type TsdMode, type TsdDocumentDetail, type TsdDocumentItem, type TsdOrderShipments } from '../api/client'
@@ -134,7 +135,7 @@ function TsdOrderList({ onOpen }: { onOpen: (doc: TsdDocumentDetail) => void }) 
   const [filterId, setFilterId] = useState(() => localStorage.getItem('tsd_order_filter_id') || '')
   const filters = useQuery({ queryKey: ['tsd-order-filters'], queryFn: () => tsdApi.orderFilters().then(r => r.data), refetchInterval: 30_000 })
   const activeFilterId = filters.data?.some(f => f.id === filterId) ? filterId : ''
-  const deferredSearch = useDeferredValue(search)
+  const deferredSearch = useOrderSearch(search)
   const [tab, setTab] = useState<'available' | 'work'>('available')
   const [qrMode, setQrMode] = useState(false)
   const [qrValue, setQrValue] = useState('')

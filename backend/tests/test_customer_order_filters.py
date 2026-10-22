@@ -88,18 +88,26 @@ async def test_clear_filters_and_reject_removed_selection():
         resolve_order_filter(profile, removed)
 
 
-async def test_combined_filter_is_applied_before_pagination_and_preserves_search():
+@pytest.mark.parametrize("query", ["27370", "Тула"])
+async def test_combined_filter_is_applied_before_search_and_match_pagination(query):
     ms = MoySkladService("fake")
     calls = []
     async def request(client, method, url, **kwargs):
         calls.append(kwargs["params"])
-        return httpx.Response(200, json={"rows": [{"id": "matching"}]}, request=httpx.Request(method, url))
+        params = kwargs["params"]
+        rows = [{"id": str(i), "name": "27370", "agent": {"name": "Тула"}} for i in range(51)]
+        rows = rows[params["offset"]:params["offset"] + params["limit"]]
+        return httpx.Response(200, json={"rows": rows}, request=httpx.Request(method, url))
     ms._request_with_retry = request
     item = multi_preset()
     item["states"] = [{"id": str(uuid4()), "name": "Новый"}, {"id": str(uuid4()), "name": "Приоритет"}]
-    assert await ms.get_customer_orders("org", "27370", offset=50, order_filter=item) == [{"id": "matching"}]
+    assert await ms.get_customer_orders("org", query, offset=50, order_filter=item) == [
+        {"id": "50", "name": "27370", "agent": {"name": "Тула"}}]
     params = calls[0]
-    assert params["offset"] == 50 and params["limit"] == 50 and params["search"] == "27370"
+    if query.isdecimal():
+        assert params["offset"] == 50 and params["limit"] == 50 and params["search"] == query
+    else:
+        assert params["offset"] == 0 and params["limit"] == 100 and "search" not in params
     assert f"organization={ms.base_url}/entity/organization/org" in params["filter"]
     assert f"project={ms.base_url}/entity/project/{item['project_id']}" in params["filter"]
     assert f"metadata/attributes/{item['sale_attribute_id']}={ms.base_url}/entity/customentity/{item['sale_dictionary_id']}/{item['sale_value_id']}" in params["filter"]

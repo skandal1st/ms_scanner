@@ -267,6 +267,12 @@ class MoySkladService:
 
     async def get_customer_orders(self, organization_id: Optional[str], search: Optional[str] = None,
                                   limit: int = 50, offset: int = 0, *, order_filter: Optional[dict] = None) -> list[dict]:
+        """Search order numbers and expanded buyer names, then paginate matches.
+
+        MS document search does not index the buyer name. Walk scoped pages rather
+        than just the newest orders so older buyers remain searchable. Reading
+        expanded agents requires no additional counterparty catalogue permission.
+        """
         params = {"limit": min(limit, 100), "offset": offset, "order": "moment,desc", "expand": "agent,store,state"}
         filters = []
         if organization_id:
@@ -275,12 +281,34 @@ class MoySkladService:
             filters.extend(moysklad_order_filter_conditions(self.base_url, order_filter))
         if filters:
             params["filter"] = ";".join(filters)
-        if search and search.strip():
-            params["search"] = search.strip()
+        query = (search or "").strip().casefold()
         async with httpx.AsyncClient(timeout=15) as client:
-            response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder", params=params)
-            response.raise_for_status()
-            return response.json().get("rows", [])
+            async def fetch(extra):
+                response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/customerorder",
+                                                          params={**params, **extra})
+                response.raise_for_status()
+                return response.json().get("rows", [])
+
+            if not query:
+                return await fetch({})
+            # Keep the existing fast MS number search for the common numeric
+            # query; it can reach old orders without walking document history.
+            if query.isdecimal():
+                return await fetch({"search": query})
+
+            # limit <= 100 is required for agent expansion in MS. Offset here is
+            # the source offset; the caller's offset counts matching orders only.
+            matches, source_offset = [], 0
+            page_size = self.SEARCH_SCAN_LIMIT
+            while True:
+                page = await fetch({"limit": page_size, "offset": source_offset})
+                for row in page:
+                    fields = (row.get("name"), row.get("description"), (row.get("agent") or {}).get("name"))
+                    if any(query in str(value or "").casefold() for value in fields):
+                        matches.append(row)
+                if len(matches) >= offset + params["limit"] or len(page) < page_size:
+                    return matches[offset:offset + params["limit"]]
+                source_offset += len(page)
 
     async def get_customer_order_filter_options(self) -> dict:
         result = {"projects": [], "sale_values": [], "states": [], "sale_attribute_id": None,
