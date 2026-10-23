@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { installTsdAuth } from '../lib/tsdAuth'
 
 const api = axios.create({
   baseURL: '/api',
@@ -952,24 +953,7 @@ export const tsdClient = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
-tsdClient.interceptors.request.use((config) => {
-  if (!navigator.onLine) return Promise.reject(new Error('Нет сети. Подключитесь к Wi-Fi и повторите операцию.'))
-  const token = localStorage.getItem('tsd_access_token')
-  if (token) config.headers.Authorization = `Bearer ${token}`
-  return config
-})
-
-tsdClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401 && localStorage.getItem('tsd_access_token')) {
-      localStorage.removeItem('tsd_access_token')
-      localStorage.removeItem('tsd_document_id')
-      window.location.href = '/tsd'
-    }
-    return Promise.reject(error)
-  },
-)
+installTsdAuth(tsdClient)
 
 export interface TsdContext {
   allowed_modes: TsdMode[]
@@ -1033,6 +1017,7 @@ export const tsdApi = {
   exchange: (code: string, device_name: string) =>
     axios.post<{
       access_token: string
+      refresh_token: string
       device_id: string
       device_name: string
       workplace_name: string

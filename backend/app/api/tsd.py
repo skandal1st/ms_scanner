@@ -27,7 +27,7 @@ from app.api.scans import (
 )
 from app.core.config import settings
 from app.core.logging import logger
-from app.core.security import create_tsd_access_token, decode_token, decrypt_token
+from app.core.security import create_tsd_access_token, create_tsd_refresh_token, decode_token, decrypt_token
 from app.db.models import (
     Document,
     DocumentKind,
@@ -74,9 +74,17 @@ class PairingExchangeRequest(BaseModel):
     device_name: str = Field(default="ТСД АТОЛ", min_length=1, max_length=255)
 
 
-class DeviceAuthResponse(BaseModel):
+class DeviceTokens(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
+
+
+class DeviceRefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1, max_length=4096)
+
+
+class DeviceAuthResponse(DeviceTokens):
     device_id: UUID
     device_name: str
     workplace_name: str
@@ -298,10 +306,37 @@ async def exchange_pairing(body: PairingExchangeRequest, db: AsyncSession = Depe
     )
     return DeviceAuthResponse(
         access_token=token,
+        refresh_token=create_tsd_refresh_token({"sub": str(device.user_id), "device_id": str(device.id)}),
         device_id=device.id,
         device_name=device.name,
         workplace_name=workplace.name,
         organization_name=profile.name if profile else "Юрлицо",
+    )
+
+
+@router.post("/auth/refresh", response_model=DeviceTokens)
+async def refresh_device_auth(body: DeviceRefreshRequest, db: AsyncSession = Depends(get_db)):
+    error = HTTPException(401, "Привязка ТСД истекла или отключена. Подключите устройство заново.")
+    try:
+        payload = decode_token(body.refresh_token)
+        # A still-valid legacy access token can upgrade without another QR.
+        if payload.get("type") not in {"tsd_refresh", "tsd_access"}:
+            raise error
+        device_id = UUID(payload["device_id"])
+        user_id = UUID(payload["sub"])
+    except (JWTError, ValueError, KeyError, TypeError):
+        raise error
+    device = await db.get(TsdDevice, device_id)
+    if not device or not device.is_active or device.user_id != user_id:
+        raise error
+    await require_tsd_subscription(db, device.user_id)
+    await _device_scope(db, device)
+    device.last_seen_at = datetime.now(timezone.utc)
+    await db.commit()
+    claims = {"sub": str(device.user_id), "device_id": str(device.id)}
+    return DeviceTokens(
+        access_token=create_tsd_access_token(claims),
+        refresh_token=create_tsd_refresh_token(claims),
     )
 
 

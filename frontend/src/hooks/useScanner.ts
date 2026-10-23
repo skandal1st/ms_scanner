@@ -3,8 +3,10 @@ import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { useModal } from '../components/ModalProvider'
 import { useScanUpdates } from './useScanUpdates'
+import { createConflictSound } from '../lib/tsdSound'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+const conflictSound = createConflictSound()
 
 // Одиночный тон.
 function tone(freq: number, start: number, dur: number, wave: OscillatorType = 'sine') {
@@ -23,7 +25,11 @@ function tone(freq: number, start: number, dur: number, wave: OscillatorType = '
 // 'ok' — высокий короткий, 'error' — низкий длинный, 'unknown' — отдельный
 // характерный двойной сигнал для несопоставленной позиции (валидный КМ, но
 // товар не найден в плане/каталоге — кладовщику нужно сопоставить вручную).
-function playBeep(type: 'ok' | 'error' | 'unknown') {
+function playBeep(type: 'ok' | 'error' | 'unknown' | 'used_in_other_doc') {
+  if (type === 'used_in_other_doc') {
+    conflictSound.play(audioCtx, () => playBeep('error'))
+    return
+  }
   const now = audioCtx.currentTime
   if (type === 'ok') {
     tone(880, now, 0.15)
@@ -45,6 +51,8 @@ export function useScanner(documentId: string | null) {
   const submitCode = useCallback(
     async (code: string) => {
       if (!documentId || !code.trim()) return
+      if (audioCtx.state === 'suspended') void audioCtx.resume().catch(() => {})
+      void conflictSound.prepare(audioCtx).catch(() => {})
       const trimmed = code.trim()
       const state = useScanStore.getState()
 
@@ -78,9 +86,11 @@ export function useScanner(documentId: string | null) {
             state.unpackBox,
           )
           let hadError = false
+          let hadConflict = false
           let repeatedId: string | null = null
           boxScans.forEach((s) => {
             addScan(s)
+            if (s.status === 'used_in_other_doc') hadConflict = true
             if (s.duplicate) {
               repeatedId = s.id
               hadError = true
@@ -89,7 +99,8 @@ export function useScanner(documentId: string | null) {
             }
           })
           if (repeatedId) flashScan(repeatedId)
-          if (hadError) playBeep('error')
+          if (hadConflict) playBeep('used_in_other_doc')
+          else if (hadError) playBeep('error')
           return
         }
 
@@ -103,15 +114,15 @@ export function useScanner(documentId: string | null) {
           // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
           addScan(scan)
           flashScan(scan.id)
-          playBeep('error')
+          playBeep(scan.status === 'used_in_other_doc' ? 'used_in_other_doc' : 'error')
           return
         }
         addScan(scan)
         // Основной флоу: КМ проверяется локально при скане, статус приходит сразу в
         // ответе (scanned = принят локально; invalid = кривой формат). Бип — здесь,
         // мгновенно, без ожидания ЧЗ. Проверка в ЧЗ — потом, по кнопке «Проверить марки».
-        if (scan.status === 'invalid' || scan.status === 'used_in_other_doc')
-          playBeep('error')
+        if (scan.status === 'used_in_other_doc') playBeep('used_in_other_doc')
+        else if (scan.status === 'invalid') playBeep('error')
         else playBeep('ok')
       } catch (err: unknown) {
         playBeep('error')

@@ -23,9 +23,10 @@ export function useTsdSound() {
   useEffect(() => () => sound.close(), [sound])
   return {
     active: enabled && ready,
-    play: (kind: 'ok' | 'error') => { if (enabled) sound.play(kind) },
+    play: (kind: 'ok' | 'error' | 'used_in_other_doc') => { if (enabled) sound.play(kind) },
     async toggle() {
       if (enabled && ready) {
+        sound.stop()
         setEnabled(false)
         localStorage.setItem('tsd_sound_enabled', '0')
       } else {

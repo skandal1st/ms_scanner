@@ -20,6 +20,7 @@ import { Icon } from '../components/Icon'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
+import { saveTsdTokens } from '../lib/tsdAuth'
 
 function progressState(added: number, expected: number) {
   return expected > 0 && added > expected ? 'overflow'
@@ -60,7 +61,7 @@ function TsdLogin({ onReady }: { onReady: () => void }) {
     networkMode: 'always',
     mutationFn: () => tsdApi.exchange(normalizePairingCode(code), name).then((r) => r.data),
     onSuccess: (data) => {
-      localStorage.setItem('tsd_access_token', data.access_token)
+      saveTsdTokens(data)
       localStorage.setItem('tsd_device_name', data.device_name)
       window.history.replaceState({}, '', '/tsd')
       onReady()
@@ -376,7 +377,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], { ...latest, scans: mergedScans })
       setCode('')
       refresh()
-      sound.play(errorFeedback ? 'error' : 'ok')
+      sound.play(result.status === 'used_in_other_doc' ? 'used_in_other_doc' : errorFeedback ? 'error' : 'ok')
       window.navigator.vibrate?.(errorFeedback ? [80, 60, 80] : 60)
       inputRef.current?.focus({ preventScroll: true })
     },
@@ -626,7 +627,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
 
 export function TsdPage() {
   const qc = useQueryClient()
-  const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token')) && !new URLSearchParams(window.location.search).has('pair'))
+  const [authorized, setAuthorized] = useState(() => Boolean(localStorage.getItem('tsd_access_token') || localStorage.getItem('tsd_refresh_token')) && !new URLSearchParams(window.location.search).has('pair'))
   const [requestedId, setRequestedId] = useState(() => new URLSearchParams(window.location.search).get('document'))
   const [mode, setMode] = useState<TsdMode | null>(() => new URLSearchParams(window.location.search).has('document') || localStorage.getItem('tsd_document_id') ? 'shipment' : null)
   const context = useQuery({ queryKey: ['tsd-mode-context'], queryFn: () => tsdApi.me().then(r => r.data), enabled: authorized, refetchInterval: 10000 })

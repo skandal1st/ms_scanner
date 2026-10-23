@@ -46,10 +46,18 @@ def create_refresh_token(data: dict[str, Any]) -> str:
 
 
 def create_tsd_access_token(data: dict[str, Any]) -> str:
-    """Токен терминала на одну смену; обычные API его не принимают."""
+    """Токен терминала на одну смену; продлевается через отдельную привязку."""
     payload = data.copy()
     payload["exp"] = datetime.now(timezone.utc) + timedelta(hours=12)
     payload["type"] = "tsd_access"
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def create_tsd_refresh_token(data: dict[str, Any]) -> str:
+    """Привязка ТСД: 90 дней без продления, с проверкой отзыва в БД."""
+    payload = data.copy()
+    payload["exp"] = datetime.now(timezone.utc) + timedelta(days=90)
+    payload["type"] = "tsd_refresh"
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
