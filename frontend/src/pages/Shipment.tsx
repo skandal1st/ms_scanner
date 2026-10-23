@@ -21,6 +21,7 @@ import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
+const UpdExportModal = lazy(() => import('../components/UpdExportModal').then(m => ({ default: m.UpdExportModal })))
 
 const TsdDocumentQr = lazy(() =>
   import('../components/TsdDocumentQr').then((module) => ({ default: module.TsdDocumentQr })),
@@ -67,6 +68,8 @@ export function ShipmentPage({
   const writeoffBusy = useRef(false)
   useEffect(() => () => { writeoffRequestId.current += 1 }, [])
   const [correctionsOpen, setCorrectionsOpen] = useState(false)
+  const [updOpen, setUpdOpen] = useState(false)
+  useEffect(() => { setUpdOpen(false) }, [document?.id])
   const collectionReady = Boolean(document && (!document.moysklad_id || document.collection_started))
   const {
     send: sendToMs,
@@ -261,11 +264,11 @@ export function ShipmentPage({
   // window.close() может быть запрещён браузером, а в COM-режиме вкладка намеренно
   // остаётся открытой. В обоих случаях после подтверждения возвращаем чистый выбор.
   useEffect(() => {
-    if (!done || embedded) return
+    if (!done || embedded || updOpen) return
     const t = window.setTimeout(handleNextShipment, closingTab ? 2800 : 2400)
     return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [done, embedded, closingTab])
+  }, [done, embedded, closingTab, updOpen])
 
   // Вкладка открыта из МС (window.opener) — можно вручную вернуться, закрыв её.
   const canReturnToMs = typeof window !== 'undefined' && !!window.opener
@@ -470,6 +473,8 @@ export function ShipmentPage({
           )}
         </button>
         <div className="acc-footer__spacer" />
+        {document?.moysklad_id && document.status === 'accepted' && <button type="button" className="button"
+          onClick={() => setUpdOpen(true)}>XML УПД</button>}
         {withdrawnCount > 0 && (
           <span
             style={{ marginRight: 12, fontSize: 12, color: 'var(--st-err-fg)', whiteSpace: 'nowrap', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}
@@ -555,7 +560,10 @@ export function ShipmentPage({
         busy={bulkBusy}
       />
 
-      {done && (
+      {updOpen && document && <Suspense fallback={null}><UpdExportModal key={document.id} documentId={document.id}
+        onClose={() => setUpdOpen(false)} /></Suspense>}
+
+      {done && !updOpen && (
         <div className="done-overlay">
           <div className="done-overlay__card">
             <div className="done-overlay__check">
@@ -572,6 +580,7 @@ export function ShipmentPage({
             </div>
             {!closingTab && !embedded && (
               <div className="flex-row gap-8" style={{ marginTop: 16, justifyContent: 'center' }}>
+                <button type="button" className="button" onClick={() => setUpdOpen(true)}>XML УПД</button>
                 <button
                   type="button"
                   className="button button--success"

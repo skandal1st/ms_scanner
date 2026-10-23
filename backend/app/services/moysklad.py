@@ -455,6 +455,49 @@ class MoySkladService:
             resp.raise_for_status()
             return resp.json()
 
+    async def get_upd_source(self, doc_id: str, *, include_positions: bool = True) -> Dict[str, Any]:
+        """Complete, read-only demand snapshot, including every page of CIS.
+
+        Do not use embedded trackingCodes: MS may truncate them at 100 codes.
+        URLs are constructed locally, never followed from external metadata.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            url = f"{self.base_url}/entity/demand/{doc_id}"
+            response = await self._request_with_retry(client, "GET", url, params={
+                "expand": "organization,agent,rate.currency", "codetype": "gs1"})
+            response.raise_for_status()
+            source = response.json()
+            rows, offset = [], 0
+            while include_positions:
+                response = await self._request_with_retry(client, "GET", url + "/positions", params={
+                    "expand": "assortment,assortment.uom", "fields": "declaration", "codetype": "gs1", "limit": 100, "offset": offset})
+                response.raise_for_status()
+                page = response.json().get("rows", [])
+                rows.extend(page)
+                if len(page) < 100:
+                    break
+                offset += len(page)
+            for row in rows:
+                row["trackingCodes"] = await self._load_tracking_codes(client, "demand", doc_id, row["id"])
+            if include_positions:
+                source["positions"] = {"rows": rows}
+            # An available invoice is authoritative for UPD number/date. A
+            # restricted invoice must be entered explicitly, never guessed.
+            invoice_id = self._id_from_href(((source.get("factureOut") or {}).get("meta") or {}).get("href", ""))
+            if invoice_id:
+                response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/factureout/{invoice_id}")
+                if response.status_code == 403:
+                    source["invoice_unavailable"] = True
+                else:
+                    response.raise_for_status()
+                    source["invoice"] = response.json()
+            response = await self._request_with_retry(client, "GET", url)
+            response.raise_for_status()
+            if source.get("updated") != response.json().get("updated"):
+                from app.services.upd_export import UpdExportError
+                raise UpdExportError("Отгрузка изменилась во время загрузки. Сформируйте УПД повторно")
+            return source
+
     async def get_organizations(self) -> List[Dict[str, Any]]:
         """Юрлица аккаунта МС для настройки профилей."""
         async with httpx.AsyncClient(timeout=15) as client:

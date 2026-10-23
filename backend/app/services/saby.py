@@ -43,6 +43,16 @@ class SabyAuthError(SabyError):
     pass
 
 
+class SabyRpcError(SabyError):
+    """Explicit JSON-RPC rejection, as opposed to an unknown transport outcome."""
+    pass
+
+
+class SabyDocumentNotFound(SabyError):
+    """Definitive read-only response; never inferred from HTTP/network errors."""
+    pass
+
+
 class SabyClient:
     def __init__(
         self,
@@ -134,7 +144,12 @@ class SabyClient:
         if protocol is not None:
             body["protocol"] = protocol
         # Диагностика: точное тело запроса (уточняем структуру параметров на реальных данных).
-        logger.info("saby.request", method=method, params=params)
+        if method == "СБИС.ЗаписатьДокумент":
+            doc = params.get("Документ") or {}
+            logger.info("saby.request", method=method, document_id=doc.get("Идентификатор"),
+                        attachments=len(doc.get("Вложение") or []))
+        else:
+            logger.info("saby.request", method=method, params=params)
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(
                 SERVICE_URL,
@@ -156,7 +171,11 @@ class SabyClient:
             if str(err.get("code")) in ("401", "-32001") or "session" in str(err.get("message", "")).lower():
                 raise SabyAuthError(str(err.get("message") or err))
             detail = err.get("details") or err.get("message") or str(err)
-            raise SabyError(f"{method}: {err.get('message') or ''} {('· ' + str(detail)) if detail else ''}".strip())
+            if (method == "СБИС.ПрочитатьДокумент" and str(err.get("code")) == "-32000"
+                    and "Не найден документ с идентификатором" in str(err.get("message", ""))
+                    and "not_doc" in str(detail)):
+                raise SabyDocumentNotFound("Документ не найден в СБИС")
+            raise SabyRpcError(f"{method}: {err.get('message') or ''} {('· ' + str(detail)) if detail else ''}".strip())
         return data.get("result") if isinstance(data, dict) else data
 
     async def changes_page(

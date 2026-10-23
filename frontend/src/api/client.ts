@@ -432,6 +432,27 @@ export interface InventoryMatchResult {
   total_candidates: number
 }
 
+export interface UpdParty {
+  name: string; inn: string; kpp: string; address: string
+  last_name: string; first_name: string; middle_name: string
+}
+export interface UpdExportOptions {
+  function: 'СЧФДОП' | 'ДОП'; number: string; document_date: string
+  sender_id: string; receiver_id: string; seller: UpdParty; buyer: UpdParty
+  signer_last_name: string; signer_first_name: string; signer_middle_name: string
+  signer_position: string; signer_is_principal: boolean; no_excise: boolean; cargo_parties_match: boolean
+}
+export interface UpdContext {
+  seller: UpdParty; buyer: UpdParty; number: string; document_date: string
+  function: 'СЧФДОП' | 'ДОП'; invoice_locked: boolean; warnings: string[]
+  shipment_name: string; total: number; positions: number
+}
+export interface UpdDraft {
+  id: string; status: 'prepared' | 'uploading' | 'uncertain' | 'failed' | 'created'
+  url: string | null; external_state: string | null; error: string | null
+  filename: string; options: UpdExportOptions
+}
+
 export const documentsApi = {
   customerOrders: (search: string, offset = 0, filterId?: string) =>
     api.get<MsDocument[]>('/documents/customer-orders', { params: { search, cursor: offset, filter_id: filterId || undefined } }),
@@ -461,6 +482,13 @@ export const documentsApi = {
   process: (id: string) => api.post(`/documents/${id}/process`),
   exportXlsx: (id: string) =>
     api.get<Blob>(`/documents/${id}/export.xlsx`, { responseType: 'blob' }),
+  updContext: (id: string) => api.get<UpdContext>(`/documents/${id}/upd-context`, { timeout: 180000 }),
+  exportUpd: (id: string, options: UpdExportOptions) =>
+    api.post<Blob>(`/documents/${id}/export.upd.xml`, options, { responseType: 'blob', timeout: 180000 }),
+  updDraft: (id: string) => api.get<UpdDraft | null>(`/documents/${id}/upd-draft`),
+  createUpdDraft: (id: string, options: UpdExportOptions) =>
+    api.post<UpdDraft>(`/documents/${id}/upd-draft`, options, { timeout: 240000 }),
+  downloadUpdDraft: (id: string) => api.get<Blob>(`/documents/${id}/upd-draft.xml`, { responseType: 'blob' }),
 }
 
 export function isSscc(code: string): boolean {

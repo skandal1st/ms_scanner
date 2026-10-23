@@ -17,6 +17,7 @@ from app.core.security import decrypt_token
 from app.services.collection_start import collection_started, require_collection_started
 from app.services.shipment_labels import update_shipment_metadata, shipment_display_name
 from app.services.shipment_sessions import shipment_session_query, visible_documents
+from app.schemas.upd_export import UpdExportOptions
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -572,6 +573,146 @@ async def get_document(
             from app.core.logging import logger
             logger.warning('shipment.label_refresh_failed', document_id=str(doc.id))
     return _doc_to_response(doc, await _scan_count(db, doc.id))
+
+
+async def _upd_source(document_id: UUID, user: User, db: AsyncSession, *, include_positions=True):
+    from app.services.upd_export import UpdExportError
+    doc = await db.scalar(select(Document).where(Document.id == document_id, Document.user_id == user.id))
+    if not doc:
+        raise HTTPException(404, "Документ не найден")
+    if doc.kind != DocumentKind.demand or not doc.moysklad_id:
+        raise HTTPException(400, "УПД можно сформировать только для отгрузки МойСклад")
+    if doc.status != DocumentStatus.accepted:
+        raise HTTPException(409, "Сначала завершите запись марок в МойСклад")
+    try:
+        source = await (await _get_ms_service(user, db)).get_upd_source(doc.moysklad_id, include_positions=include_positions)
+    except UpdExportError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except httpx.HTTPError:
+        raise HTTPException(502, "Не удалось загрузить реквизиты отгрузки из МойСклад") from None
+    organization = source.get("organization") or {}
+    if doc.moysklad_organization_id and organization.get("id") != doc.moysklad_organization_id:
+        raise HTTPException(409, "Юрлицо отгрузки изменилось. Откройте отгрузку заново")
+    return source
+
+
+@router.get("/{document_id}/upd-context")
+async def upd_export_context(document_id: UUID, current_user: User = Depends(get_current_user),
+                             db: AsyncSession = Depends(get_db), response: Response = None):
+    from app.services.upd_export import party_from_ms
+    source = await _upd_source(document_id, current_user, db, include_positions=False)
+    if response is not None:
+        response.headers["Cache-Control"] = "no-store"
+    seller = party_from_ms(source.get("organization") or {})
+    buyer = party_from_ms(source.get("agent") or {})
+    invoice = source.get("invoice") or {}
+    warnings = []
+    if not buyer.inn:
+        warnings.append("Токен МойСклад не даёт читать реквизиты покупателя. Заполните их вручную.")
+    if source.get("invoice_unavailable"):
+        warnings.append("Нет доступа к связанному счёту-фактуре. Укажите его номер и дату для СЧФДОП.")
+    return {"seller": seller.model_dump(), "buyer": buyer.model_dump(),
+            "number": invoice.get("name") or ("" if source.get("invoice_unavailable") else source.get("name", "")),
+            "document_date": str(invoice.get("moment") or source.get("moment", ""))[:10],
+            "function": "СЧФДОП" if source.get("factureOut") else "ДОП",
+            "invoice_locked": bool(invoice), "warnings": warnings,
+            "shipment_name": source.get("name"), "total": source.get("sum"),
+            "positions": (source.get("positions") or {}).get("meta", {}).get("size", 0)}
+
+
+@router.post("/{document_id}/export.upd.xml")
+async def export_document_upd(document_id: UUID, options: UpdExportOptions,
+                              current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from urllib.parse import quote
+    from starlette.concurrency import run_in_threadpool
+    from app.services.upd_export import generate_upd, UpdExportError
+    source = await _upd_source(document_id, current_user, db)
+    try:
+        filename, xml = await run_in_threadpool(generate_upd, source, options)
+    except UpdExportError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Реквизиты содержат недопустимые для XML символы") from None
+    return Response(xml, media_type="application/xml", headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+        "Cache-Control": "no-store"})
+
+
+@router.get("/{document_id}/upd-draft")
+async def outgoing_upd_status(document_id: UUID, current_user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db), response: Response = None):
+    from app.db.models import OutgoingUpd
+    from app.services.outgoing_upd import response as draft_response
+    doc = await db.scalar(select(Document.id).where(Document.id == document_id, Document.user_id == current_user.id))
+    if not doc:
+        raise HTTPException(404, "Документ не найден")
+    row = await db.scalar(select(OutgoingUpd).where(OutgoingUpd.document_id == document_id, OutgoingUpd.user_id == current_user.id))
+    if response is not None:
+        response.headers['Cache-Control'] = 'no-store'
+    return draft_response(row) if row else None
+
+
+@router.post("/{document_id}/upd-draft")
+async def create_outgoing_upd_draft(document_id: UUID, options: UpdExportOptions,
+                                   current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    import hashlib
+    from uuid import uuid4
+    from app.db.models import OutgoingUpd
+    from app.services.upd_export import generate_upd, UpdExportError
+    from app.services.outgoing_upd import deliver, connection_key, response as draft_response
+    from app.api.mark_control import _client_from_integration, _get_auth
+    from app.services.saby import SabyError
+    # Serialize first creation per shipment, including a repeated POST on another
+    # backend process. A saved UUID survives crashes and lost HTTP responses.
+    doc = await db.scalar(select(Document).where(Document.id == document_id, Document.user_id == current_user.id).with_for_update())
+    if not doc:
+        raise HTTPException(404, 'Документ не найден')
+    if doc.kind != DocumentKind.demand or not doc.moysklad_id or doc.status != DocumentStatus.accepted:
+        raise HTTPException(409, 'Сначала завершите запись марок отгрузки в МойСклад')
+    row = await db.scalar(select(OutgoingUpd).where(OutgoingUpd.document_id == document_id))
+    if row and row.status == 'created':
+        return draft_response(row)
+    integration = await db.scalar(select(Integration).where(Integration.user_id == current_user.id))
+    client = _client_from_integration(integration)
+    binding = connection_key(integration)
+    if row and row.connection_key != binding:
+        raise HTTPException(409, 'Подключение СБИС изменилось. Сверьте ранее созданный документ в исходном аккаунте')
+    try:
+        auth = await _get_auth(current_user.id, client)
+    except (SabyError, httpx.HTTPError):
+        raise HTTPException(502, 'Не удалось войти в СБИС. Проверьте подключение в разделе «Контроль марок»') from None
+    replacement = None
+    if row is None or row.status == 'failed':
+        source = await _upd_source(document_id, current_user, db)
+        if row is None:
+            identifier = uuid4()
+            try:
+                from starlette.concurrency import run_in_threadpool
+                filename, xml = await run_in_threadpool(generate_upd, source, options, file_uuid=identifier)
+            except UpdExportError as exc:
+                raise HTTPException(422, str(exc)) from None
+            except ValueError:
+                raise HTTPException(422, 'Реквизиты содержат недопустимые для XML символы') from None
+            row = OutgoingUpd(id=identifier, document_id=document_id, user_id=current_user.id,
+                              status='prepared', connection_key=binding, options=options.model_dump(mode='json'), filename=filename,
+                              xml_text=xml.decode('cp1251'), xml_sha256=hashlib.sha256(xml).hexdigest())
+            db.add(row)
+        else:
+            replacement = (source, options)
+    await db.commit()
+    row = await deliver(db, row.id, client, auth, replacement=replacement)
+    return draft_response(row)
+
+
+@router.get("/{document_id}/upd-draft.xml")
+async def download_outgoing_upd_xml(document_id: UUID, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from urllib.parse import quote
+    from app.db.models import OutgoingUpd
+    row = await db.scalar(select(OutgoingUpd).where(OutgoingUpd.document_id == document_id, OutgoingUpd.user_id == current_user.id))
+    if not row:
+        raise HTTPException(404, 'Сохранённый XML УПД не найден')
+    return Response(row.xml_text.encode('cp1251'), media_type='application/xml', headers={
+        'Content-Disposition': f"attachment; filename*=UTF-8''{quote(row.filename)}", 'Cache-Control': 'no-store'})
 
 
 @router.get("/{document_id}/export.xlsx")

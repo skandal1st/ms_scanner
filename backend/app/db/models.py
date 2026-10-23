@@ -520,6 +520,25 @@ class NkProduct(Base):
     fetched_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
 
 
+class OutgoingUpd(Base):
+    """One immutable upload identity per shipment; saved before any Saby write."""
+    __tablename__ = "outgoing_upds"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, unique=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    status = Column(String(16), nullable=False, default="prepared")
+    connection_key = Column(String(64), nullable=False)
+    options = Column(JSONB, nullable=False)
+    filename = Column(String(255), nullable=False)
+    xml_text = Column(Text, nullable=False)
+    xml_sha256 = Column(String(64), nullable=False)
+    external_url = Column(Text, nullable=True)
+    external_state = Column(String(200), nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+
 class EdoDocument(Base):
     """Документ ЭДО (Saby) для контроля оборота марок — исходящие УПД/реализации.
 
