@@ -467,6 +467,17 @@ class MoySkladService:
                 "expand": "organization,agent,rate.currency", "codetype": "gs1"})
             response.raise_for_status()
             source = response.json()
+            # Some MS responses keep agent as metadata even with expand.
+            # Resolve that exact counterparty, never search by display name.
+            agent = source.get("agent") or {}
+            agent_id = agent.get("id") or self._id_from_href((agent.get("meta") or {}).get("href", ""))
+            if agent_id and (not agent.get("inn") or not agent.get("legalAddress")):
+                response = await self._request_with_retry(client, "GET", f"{self.base_url}/entity/counterparty/{agent_id}")
+                if response.status_code == 403:
+                    source["buyer_unavailable"] = True
+                else:
+                    response.raise_for_status()
+                    source["agent"] = response.json()
             rows, offset = [], 0
             while include_positions:
                 response = await self._request_with_retry(client, "GET", url + "/positions", params={

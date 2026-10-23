@@ -607,10 +607,13 @@ async def upd_export_context(document_id: UUID, current_user: User = Depends(get
     buyer = party_from_ms(source.get("agent") or {})
     invoice = source.get("invoice") or {}
     warnings = []
-    if not buyer.inn:
-        warnings.append("Токен МойСклад не даёт читать реквизиты покупателя. Заполните их вручную.")
+    if source.get("buyer_unavailable"):
+        warnings.append("Нет доступа к реквизитам покупателя. Обновите дескриптор и переустановите решение МойСклад для получения новых прав.")
+    elif (not buyer.inn or not buyer.address or (len(buyer.inn) == 10 and not buyer.kpp)
+          or (len(buyer.inn) == 12 and (not buyer.first_name or not buyer.last_name))):
+        warnings.append("В карточке покупателя МойСклад не заполнены ИНН/КПП, юридический адрес или ФИО ИП. Заполните реквизиты в МойСклад и откройте УПД заново.")
     if source.get("invoice_unavailable"):
-        warnings.append("Нет доступа к связанному счёту-фактуре. Укажите его номер и дату для СЧФДОП.")
+        warnings.append("Нет доступа к связанному счёту-фактуре. Обновите дескриптор и переустановите решение МойСклад для получения новых прав.")
     return {"seller": seller.model_dump(), "buyer": buyer.model_dump(),
             "number": invoice.get("name") or ("" if source.get("invoice_unavailable") else source.get("name", "")),
             "document_date": str(invoice.get("moment") or source.get("moment", ""))[:10],

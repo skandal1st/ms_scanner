@@ -205,3 +205,56 @@ async def test_context_does_not_guess_restricted_invoice_number(source, monkeypa
     assert result['positions'] == 26
     assert len(result['warnings']) == 2
     assert loader.await_args.kwargs == {'include_positions': False}
+
+
+@pytest.mark.parametrize('expanded', [False, True])
+@pytest.mark.parametrize('is_ip', [False, True])
+async def test_new_permissions_autofill_exact_buyer_and_linked_invoice(monkeypatch, expanded, is_ip):
+    ms = MoySkladService('fake')
+    buyer = {'id': 'buyer-id', 'name': '(Тула) Покупатель', 'legalTitle': 'Полное юридическое имя',
+             'inn': '781437759369' if is_ip else '7701234567', 'kpp': '' if is_ip else '770101001',
+             'legalAddress': 'Тула, дом 2', 'legalFirstName': 'Иван' if is_ip else '',
+             'legalLastName': 'Петров' if is_ip else '', 'legalMiddleName': 'Сергеевич' if is_ip else ''}
+    header = {'updated': 'same', 'name': 'shipment-42', 'moment': '2026-10-23 10:00:00', 'sum': 12200,
+              'agent': buyer if expanded else {'name': 'Alias', 'meta': {'href': ms.base_url + '/entity/counterparty/buyer-id'}},
+              'positions': {'meta': {'size': 1}},
+              'factureOut': {'meta': {'href': ms.base_url + '/entity/factureout/invoice-id'}}}
+    urls = []
+    async def request(client, method, url, **kwargs):
+        assert method == 'GET'
+        urls.append(url)
+        data = (buyer if url.endswith('/counterparty/buyer-id') else
+                {'name': 'SF-902', 'moment': '2026-10-22 09:30:00'} if url.endswith('/factureout/invoice-id') else header)
+        return httpx.Response(200, json=data, request=httpx.Request(method, url))
+    ms._request_with_retry = request
+    source = await ms.get_upd_source('shipment-id', include_positions=False)
+    monkeypatch.setattr(documents, '_upd_source', AsyncMock(return_value=source))
+    context = await documents.upd_export_context(uuid4(), NS(), NS())
+    assert context['buyer']['inn'] == buyer['inn']
+    assert context['buyer']['address'] == 'Тула, дом 2'
+    assert context['buyer']['name'] == 'Полное юридическое имя'
+    assert context['buyer']['first_name'] == buyer['legalFirstName']
+    assert context['buyer']['kpp'] == buyer['kpp']
+    assert context['number'] == 'SF-902'
+    assert context['document_date'] == '2026-10-22'
+    assert context['invoice_locked'] and context['function'] == 'СЧФДОП'
+    assert context['warnings'] == []
+    assert any(url.endswith('/counterparty/buyer-id') for url in urls) is (not expanded)
+
+
+async def test_old_token_requests_reinstallation_instead_of_claiming_empty_cards(monkeypatch):
+    ms = MoySkladService('fake')
+    header = {'updated': 'same', 'name': '42', 'moment': '2026-10-23',
+              'agent': {'name': 'Alias', 'meta': {'href': ms.base_url + '/entity/counterparty/buyer'}},
+              'factureOut': {'meta': {'href': ms.base_url + '/entity/factureout/invoice'}}}
+    async def request(client, method, url, **kwargs):
+        forbidden = '/counterparty/' in url or '/factureout/' in url
+        return httpx.Response(403 if forbidden else 200, json={} if forbidden else header, request=httpx.Request(method, url))
+    ms._request_with_retry = request
+    source = await ms.get_upd_source('shipment', include_positions=False)
+    assert source['buyer_unavailable'] and source['invoice_unavailable']
+    monkeypatch.setattr(documents, '_upd_source', AsyncMock(return_value=source))
+    context = await documents.upd_export_context(uuid4(), NS(), NS())
+    assert len(context['warnings']) == 2
+    assert all('переустановите' in warning for warning in context['warnings'])
+    assert context['number'] == ''

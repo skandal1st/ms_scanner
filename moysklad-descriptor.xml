@@ -65,6 +65,14 @@
                 <view/>
                 <update/>
             </demand>
+            <!-- Реквизиты покупателя для XML УПД: ИНН/КПП, ФИО ИП, юридический адрес. -->
+            <company>
+                <view/>
+            </company>
+            <!-- Номер и дата связанного выданного счёта-фактуры для УПД СЧФДОП. -->
+            <factureOut>
+                <view/>
+            </factureOut>
             <customerOrder>
                 <view/>
                 <update/>
