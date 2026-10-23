@@ -48,7 +48,7 @@ def party(data):
 
 def payload(row):
     options = UpdExportOptions.model_validate(row.options)
-    return {'Документ': {'Идентификатор': str(row.id), 'Тип': 'Реализация',
+    return {'Документ': {'Идентификатор': str(row.id), 'Тип': 'ДокОтгрИсх',
             'Номер': options.number, 'Дата': options.document_date.strftime('%d.%m.%Y'),
             'Примечание': 'Создано в Скандате. Только черновик, без подписи и отправки.',
             'НашаОрганизация': party(row.options['seller']),
@@ -59,7 +59,7 @@ def payload(row):
 
 async def read(client, auth, row):
     remote = await client.call('СБИС.ПрочитатьДокумент',
-                              {'Документ': {'Идентификатор': str(row.id), 'Тип': 'Реализация'}}, auth)
+                              {'Документ': {'Идентификатор': str(row.id)}}, auth)
     if not isinstance(remote, dict) or str(remote.get('Идентификатор')) != str(row.id):
         raise SabyError('СБИС не подтвердил идентификатор документа')
     return remote

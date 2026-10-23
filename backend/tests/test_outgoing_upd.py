@@ -40,7 +40,7 @@ def db_for(row):
 def test_payload_has_only_unsigned_xml_and_explicit_parties(row):
     payload = service.payload(row)['Документ']
     assert payload['Идентификатор'] == str(row.id)
-    assert payload['Тип'] == 'Реализация'
+    assert payload['Тип'] == 'ДокОтгрИсх'
     assert payload['Контрагент']['Идентификатор'] == '2BE-BUYER'
     assert payload['НашаОрганизация']['СвФЛ']['ИНН'] == '781437759369'
     assert payload['Дата'] == '23.10.2026'
