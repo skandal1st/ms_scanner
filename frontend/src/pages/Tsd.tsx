@@ -9,6 +9,7 @@ import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, progressAfterScan } from '../store/scanStore'
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
+import { isProblemScan, numberedScans, problemPositionRows } from '../lib/shipmentProblems'
 import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
@@ -278,6 +279,9 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [selectedScanId, setSelectedScanId] = useState<string | null>(null)
   const [swipeScanId, setSwipeScanId] = useState<string | null>(null)
   const [visibleScans, setVisibleScans] = useState(50)
+  const [onlyProblemPositions, setOnlyProblemPositions] = useState(false)
+  const [onlyProblemMarks, setOnlyProblemMarks] = useState(false)
+  const [repeatedId, setRepeatedId] = useState<string | null>(null)
   const [targetProductId, setTargetProductId] = useState<string | null>(null)
   const submitting = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -330,8 +334,15 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const activePack = selectedScan || lastScanned
   const canChangePack = activePack && !activePack.is_barcode
     && scanPackageType(activePack) !== 'UNIT'
-  const filteredScans = doc.scans.filter((item) => positionFilter === 'all'
+  const problemRows = problemPositionRows(progress, doc.scans, null, repeatedId)
+  const visiblePositions = progress.rows.map((row, index) => ({ row, index }))
+    .filter(({ row }) => !onlyProblemPositions || problemRows.includes(row))
+  const positionScans = doc.scans.filter((item) => positionFilter === 'all'
     || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
+  const problemCount = positionScans.filter(item => isProblemScan(item, null, repeatedId, progress.hasPlan ? progress.rows : undefined)).length
+  const positionScanIds = new Set(positionScans.map(item => item.id))
+  const filteredScans = numberedScans(doc.scans).filter(({ scan }) => positionScanIds.has(scan.id)
+    && (!onlyProblemMarks || isProblemScan(scan, null, repeatedId, progress.hasPlan ? progress.rows : undefined)))
   const selectPosition = (value: typeof positionFilter) => {
     setPositionFilter(value)
     setSelectedScanId(null)
@@ -362,6 +373,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
       setLastScannedId(result.id)
+      setRepeatedId(result.duplicate ? result.id : null)
       setSelectedScanId(null)
       setScanNavigation(value => value + 1)
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
@@ -556,8 +568,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <p className="hint">Выберите позицию для привязки следующих марок. Смахните марку влево, чтобы показать корзину для удаления.</p>
         {(listView || reviewing) && <>
           <div className="tsd-position-list">
-            {progress.rows.map((row, index) => <Fragment key={`${row.product_id || row.gtin}:${index}`}>
-              {hasGroups && (index === 0 || row.folder_name !== progress.rows[index - 1].folder_name) &&
+            <label className="shipment-problem-filter" title="Недобор, превышение плана и позиции с проблемными марками">
+              <input type="checkbox" checked={onlyProblemPositions} onChange={e => setOnlyProblemPositions(e.target.checked)} />
+              Только проблемные позиции
+            </label>
+            {onlyProblemPositions && visiblePositions.length === 0 && <p className="hint">В плане проблемных позиций нет. Сканы вне плана доступны ниже.</p>}
+            {visiblePositions.map(({ row, index }, visibleIndex) => <Fragment key={`${row.product_id || row.gtin}:${index}`}>
+              {hasGroups && (visibleIndex === 0 || row.folder_name !== visiblePositions[visibleIndex - 1].row.folder_name) &&
                 <div className="shipment-group-heading">{row.folder_name || 'Без группы'}</div>}
               <button type="button"
               ref={element => { positionRefs.current[index] = element }}
@@ -573,9 +590,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'other'} onClick={() => selectPosition('other')}>Вне плана</button>
           </div>
           <h3>Сканы: {filteredScans.length}</h3>
-          {filteredScans.length === 0 && <p className="hint">По выбранной позиции ещё нет сканов.</p>}
+          <label className="shipment-problem-filter">
+            <input type="checkbox" checked={onlyProblemMarks} onChange={e => { setOnlyProblemMarks(e.target.checked); setVisibleScans(50) }} />
+            Только проблемные марки ({problemCount})
+          </label>
+          {filteredScans.length === 0 && <p className="hint">{onlyProblemMarks ? 'Проблемных марок нет.' : 'По выбранной позиции ещё нет сканов.'}</p>}
           <div className="tsd-mark-list">
-            {filteredScans.slice(0, visibleScans).map((item) => <TsdSwipeMark key={item.id}
+            {filteredScans.slice(0, visibleScans).map(({ scan: item, number }) => <TsdSwipeMark key={item.id}
               className={`tsd-mark tsd-progress--${item.verification?.ms_error || item.verification?.owner_result === 'mismatch' || !rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : item.verification?.checked_at && item.status === 'valid' ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
               selected={selectedScanId === item.id} open={swipeScanId === item.id} disabled={!online || scannerBlocked || doc.status !== 'draft'}
               onSelect={() => { setSwipeScanId(null); setSelectedScanId(previous => previous === item.id ? null : item.id) }}
@@ -583,7 +604,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
               deleteLabel={scanUnits(item) > 1 ? `Удалить упаковку: ${scanUnits(item)} шт.` : 'Удалить марку'}
               onDelete={() => remove.mutate(item.id)}>
               {item.id === lastScanned?.id && <span className="tsd-recent-scan__label">Последняя отсканированная марка</span>}
-              <strong>{item.product_name || rowForScan(item)?.product_name || 'Товар вне плана'}</strong>
+              <strong>№ {number} · {item.product_name || rowForScan(item)?.product_name || 'Товар вне плана'}</strong>
               <span>GTIN: {effectiveGtinKey(item) || 'не распознан'}{item.box_quantity ? ` · ${item.box_quantity} шт.` : ''}</span>
               <span>{scanPackageLabel(item)}</span>
               <code>{item.code}</code>

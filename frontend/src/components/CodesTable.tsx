@@ -1,14 +1,16 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   useScanStore,
   effectiveGtinKey,
   selectionMatchesScan,
   ownerCheckState,
+  buildProgress,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
 import { verificationLabel, ownerCheckLabel, ownerBadgeLabel } from '../lib/scanVerification'
 import { Icon } from './Icon'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
+import { isProblemScan, numberedScans } from '../lib/shipmentProblems'
 import { useMarksPanelVisible } from './FlowWorkspaceTabs'
 
 const STATUS_CONFIG = {
@@ -22,7 +24,7 @@ const STATUS_CONFIG = {
   used_in_other_doc: { label: 'В другом документе', cls: 'badge--warn' },
 } as const
 
-export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
+export function CodesTable({ signatureInn, shipment = false }: { signatureInn?: string | null; shipment?: boolean }) {
   const {
     scans,
     removeScan,
@@ -33,6 +35,11 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
     setTargetProductId,
     togglePositionSelection,
   } = useScanStore()
+  const documentId = useScanStore(s => s.document?.id)
+  const plan = useScanStore(s => s.document?.plan)
+  const planRows = useMemo(() => plan?.length ? buildProgress(plan, []).rows : undefined, [plan])
+  const [onlyProblems, setOnlyProblems] = useState(false)
+  useEffect(() => { setOnlyProblems(false) }, [documentId])
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (scans.length === 0) {
@@ -40,10 +47,12 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
   }
 
   // Фокус на выбранной позиции: пока активно выделение, показываем только её марки.
-  const visibleScans = selection
-    ? scans.filter((s) => selectionMatchesScan(selection, s))
-    : scans
-  const hiddenCount = scans.length - visibleScans.length
+  const positionScans = selection ? scans.filter(s => selectionMatchesScan(selection, s)) : scans
+  const problemCount = positionScans.filter(s => isProblemScan(s, signatureInn, flashScanId, planRows)).length
+  const visibleScans = positionScans.filter(s => !onlyProblems || isProblemScan(s, signatureInn, flashScanId, planRows))
+  const numbered = shipment ? numberedScans(scans) : scans.map((scan, index) => ({ scan, number: index + 1 }))
+  const visibleIds = new Set(visibleScans.map(scan => scan.id))
+  const hiddenCount = scans.length - positionScans.length
 
   const clearSelection = () => {
     setSelection(null)
@@ -52,6 +61,11 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
 
   return (
     <>
+      {shipment && <label className="shipment-problem-filter" title="Ошибки, марки вне плана, превышение плана, повторный скан и предупреждения о марке или владельце">
+        <input type="checkbox" checked={onlyProblems} onChange={e => setOnlyProblems(e.target.checked)} />
+        Только проблемные марки ({problemCount})
+        <span className="shipment-filter-count">Показано {visibleScans.length} из {positionScans.length}</span>
+      </label>}
       {selection && (
         <div style={styles.filterBar}>
           <span style={styles.filterText}>
@@ -64,16 +78,17 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
             style={styles.filterBtn}
             onClick={clearSelection}
           >
-            Показать все марки ({scans.length})
+            {shipment ? `Все позиции (${scans.length})` : `Показать все марки (${scans.length})`}
           </button>
         </div>
       )}
       {visibleScans.length === 0 ? (
-        <div className="scans-empty">В этой позиции пока нет отсканированных марок</div>
+        <div className="scans-empty">{onlyProblems ? 'Проблемных марок нет' : 'В этой позиции пока нет отсканированных марок'}</div>
       ) : (
         <table className="ui-table scans-table">
           <thead>
             <tr>
+              {shipment && <th scope="col" title="Порядок добавления среди сохранённых сканов">№</th>}
               <th>Код</th>
               <th>Товар</th>
               <th>Статус</th>
@@ -81,10 +96,11 @@ export function CodesTable({ signatureInn }: { signatureInn?: string | null }) {
             </tr>
           </thead>
           <tbody>
-            {visibleScans.map((scan) => (
+            {numbered.filter(({ scan }) => visibleIds.has(scan.id)).map(({ scan, number }) => (
               <ScanRow
                 key={scan.id}
                 scan={scan}
+                number={shipment ? number : undefined}
                 signatureInn={signatureInn}
                 isExpanded={expanded === scan.id}
                 isFlash={flashScanId === scan.id}
@@ -142,6 +158,7 @@ const styles: Record<string, CSSProperties> = {
 
 function ScanRow({
   scan,
+  number,
   signatureInn,
   isExpanded,
   isFlash,
@@ -151,6 +168,7 @@ function ScanRow({
   onDelete,
 }: {
   scan: Scan
+  number?: number
   signatureInn?: string | null
   isExpanded: boolean
   isFlash: boolean
@@ -203,6 +221,7 @@ function ScanRow({
         className={`scans-row ${isExpanded ? 'is-expanded' : ''} ${isFlash ? 'is-flash' : ''} ${isSelected ? 'is-selected' : ''} ${ownerCls} ${withdrawnCls}`}
         onClick={onToggle}
       >
+        {number !== undefined && <td className="scan-sequence">{number}</td>}
         <td className="is-code">
           {(scan.is_box || isAggregate) && (
             <Icon name="box" size={13} style={{ verticalAlign: '-2px', marginRight: 4, color: 'var(--ms-text-muted)' }} />
@@ -282,7 +301,7 @@ function ScanRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={4} className="scans-expanded">
+          <td colSpan={number !== undefined ? 5 : 4} className="scans-expanded">
             {isAggregate && <div className="scans-expanded__row">
               <span>{scanPackageLabel(scan)}</span>
               <button type="button" className="button" disabled={changingPack || scan.status === 'pending' || document?.status !== 'draft'}

@@ -1,3 +1,4 @@
+import { problemPositionRows } from '../lib/shipmentProblems'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import {
@@ -16,13 +17,15 @@ import type { CSSProperties } from 'react'
 const COLLAPSE_KEY = 'progress_collapsed'
 
 interface ProgressTableProps {
+  shipment?: boolean
+  signatureInn?: string | null
   tabbed?: boolean
   onInspectMarks?: () => void
   showScanTarget?: boolean
   sortByName?: boolean
 }
 
-export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget = true, sortByName = false }: ProgressTableProps = {}) {
+export function ProgressTable({ shipment = false, signatureInn, tabbed = false, onInspectMarks, showScanTarget = true, sortByName = false }: ProgressTableProps = {}) {
   const modal = useModal()
   const plan = useScanStore((s) => s.document?.plan)
   const scans = useScanStore((s) => s.scans)
@@ -38,6 +41,12 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
     const result = buildProgress(plan, scans)
     return sortByName ? sortShipmentProgress(result) : result
   }, [plan, scans, sortByName])
+  const repeatedId = useScanStore(s => s.flashScanId)
+  const [onlyProblems, setOnlyProblems] = useState(false)
+  useEffect(() => { setOnlyProblems(false) }, [documentId])
+  const problemRows = useMemo(() => problemPositionRows(progress, scans, signatureInn, repeatedId), [progress, scans, signatureInn, repeatedId])
+  const visibleRows = onlyProblems ? problemRows : shipment
+    ? [...progress.rows, ...problemRows.filter(row => !progress.rows.includes(row))] : progress.rows
   const hasGroups = sortByName && progress.rows.some(row => row.folder_name)
   const [deletingOff, setDeletingOff] = useState<string | null>(null)
 
@@ -72,7 +81,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
     localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0')
   }, [collapsed])
 
-  if (!progress.hasSummary) return null
+  if (!progress.hasSummary && (!shipment || !problemRows.length)) return null
 
   const title = progress.hasPlan ? 'Прогресс сборки' : 'По товарам'
   const canPickProduct =
@@ -147,6 +156,10 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
           />
         </div>
       )}
+      {!isCollapsed && shipment && <label className="shipment-problem-filter" title="Недобор, превышение плана, товары вне плана и позиции с проблемными марками">
+        <input type="checkbox" checked={onlyProblems} onChange={e => setOnlyProblems(e.target.checked)} />
+        Только проблемные позиции ({problemRows.length + progress.offPlanRows.length})
+      </label>}
       {!isCollapsed && canPickProduct && showScanTarget && (
         <div style={styles.targetBar}>
           <span style={styles.targetLabel}>Сканировать в товар:</span>
@@ -170,7 +183,8 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
         </div>
       )}
       {!isCollapsed && <div style={{ ...styles.list, ...(tabbed ? styles.tabbedList : { maxHeight: listHeight }) }}>
-        {progress.rows.map((item, index) => {
+        {onlyProblems && visibleRows.length === 0 && progress.offPlanRows.length === 0 && <div className="scans-empty">Проблемных позиций нет</div>}
+        {visibleRows.map((item, index) => {
           const incomplete = item.expected > 0 && item.addedTotal < item.expected
           const overLine = item.expected > 0 && item.addedTotal > item.expected
           const pct =
@@ -217,7 +231,7 @@ export function ProgressTable({ tabbed = false, onInspectMarks, showScanTarget =
 
           return (
             <Fragment key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}>
-            {hasGroups && (index === 0 || item.folder_name !== progress.rows[index - 1].folder_name) &&
+            {hasGroups && (index === 0 || item.folder_name !== visibleRows[index - 1].folder_name) &&
               <div className="shipment-group-heading">{item.folder_name || 'Без группы'}</div>}
             <div
               key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}

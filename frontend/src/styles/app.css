@@ -1145,3 +1145,19 @@ html, body, #root { height: 100%; }
   .mark-timeline__date { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
   .mark-timeline__date span { margin-top: 0; }
 }
+
+.shipment-problem-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  color: var(--ms-text);
+  background: var(--ms-bg);
+  border-bottom: 1px solid var(--ms-border-light);
+  cursor: pointer;
+}
+.shipment-problem-filter input { accent-color: var(--brand); width: 18px; height: 18px; }
+.shipment-filter-count { color: var(--ms-text-muted); margin-left: auto; }
+.scan-sequence { font-variant-numeric: tabular-nums; color: var(--ms-text-muted); white-space: nowrap; }

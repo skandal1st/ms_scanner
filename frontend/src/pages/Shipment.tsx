@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
+import { isProblemScan } from '../lib/shipmentProblems'
 import { StatsPanel } from '../components/StatsPanel'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { CustomerOrderPicker } from '../components/CustomerOrderPicker'
@@ -49,7 +50,6 @@ export function ShipmentPage({
   const progress = getProgress()
   useScanUpdates(terminalMode ? document?.id ?? null : null)
   const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('shipment_workspace_tab')
-  const workspaceIssueCount = stats.invalid + stats.duplicate + stats.unknown_product + stats.used_in_other_doc
   const summaryCount = progress.hasPlan
     ? `${progress.total.scanned}/${progress.total.expected}`
     : progress.total.addedTotal
@@ -127,6 +127,9 @@ export function ShipmentPage({
   // Владелец подписи (ИНН из сертификата ЧЗ) — для сверки владельца марок в отгрузке.
   const { data: integration } = useIntegration()
   const signatureInn = integration?.cz_inn ?? null
+  const repeatedScanId = useScanStore(state => state.flashScanId)
+  const workspaceIssueCount = scans.filter(scan => isProblemScan(scan, signatureInn,
+    repeatedScanId, progress.hasPlan ? progress.rows : undefined)).length
   const ownerWarnings = scans.reduce(
     (acc, s) => {
       const st = ownerCheckState(s, signatureInn)
@@ -431,8 +434,8 @@ export function ShipmentPage({
             active={workspaceTab}
             onChange={setWorkspaceTab}
             summary={
-              progress.hasSummary ? (
-                <ProgressTable tabbed sortByName showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
+              progress.hasSummary || scans.length > 0 ? (
+                <ProgressTable shipment signatureInn={signatureInn} tabbed sortByName showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
               ) : (
                 <div className="flow-tabs__empty">
                   Выберите отгрузку и начните сканирование — здесь появится состав сборки.
@@ -441,7 +444,7 @@ export function ShipmentPage({
             }
             marks={
               <div className="acc-table-wrap">
-                <CodesTable signatureInn={signatureInn} />
+                <CodesTable shipment signatureInn={signatureInn} />
               </div>
             }
           />
