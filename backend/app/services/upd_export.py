@@ -47,6 +47,17 @@ def party_from_ms(data):
                     middle_name=data.get("legalMiddleName") or "")
 
 
+def shipment_requisites(source):
+    number = str(source.get("name") or "").strip()
+    if not number:
+        raise UpdExportError("Не заполнен номер отгрузки в МойСклад")
+    try:
+        document_date = datetime.fromisoformat(source["moment"]).date()
+    except (KeyError, TypeError, ValueError):
+        raise UpdExportError("Не заполнена дата отгрузки в МойСклад") from None
+    return number, document_date
+
+
 def _party(parent, tag, party):
     if not re.fullmatch(r"(?:[0-9]{10}|[0-9]{12})", party.inn):
         raise UpdExportError(f"{tag}: заполните ИНН из 10 или 12 цифр")
@@ -119,10 +130,13 @@ def generate_upd(source: dict, options: UpdExportOptions, *, now=None, file_uuid
             raise UpdExportError("Отдельный грузоотправитель или грузополучатель пока не поддерживается")
     if source.get("consigneeBranch") or source.get("consignorBranch"):
         raise UpdExportError("Отгрузки через обособленные подразделения пока не поддерживаются")
+    number, document_date = shipment_requisites(source)
+    if options.number != number or options.document_date != document_date:
+        raise UpdExportError("Номер и дата УПД должны совпадать с отгрузкой МойСклад. Откройте УПД заново для обновления реквизитов")
     invoice = source.get("invoice")
     if options.function == "СЧФДОП" and invoice:
         if options.number != invoice.get("name") or options.document_date.isoformat() != str(invoice.get("moment", ""))[:10]:
-            raise UpdExportError("Номер и дата УПД должны совпадать со связанным счётом-фактурой")
+            raise UpdExportError("У связанного счёта-фактуры другой номер или дата. Приведите его реквизиты в МойСклад к отгрузке")
     rows = (source.get("positions") or {}).get("rows") or []
     if not rows:
         raise UpdExportError("В отгрузке нет позиций")
@@ -136,8 +150,8 @@ def generate_upd(source: dict, options: UpdExportOptions, *, now=None, file_uuid
     doc = ET.SubElement(root, "Документ", КНД="1115131", Функция=options.function,
                         НаимДокОпр="Универсальный передаточный документ",
                         ДатаИнфПр=now.strftime("%d.%m.%Y"), ВремИнфПр=now.strftime("%H.%M.%S"))
-    header = ET.SubElement(doc, "СвСчФакт", НомерДок=options.number,
-                           ДатаДок=options.document_date.strftime("%d.%m.%Y"))
+    header = ET.SubElement(doc, "СвСчФакт", НомерДок=number,
+                           ДатаДок=document_date.strftime("%d.%m.%Y"))
     _party(header, "СвПрод", options.seller)
     ET.SubElement(ET.SubElement(header, "ГрузОт"), "ОнЖе").text = "он же"
     consignee = options.buyer.model_copy(update={"address": source.get("shipmentAddress") or options.buyer.address})
@@ -211,10 +225,7 @@ def generate_upd(source: dict, options: UpdExportOptions, *, now=None, file_uuid
         raise UpdExportError("Расчёт сумм УПД не совпал с итогами МойСклад. Проверьте цены, скидки и НДС")
     total = ET.SubElement(table, "ВсегоОпл", СтТовБезНДСВсего=fmt(net_total), СтТовУчНалВсего=fmt(gross_total))
     ET.SubElement(ET.SubElement(total, "СумНалВсего"), "СумНал" if any_tax else "БезНДС").text = fmt(tax_total) if any_tax else "без НДС"
-    try:
-        transfer_date = datetime.fromisoformat(source["moment"]).strftime("%d.%m.%Y")
-    except (KeyError, TypeError, ValueError):
-        raise UpdExportError("Не заполнена дата отгрузки в МойСклад") from None
+    transfer_date = document_date.strftime("%d.%m.%Y")
     transfer = ET.SubElement(ET.SubElement(doc, "СвПродПер"), "СвПер", СодОпер="Товары переданы", ДатаПер=transfer_date)
     ET.SubElement(transfer, "ОснПер", РеквНаимДок="Отгрузка", РеквНомерДок=source.get("name") or options.number,
                   РеквДатаДок=transfer.get("ДатаПер"))

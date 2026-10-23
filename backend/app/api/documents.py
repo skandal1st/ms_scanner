@@ -599,26 +599,30 @@ async def _upd_source(document_id: UUID, user: User, db: AsyncSession, *, includ
 @router.get("/{document_id}/upd-context")
 async def upd_export_context(document_id: UUID, current_user: User = Depends(get_current_user),
                              db: AsyncSession = Depends(get_db), response: Response = None):
-    from app.services.upd_export import party_from_ms
+    from app.services.upd_export import party_from_ms, shipment_requisites, UpdExportError
     source = await _upd_source(document_id, current_user, db, include_positions=False)
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     seller = party_from_ms(source.get("organization") or {})
     buyer = party_from_ms(source.get("agent") or {})
     invoice = source.get("invoice") or {}
+    try:
+        number, document_date = shipment_requisites(source)
+    except UpdExportError as exc:
+        raise HTTPException(422, str(exc)) from None
     warnings = []
     if source.get("buyer_unavailable"):
         warnings.append("Нет доступа к реквизитам покупателя. Обновите дескриптор и переустановите решение МойСклад для получения новых прав.")
     elif (not buyer.inn or not buyer.address or (len(buyer.inn) == 10 and not buyer.kpp)
           or (len(buyer.inn) == 12 and (not buyer.first_name or not buyer.last_name))):
         warnings.append("В карточке покупателя МойСклад не заполнены ИНН/КПП, юридический адрес или ФИО ИП. Заполните реквизиты в МойСклад и откройте УПД заново.")
-    if source.get("invoice_unavailable"):
-        warnings.append("Нет доступа к связанному счёту-фактуре. Обновите дескриптор и переустановите решение МойСклад для получения новых прав.")
+    if invoice and (invoice.get("name") != number or str(invoice.get("moment", ""))[:10] != document_date.isoformat()):
+        warnings.append("У связанного счёта-фактуры другой номер или дата. Для УПД СЧФДОП приведите его реквизиты в МойСклад к отгрузке.")
     return {"seller": seller.model_dump(), "buyer": buyer.model_dump(),
-            "number": invoice.get("name") or ("" if source.get("invoice_unavailable") else source.get("name", "")),
-            "document_date": str(invoice.get("moment") or source.get("moment", ""))[:10],
+            "number": number,
+            "document_date": document_date.isoformat(),
             "function": "СЧФДОП" if source.get("factureOut") else "ДОП",
-            "invoice_locked": bool(invoice), "warnings": warnings,
+            "invoice_locked": True, "warnings": warnings,
             "shipment_name": source.get("name"), "total": source.get("sum"),
             "positions": (source.get("positions") or {}).get("meta", {}).get("size", 0)}
 

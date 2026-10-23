@@ -28,7 +28,9 @@ export function UpdExportModal({ documentId, onClose }: { documentId: string; on
       setDraftLoaded(saved.status === 'fulfilled')
       if (saved.status === 'fulfilled' && saved.value.data) {
         setDraft(saved.value.data)
-        setOptions(saved.value.data.options)
+        setOptions(saved.value.data.status === 'failed' && source.status === 'fulfilled'
+          ? { ...saved.value.data.options, number: source.value.data.number, document_date: source.value.data.document_date }
+          : saved.value.data.options)
         setError(saved.value.data.error || '')
         if (source.status === 'fulfilled') setContext(source.value.data)
         return
@@ -52,7 +54,7 @@ export function UpdExportModal({ documentId, onClose }: { documentId: string; on
   const field = (label: string, key: keyof UpdExportOptions, required = true, type = 'text') => options && (
     <label style={{ display: 'grid', gap: 4 }} key={key}>{label}
       <input className="ui-input" type={type} required={required} value={String(options[key])}
-        disabled={busy || (context?.invoice_locked && options.function === 'СЧФДОП' && (key === 'number' || key === 'document_date'))}
+        disabled={busy || (context?.invoice_locked && (key === 'number' || key === 'document_date'))}
         onChange={e => setOptions({ ...options, [key]: e.target.value })} />
     </label>
   )
@@ -114,13 +116,13 @@ export function UpdExportModal({ documentId, onClose }: { documentId: string; on
         <label style={{ display: 'grid', gap: 4 }}>Вид УПД
           <select className="ui-input" disabled={busy} value={options.function}
             onChange={e => setOptions({ ...options, function: e.target.value as UpdExportOptions['function'],
-              ...(context?.invoice_locked && e.target.value === 'СЧФДОП'
+              ...(context?.invoice_locked
                 ? { number: context.number, document_date: context.document_date } : {}) })}>
             <option value="СЧФДОП">УПД со счётом-фактурой (СЧФДОП)</option>
             <option value="ДОП">Передаточный документ (ДОП)</option>
           </select>
         </label>
-        <p className="hint">Для СЧФДОП укажите номер и дату счёта-фактуры: это единый документ.</p>
+        <p className="hint">Номер и дата УПД совпадают с отгрузкой МойСклад и заполняются автоматически.</p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
           {field('Номер УПД', 'number')}{field('Дата УПД', 'document_date', true, 'date')}
           {field('Идентификатор ЭДО продавца', 'sender_id')}{field('Идентификатор ЭДО покупателя', 'receiver_id')}

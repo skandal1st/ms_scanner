@@ -113,7 +113,7 @@ def test_negative_discount_is_markup(source, options):
     (lambda s: s['positions']['rows'][0]['trackingCodes'][0].update(cis='abc\x1dDEF'), 'управляющие'),
     (lambda s: s['positions']['rows'][0]['assortment'].update(uom={}), 'ОКЕИ'),
     (lambda s: s.update(organization={'inn':'9999999999'}), 'ИНН'),
-    (lambda s: s.update(invoice={'name':'999', 'moment':'2026-10-23'}), 'счётом-фактурой'),
+    (lambda s: s.update(invoice={'name':'999', 'moment':'2026-10-23'}), 'счёта-фактуры'),
     (lambda s: s['positions']['rows'][0].update(declaration=[{'rnpt':'123'}]), 'ГТД/РНПТ'),
     (lambda s: s.update(consignee={'meta':{'href':'another-buyer'}}), 'грузополучатель'),
 ])
@@ -194,22 +194,24 @@ async def test_api_download_has_original_filename_and_no_store(source, options, 
     assert result.media_type == 'application/xml'
 
 
-async def test_context_does_not_guess_restricted_invoice_number(source, monkeypatch):
+async def test_context_uses_shipment_requisites_even_without_invoice_permissions(source, monkeypatch):
     source.update(invoice_unavailable=True, factureOut={'meta':{'href':'invoice'}})
     source['positions']['meta'] = {'size': 26}
     loader = AsyncMock(return_value=source)
     monkeypatch.setattr(documents, '_upd_source', loader)
     result = await documents.upd_export_context(uuid4(), NS(), NS())
-    assert result['number'] == ''
+    assert result['number'] == '42'
+    assert result['document_date'] == '2026-10-23'
+    assert result['invoice_locked']
     assert result['function'] == 'СЧФДОП'
     assert result['positions'] == 26
-    assert len(result['warnings']) == 2
+    assert len(result['warnings']) == 1
     assert loader.await_args.kwargs == {'include_positions': False}
 
 
 @pytest.mark.parametrize('expanded', [False, True])
 @pytest.mark.parametrize('is_ip', [False, True])
-async def test_new_permissions_autofill_exact_buyer_and_linked_invoice(monkeypatch, expanded, is_ip):
+async def test_buyer_autofill_and_invoice_mismatch_never_override_shipment(monkeypatch, expanded, is_ip):
     ms = MoySkladService('fake')
     buyer = {'id': 'buyer-id', 'name': '(Тула) Покупатель', 'legalTitle': 'Полное юридическое имя',
              'inn': '781437759369' if is_ip else '7701234567', 'kpp': '' if is_ip else '770101001',
@@ -235,10 +237,11 @@ async def test_new_permissions_autofill_exact_buyer_and_linked_invoice(monkeypat
     assert context['buyer']['name'] == 'Полное юридическое имя'
     assert context['buyer']['first_name'] == buyer['legalFirstName']
     assert context['buyer']['kpp'] == buyer['kpp']
-    assert context['number'] == 'SF-902'
-    assert context['document_date'] == '2026-10-22'
+    assert context['number'] == 'shipment-42'
+    assert context['document_date'] == '2026-10-23'
     assert context['invoice_locked'] and context['function'] == 'СЧФДОП'
-    assert context['warnings'] == []
+    assert len(context['warnings']) == 1
+    assert 'другой номер или дата' in context['warnings'][0]
     assert any(url.endswith('/counterparty/buyer-id') for url in urls) is (not expanded)
 
 
@@ -255,6 +258,21 @@ async def test_old_token_requests_reinstallation_instead_of_claiming_empty_cards
     assert source['buyer_unavailable'] and source['invoice_unavailable']
     monkeypatch.setattr(documents, '_upd_source', AsyncMock(return_value=source))
     context = await documents.upd_export_context(uuid4(), NS(), NS())
-    assert len(context['warnings']) == 2
+    assert len(context['warnings']) == 1
     assert all('переустановите' in warning for warning in context['warnings'])
-    assert context['number'] == ''
+    assert context['number'] == '42'
+
+
+@pytest.mark.parametrize('field,value', [('number','other'), ('document_date','2026-10-22')])
+def test_export_rejects_manual_or_stale_requisites(source, options, field, value):
+    from datetime import date
+    setattr(options, field, date.fromisoformat(value) if field == 'document_date' else value)
+    with pytest.raises(UpdExportError, match='совпадать с отгрузкой'):
+        generate_upd(source, options)
+
+
+def test_matching_linked_invoice_uses_same_number_and_date(source, options):
+    source['invoice'] = {'name': '42', 'moment': '2026-10-23 23:00:00'}
+    r = root(source, options)
+    assert r.find('.//СвСчФакт').get('НомерДок') == '42'
+    assert r.find('.//СвСчФакт').get('ДатаДок') == '23.10.2026'
