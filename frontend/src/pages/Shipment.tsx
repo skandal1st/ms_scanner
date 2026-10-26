@@ -23,6 +23,8 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 const UpdExportModal = lazy(() => import('../components/UpdExportModal').then(m => ({ default: m.UpdExportModal })))
+// Temporarily hide outgoing UPD export while the EDI workflow is on hold.
+const UPD_EXPORT_VISIBLE = false
 
 const TsdDocumentQr = lazy(() =>
   import('../components/TsdDocumentQr').then((module) => ({ default: module.TsdDocumentQr })),
@@ -476,7 +478,7 @@ export function ShipmentPage({
           )}
         </button>
         <div className="acc-footer__spacer" />
-        {document?.moysklad_id && document.status === 'accepted' && <button type="button" className="button"
+        {UPD_EXPORT_VISIBLE && document?.moysklad_id && document.status === 'accepted' && <button type="button" className="button"
           onClick={() => setUpdOpen(true)}>XML УПД</button>}
         {withdrawnCount > 0 && (
           <span
@@ -563,7 +565,7 @@ export function ShipmentPage({
         busy={bulkBusy}
       />
 
-      {updOpen && document && <Suspense fallback={null}><UpdExportModal key={document.id} documentId={document.id}
+      {UPD_EXPORT_VISIBLE && updOpen && document && <Suspense fallback={null}><UpdExportModal key={document.id} documentId={document.id}
         onClose={() => setUpdOpen(false)} /></Suspense>}
 
       {done && !updOpen && (
@@ -583,7 +585,7 @@ export function ShipmentPage({
             </div>
             {!closingTab && !embedded && (
               <div className="flex-row gap-8" style={{ marginTop: 16, justifyContent: 'center' }}>
-                <button type="button" className="button" onClick={() => setUpdOpen(true)}>XML УПД</button>
+                {UPD_EXPORT_VISIBLE && <button type="button" className="button" onClick={() => setUpdOpen(true)}>XML УПД</button>}
                 <button
                   type="button"
                   className="button button--success"
