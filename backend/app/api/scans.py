@@ -380,6 +380,11 @@ async def _create_scan_record(
         package_type="BOX" if is_sscc(code) else ("GROUP" if is_box or (box_quantity and box_quantity > 1) else "UNIT"),
         keep_aggregate=bool(not is_box and box_quantity and box_quantity > 1),
     )
+    from app.services.scan_packaging import needs_packaging_discovery
+    discover_packaging = (not is_box and local_status == ScanStatus.scanned
+                          and needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity))
+    if discover_packaging:
+        scan_values.update(status=ScanStatus.pending, verification={'source': 'packaging_pending', 'checked_at': None})
     scan = None
     if original_code is not None:
         canonical_exists = (await db.execute(select(Scan.id).where(
@@ -469,6 +474,17 @@ async def _create_scan_record(
     if is_box:
         from app.worker.tasks import verify_box_task
         verify_box_task.delay(str(scan.id), str(current_user_id))
+    elif discover_packaging:
+        from app.worker.tasks import resolve_scan_packaging_task
+        try:
+            resolve_scan_packaging_task.delay(str(scan.id), str(current_user_id))
+        except Exception:
+            scan.status = ScanStatus.scanned
+            scan.verification = None
+            scan.error_message = 'Не удалось запустить определение упаковки. Нажмите «Проверить марки».'
+            await db.commit()
+            await publish_scan(current_user_id, scan)
+            logger.warning('scan.packaging_queue_failed', scan_id=str(scan.id))
     return scan, False
 
 

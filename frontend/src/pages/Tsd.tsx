@@ -311,6 +311,17 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const lastScannedPosition = lastScanned && rowForScan(lastScanned)
   const lastScannedIndex = lastScannedPosition ? progress.rows.indexOf(lastScannedPosition) : -1
   useEffect(() => {
+    if (message?.text !== 'Определяем товар и состав упаковки…' || !lastScannedId
+        || !lastScanned || lastScanned.status === 'pending') return
+    const outsidePlan = progress.hasPlan && !lastScannedPosition
+    const over = lastScannedPosition && lastScannedPosition.expected > 0
+      && lastScannedPosition.addedTotal > lastScannedPosition.expected
+    setMessage(lastScanned.error_message ? { kind: 'error', text: lastScanned.error_message }
+      : outsidePlan ? { kind: 'error', text: `GTIN ${effectiveGtinKey(lastScanned) || 'не определён'} отсутствует в плане отгрузки` }
+      : over ? { kind: 'error', text: `Упаковка добавлена сверх плана: ${lastScannedPosition.product_name}` }
+      : { kind: 'ok', text: scanPackageLabel(lastScanned) })
+  }, [message?.text, lastScannedId, lastScanned, lastScannedPosition, progress.hasPlan])
+  useEffect(() => {
     if (!listView || !scanNavigation || lastScannedIndex < 0) return
     setPositionFilter(lastScannedIndex)
     setSelectedScanId(null)
@@ -379,10 +390,12 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
       const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
-      const errorFeedback = Boolean(result.duplicate || rejected || !matched || overPlan)
+      const resolvingPackage = result.status === 'pending' && result.verification?.source === 'packaging_pending'
+      const errorFeedback = Boolean(result.duplicate || rejected || (!matched && !resolvingPackage) || overPlan)
       setMessage(result.duplicate
         ? { kind: 'error', text: 'Этот код уже отсканирован' }
         : rejected ? { kind: 'error', text: result.error_message || 'Не удалось распознать марку' }
+        : resolvingPackage ? { kind: 'ok', text: 'Определяем товар и состав упаковки…' }
         : !matched ? { kind: 'error', text: `Скан записан, но GTIN ${effectiveGtinKey(result) || 'не определён'} отсутствует в плане отгрузки` }
         : overPlan ? { kind: 'error', text: `Марка добавлена сверх плана: ${matched.product_name}` }
         : { kind: 'ok', text: result.product_name || matched.product_name || 'Скан принят' })
@@ -597,7 +610,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           {filteredScans.length === 0 && <p className="hint">{onlyProblemMarks ? 'Проблемных марок нет.' : 'По выбранной позиции ещё нет сканов.'}</p>}
           <div className="tsd-mark-list">
             {filteredScans.slice(0, visibleScans).map(({ scan: item, number }) => <TsdSwipeMark key={item.id}
-              className={`tsd-mark tsd-progress--${item.verification?.ms_error || item.verification?.owner_result === 'mismatch' || !rowForScan(item) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : item.verification?.checked_at && item.status === 'valid' ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
+              className={`tsd-mark tsd-progress--${item.verification?.ms_error || item.verification?.owner_result === 'mismatch' || (item.status !== 'pending' && !rowForScan(item)) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : item.verification?.checked_at && item.status === 'valid' ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
               selected={selectedScanId === item.id} open={swipeScanId === item.id} disabled={!online || scannerBlocked || doc.status !== 'draft'}
               onSelect={() => { setSwipeScanId(null); setSelectedScanId(previous => previous === item.id ? null : item.id) }}
               onReveal={open => { setSwipeScanId(open ? item.id : null); if (open) setSelectedScanId(item.id) }}

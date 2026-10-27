@@ -10,6 +10,9 @@ const exportsObject = {};
 vm.runInNewContext(ts.transpileModule(source, {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,
   {exports:exportsObject, require:req});
 const {scanPackageLabel,scanPackageType,shouldUnpack,packActionLabel} = exportsObject;
+test('unresolved packaging does not appear as one unit',()=>{
+ assert.equal(scanPackageLabel({status:'pending',verification:{source:'packaging_pending'}}),'Определяем упаковку…');
+});
 test('pack GTIN displays a block of ten independently of the SSCC flag',()=>{
  const scan={package_type:'GROUP',is_box:false,box_quantity:10,keep_aggregate:true};
  assert.equal(scanPackageType(scan),'GROUP');

@@ -19,6 +19,12 @@ from app.services.chestnyznak import (
 )
 
 
+@celery_app.task(name='resolve_scan_packaging')
+def resolve_scan_packaging_task(scan_id, user_id):
+    from app.services.scan_packaging_discovery import discover_scan_packaging
+    return _run(discover_scan_packaging(scan_id, user_id))
+
+
 @celery_app.task(name='prepare_physical_count')
 def prepare_physical_count_task(session_id):
     return _run(_prepare_physical_count_async(session_id))
