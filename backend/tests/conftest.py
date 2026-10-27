@@ -1,5 +1,5 @@
 """Keep unit tests independent from live delivery and PostgreSQL-only transaction locks."""
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 import pytest
 
 
@@ -7,6 +7,8 @@ import pytest
 def isolate_live_delivery(monkeypatch):
     from app.api import scans, tsd
     from app.services import document_guard, scan_events
+    from app.worker import tasks
+    monkeypatch.setattr(tasks.resolve_scan_packaging_task, 'delay', Mock())
     for module in (scans, tsd, scan_events):
         for name in ("publish_event", "publish_scan", "publish_removed"):
             if hasattr(module, name):

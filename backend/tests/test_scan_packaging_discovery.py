@@ -28,15 +28,32 @@ def test_incomplete_or_mixed_pack_is_not_counted_as_one_unit(children):
         service.packaging_metadata(NS(package_type='GROUP', children=children), '04630339608897')
 
 
-def test_discovery_targets_unknown_gtins_and_pack_aliases_not_every_unit():
+def test_discovery_never_infers_unit_packaging_from_product_matching():
     plan = [{'product_id': 'p', 'gtin': '04630339608705', 'pack_gtins': ['04630339608897']}]
     assert needs_packaging_discovery(plan, '04630339608897', 'p', None)
     assert needs_packaging_discovery(plan, '04630339608897', None, None)
     assert needs_packaging_discovery([], '04630339608897', None, None)
     assert needs_packaging_discovery([], '04610113991414', 'remembered-muassel', None)
     assert not needs_packaging_discovery([], '04610113991414', 'remembered-muassel', 10)
-    assert not needs_packaging_discovery(plan, '04630339608705', 'p', None)
+    assert needs_packaging_discovery(plan, '04630339608705', 'p', None)
     assert not needs_packaging_discovery(plan, '04630339608897', 'p', 10)
+
+
+def test_deus_block_stored_as_regular_product_barcode_still_gets_discovered():
+    plan = [{'gtin': '02000000096872', 'gtins': ['02000000096872', '04610684000706',
+             '14610684000703', '04640195516373'], 'product_id': 'tokyo-spring',
+             'pack_gtins': [], 'pack_quantities': {}}]
+    assert needs_packaging_discovery(plan, '04610684000706', 'tokyo-spring', None)
+    children = [f'010464019551637321PACK{i}' for i in range(10)]
+    metadata = service.packaging_metadata(NS(package_type='GROUP', children=children), '04610684000706')
+    assert metadata['gtin'] == '04640195516373'
+    assert metadata['box_quantity'] == 10 and metadata['package_type'] == 'GROUP'
+
+
+def test_actual_unit_from_cz_keeps_single_unit_semantics():
+    metadata = service.packaging_metadata(NS(package_type='UNIT', children=[],
+                                            gtin='04640195516373'), '04640195516373')
+    assert metadata == {'gtin': '04640195516373', 'package_type': 'UNIT'}
 
 
 @pytest.mark.parametrize('state', ['ready', 'removed', 'finished', 'verified'])
