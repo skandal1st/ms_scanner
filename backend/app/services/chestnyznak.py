@@ -577,6 +577,14 @@ def serial_len_for_pg(pg: Optional[str]) -> Optional[int]:
     return CZ_PG_SERIAL_LEN.get((pg or "").strip().lower())
 
 
+def _logistic_gs1_cis(raw: str) -> Optional[str]:
+    """AI 02 logistics labels are complete aggregate IDs, not bare unit marks."""
+    code = _printable_with_gs(strip_ai_brackets(raw))
+    if re.match(r'^02\d{14}(?:1[123567]\d{6}|10|21|37)', code):
+        return code
+    return None
+
+
 def cis_for_cz_info(raw: str, pg: str) -> str:
     """Info lookup uses the identification code, preserving its registered AI/bare form.
 
@@ -584,6 +592,9 @@ def cis_for_cz_info(raw: str, pg: str) -> str:
     Unknown/ambiguous serial lengths remain unchanged rather than guessed.
     The original full scan is retained for status/crypto checking and audit.
     """
+    logistic = _logistic_gs1_cis(raw)
+    if logistic:
+        return logistic
     tracking_type = next((tt for tt, group in MS_TRACKING_TYPE_TO_CZ_PG.items() if group == pg), None)
     return cis_string_for_moysklad_api(strip_ai_brackets(raw), tracking_type)
 
@@ -919,7 +930,8 @@ class ChestnyZnakService:
 
         # Голый табачный код (<GTIN><серийник> без 01/21) достраиваем до КИ, иначе
         # cises/info отвечает 404 «КМ/КИ не найден» (см. _real_verify).
-        cis = _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(code))
+        logistic = _logistic_gs1_cis(code)
+        cis = logistic or _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(code))
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
         from app.core.diagnostics import response_body, capture_request
@@ -929,7 +941,7 @@ class ChestnyZnakService:
             "Content-Type": "application/json",
         }
         # Кэш gtin→pg: нужную группу пробуем первой, минуя промахи по остальным.
-        gtin_key = normalize_gtin_key(extract_gtin(cis))
+        gtin_key = normalize_gtin_key(logistic[2:16] if logistic else extract_gtin(cis))
         cached_pg = await get_cached_pg(gtin_key)
         for pg in self._ordered_groups(cached_pg):
             cis = cis_for_cz_info(code, pg)

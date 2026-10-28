@@ -188,3 +188,45 @@ async def test_cz_pack_type_fetches_composition_without_child_field(monkeypatch,
     assert info.package_type == 'GROUP'
     assert post.await_count == 2
     assert info.children == (['child-a', 'child-b'] if aggregate_found else [])
+
+
+@pytest.mark.parametrize('pg', ['tobacco', 'otp', 'ncp', 'antiseptic'])
+@pytest.mark.parametrize('brackets', [False, True])
+def test_ai02_logistics_identifier_is_never_shortened_as_a_unit_mark(pg, brackets):
+    from app.services.chestnyznak import cis_for_cz_info
+    raw = '020080208412846113260930102MSCS21110429237250'
+    displayed = '(02)00802084128461(13)260930(10)2MSCS(21)1104292(37)250'
+    assert cis_for_cz_info(displayed if brackets else raw, pg) == raw
+
+
+async def test_ai02_box_fetches_all_250_leaves_with_original_identifier(monkeypatch):
+    import httpx
+    from app.services.chestnyznak import ChestnyZnakService
+    from app.services import cz_logger, cz_pg_cache
+    raw = '020080208412846113260930102MSCS21110429237250'
+    children = [f'010080208412846121{i:07d}' for i in range(250)]
+    tree = {f'block-{i}': children[i * 10:(i + 1) * 10] for i in range(25)}
+    post = AsyncMock(side_effect=[httpx.Response(200, json=[{'cisInfo': {
+        'cis': raw, 'generalPackageType': 'BOX', 'child': list(tree)}}]),
+        httpx.Response(200, json={raw: tree})])
+    @asynccontextmanager
+    async def client(**kwargs):
+        yield NS(post=post)
+    monkeypatch.setattr(httpx, 'AsyncClient', client)
+    log = AsyncMock(); monkeypatch.setattr(cz_logger, 'log_cz_request', log)
+    cached = AsyncMock(return_value='otp'); monkeypatch.setattr(cz_pg_cache, 'get_cached_pg', cached)
+    saved = AsyncMock(); monkeypatch.setattr(cz_pg_cache, 'set_cached_pg', saved)
+    info = await ChestnyZnakService(token='fake', mock=False, product_groups=['otp']).get_code_info(raw)
+    assert info.package_type == 'BOX' and info.children == children
+    assert post.await_count == 2
+    assert all(call.kwargs['json'] == [raw] for call in post.await_args_list)
+    cached.assert_awaited_once_with('00802084128461')
+    saved.assert_awaited_once_with('00802084128461', 'otp')
+    assert all(call.kwargs['original_code'] == raw for call in log.await_args_list)
+
+
+def test_unit_mark_normalization_still_removes_only_the_known_crypto_tail():
+    from app.services.chestnyznak import cis_for_cz_info
+    compact = '04620164405358TEST0010000ABCD'
+    assert len(compact) == 29
+    assert cis_for_cz_info(compact, 'otp') == compact[:21]
