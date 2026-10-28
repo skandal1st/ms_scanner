@@ -403,6 +403,22 @@ async def test_final_transfer_does_not_change_document_states(monkeypatch):
     assert not any('state' in (body or {}) for _, _, body in calls)
 
 
+async def test_document_confirmation_read_retries_rate_limit(monkeypatch):
+    from app.services import moysklad
+    from app.core.diagnostics import operation_scope
+    calls = []
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(429 if len(calls) == 1 else 200, json={} if len(calls) == 1 else {'id': 'doc'})
+    factory = httpx.AsyncClient
+    monkeypatch.setattr(moysklad.httpx, 'AsyncClient', lambda **kwargs: factory(transport=httpx.MockTransport(reply), **kwargs))
+    monkeypatch.setattr(moysklad.asyncio, 'sleep', AsyncMock())
+    with operation_scope(uuid4(), uuid4(), 'moysklad.write_document') as operation:
+        assert await MoySkladService('fake').get_document('demand', 'doc') == {'id': 'doc'}
+        assert [r['status'] for r in operation.requests] == [429, 200]
+    assert len(calls) == 2 and all(r.method == 'GET' for r in calls)
+
+
 async def test_large_shipment_only_appends_760_marks_and_preserves_534_positions(monkeypatch):
     rows = [position(f'p{i}', 2, f'r{i}') for i in range(534)]
     before = copy.deepcopy(rows)

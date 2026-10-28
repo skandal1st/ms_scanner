@@ -456,9 +456,8 @@ class MoySkladService:
         """Детали МС-документа выбранного типа."""
         self._validate_kind(kind)
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(
+            resp = await self._request_with_retry(client, 'GET',
                 f"{self.base_url}/entity/{kind}/{doc_id}",
-                headers=self.headers,
                 params={'expand': 'agent,customerOrder'} if kind == 'demand' else None,
             )
             resp.raise_for_status()
