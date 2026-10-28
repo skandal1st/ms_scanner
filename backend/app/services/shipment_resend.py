@@ -20,6 +20,20 @@ def public_state(doc):
     return {k: v for k, v in ((doc.upd_meta or {}).get(MARKER) or {}).items() if k in PUBLIC_FIELDS}
 
 
+def available(doc):
+    if not doc.moysklad_id or (doc.upd_meta or {}).get('superseded_by_document_id'):
+        return False
+    if getattr(doc, 'kind', DocumentKind.demand) != DocumentKind.demand:
+        return False
+    if doc.status == DocumentStatus.accepted:
+        return True
+    if corrections.correction(doc):
+        return False
+    if doc.status == DocumentStatus.draft:
+        return bool(getattr(doc, 'error_message', None) and getattr(doc, 'processing_progress', None))
+    return doc.status == DocumentStatus.processing and bool(((doc.upd_meta or {}).get(MARKER) or {}).get('retry_failed'))
+
+
 def index_codes(rows):
     result = {}
     def visit(code, pid):
@@ -114,10 +128,10 @@ async def resolve_source(db, doc, *, check_edits=True):
         if not parent:
             raise ValueError('Исходная сборка недоступна.')
         doc = parent
-    if doc.status != DocumentStatus.accepted or not doc.moysklad_id:
-        raise ValueError('Повторная отправка доступна только для завершённой отгрузки.')
     if (doc.upd_meta or {}).get('superseded_by_document_id'):
         raise ValueError('Откройте актуальную версию отгрузки после исправлений.')
+    if not available(doc):
+        raise ValueError('Повторная отправка доступна для завершённой отгрузки или после ошибки отправки.')
     return doc
 
 
@@ -230,6 +244,13 @@ async def process(document_id, user_id, job_id):
     async with AsyncSessionLocal() as db:
         doc = await db.get(Document, document_id)
         if not doc or str(doc.user_id) != str(user_id):
+            return
+        job = (doc.upd_meta or {}).get(MARKER) or {}
+        if job.get('retry_failed'):
+            if job.get('id') == job_id and job.get('status') in ACTIVE and doc.status == DocumentStatus.processing:
+                # Reuse normal finalization, validation, locking and incident resolution.
+                from app.worker.tasks import _process_document_async
+                await _process_document_async(document_id, user_id)
             return
         async with processing_lock(f'ms:{user_id}:demand:{doc.moysklad_id}') as acquired:
             if not acquired:

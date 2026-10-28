@@ -99,7 +99,7 @@ async def resend_marks(source_id: UUID, access: Scope = Depends(scope), db: Asyn
             # Lock only after acquiring the MS lock, matching the worker's lock order.
             source = (await db.execute(select(Document).where(Document.id == source.id)
                 .with_for_update().execution_options(populate_existing=True))).scalar_one()
-            if source.status != DocumentStatus.accepted or (source.upd_meta or {}).get('superseded_by_document_id'):
+            if not resend.available(source):
                 raise ValueError('Версия отгрузки изменилась. Откройте актуальную сборку.')
             state = copy.deepcopy((source.upd_meta or {}).get(resend.MARKER) or {})
             updated = datetime.fromisoformat(state['updated_at']) if state.get('updated_at') else None
@@ -107,12 +107,24 @@ async def resend_marks(source_id: UUID, access: Scope = Depends(scope), db: Asyn
                 return resend.public_state(source)
             job = {k: v for k, v in state.items() if k == 'in_flight'}
             job.update(id=str(uuid4()), status='queued', expected=0, already=0, added=0, confirmed=0, error=None)
+            if source.status != DocumentStatus.accepted:
+                from app.db.models import ScanStatus
+                scans = (await db.execute(select(Scan).where(Scan.document_id == source.id))).scalars().all()
+                if (not any(s.status in {ScanStatus.valid, ScanStatus.overflow} for s in scans)
+                        or any(s.status in {ScanStatus.scanned, ScanStatus.pending, ScanStatus.unknown_product} for s in scans)):
+                    raise ValueError('Перед повторной отправкой дождитесь проверки марок и сопоставьте неизвестные товары.')
+                job['retry_failed'] = True
+                source.status = DocumentStatus.processing
+                source.error_message = None
             await resend.save(db, source, job)
         # Release the MS lock before dispatch: a fast worker must be able to acquire it.
         try:
             resend_shipment_marks_task.delay(str(source.id), str(source.user_id), job['id'])
         except Exception as exc:
             job.update(status='error', error='Не удалось поставить повторную отправку в очередь. Повторите попытку.')
+            if job.get('retry_failed'):
+                source.status = DocumentStatus.draft
+                source.error_message = job['error']
             await resend.save(db, source, job)
             raise HTTPException(503, job['error']) from exc
         return resend.public_state(source)

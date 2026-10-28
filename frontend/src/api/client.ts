@@ -95,6 +95,7 @@ export interface PlanItem {
 }
 
 export interface Document {
+  can_resend_marks?: boolean
   display_name?: string | null
   collection_started?: boolean
   customer_order_name?: string | null
@@ -1008,6 +1009,8 @@ export interface TsdDocumentItem {
 }
 
 export interface TsdDocumentDetail {
+  can_resend_marks?: boolean
+  error_message?: string | null
   collection_started?: boolean
   id: string
   name: string

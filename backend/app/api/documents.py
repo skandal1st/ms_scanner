@@ -36,6 +36,7 @@ class PlanItem(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    can_resend_marks: bool = False
     display_name: Optional[str] = None
     collection_started: bool = False
     id: UUID
@@ -81,7 +82,9 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
     # а сессия async (asyncpg). MissingGreenlet → 500.
     # Вызывающий должен передать scan_count явно (либо посчитать SELECT count,
     # либо использовать selectinload, либо знать что документ только что создан).
+    from app.services.shipment_resend import available
     return DocumentResponse(
+        can_resend_marks=available(doc),
         collection_started=collection_started(doc),
         id=doc.id,
         moysklad_id=doc.moysklad_id,

@@ -187,3 +187,64 @@ async def test_resolve_source_follows_correction_to_completed_assembly(monkeypat
     source.upd_meta['superseded_by_document_id'] = str(uuid4())
     with pytest.raises(ValueError, match='актуальную'):
         await service.resolve_source(db, draft)
+
+
+def test_retry_eligibility_includes_failed_shipments_but_not_fresh_drafts():
+    doc = NS(moysklad_id='ms', kind='demand', status=DocumentStatus.draft,
+        upd_meta={}, error_message=None, processing_progress=None)
+    assert not service.available(doc)
+    doc.error_message = 'Отправка прервалась'
+    assert not service.available(doc)
+    doc.processing_progress = {'sent': 0, 'total': 760}
+    assert service.available(doc)
+    doc.status = DocumentStatus.processing
+    assert not service.available(doc)
+    doc.upd_meta[service.MARKER] = {'retry_failed': True}
+    assert service.available(doc)
+
+
+@pytest.mark.parametrize('broker_failure', [False, True])
+async def test_failed_shipment_button_queues_native_finalization(monkeypatch, broker_failure):
+    from app.api import shipment_corrections as routes
+    from app.worker.tasks import resend_shipment_marks_task
+    from fastapi import HTTPException
+    from unittest.mock import Mock
+    from contextlib import asynccontextmanager
+    @asynccontextmanager
+    async def unlocked(*args):
+        yield True
+    monkeypatch.setattr(routes, 'processing_lock', unlocked)
+    doc = NS(id=uuid4(), user_id=uuid4(), moysklad_id='ms', status=DocumentStatus.draft,
+        upd_meta={}, error_message='Таймаут', processing_progress={'total': 760})
+    monkeypatch.setattr(routes, 'owned', AsyncMock(return_value=doc))
+    db = NS(commit=AsyncMock(), execute=AsyncMock(side_effect=[Result(doc), Result([NS(status=ScanStatus.valid)])]))
+    dispatch = Mock(side_effect=RuntimeError('broker') if broker_failure else None)
+    monkeypatch.setattr(resend_shipment_marks_task, 'delay', dispatch)
+    if broker_failure:
+        with pytest.raises(HTTPException) as error:
+            await routes.resend_marks(doc.id, NS(), db)
+        assert error.value.status_code == 503 and doc.status == DocumentStatus.draft
+    else:
+        result = await routes.resend_marks(doc.id, NS(), db)
+        assert result['status'] == 'queued' and doc.status == DocumentStatus.processing
+        assert doc.error_message is None
+    assert doc.upd_meta[service.MARKER]['retry_failed'] is True
+    assert dispatch.call_count == 1
+
+
+async def test_failed_retry_task_uses_normal_processing_and_ignores_stale_job(monkeypatch):
+    from app.db import session
+    from app.worker import tasks
+    from contextlib import asynccontextmanager
+    doc = NS(user_id=uuid4(), status=DocumentStatus.processing,
+        upd_meta={service.MARKER: {'id': 'job', 'status': 'queued', 'retry_failed': True}})
+    @asynccontextmanager
+    async def database():
+        yield NS(get=AsyncMock(return_value=doc))
+    monkeypatch.setattr(session, 'AsyncSessionLocal', database)
+    native = AsyncMock()
+    monkeypatch.setattr(tasks, '_process_document_async', native)
+    await service.process('doc', str(doc.user_id), 'old-job')
+    native.assert_not_awaited()
+    await service.process('doc', str(doc.user_id), 'job')
+    native.assert_awaited_once_with('doc', str(doc.user_id))

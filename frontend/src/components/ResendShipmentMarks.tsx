@@ -3,8 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { shipmentCorrectionsApi } from '../api/client'
 import { useModal } from './ModalProvider'
 
-export function ResendShipmentMarks({ documentId, terminal = false, disabled = false, loadState = true }: {
-  documentId: string; terminal?: boolean; disabled?: boolean; loadState?: boolean
+export function ResendShipmentMarks({ documentId, terminal = false, disabled = false, loadState = true, onStateChange }: {
+  documentId: string; terminal?: boolean; disabled?: boolean; loadState?: boolean; onStateChange?: () => void
 }) {
   const modal = useModal()
   const qc = useQueryClient()
@@ -14,6 +14,8 @@ export function ResendShipmentMarks({ documentId, terminal = false, disabled = f
   const [error, setError] = useState('')
   const requestRef = useRef(false)
   const completed = useRef<string | null>(null)
+  const stateChange = useRef(onStateChange)
+  stateChange.current = onStateChange
   const key = ['shipment-mark-resend', terminal, documentId]
   const status = useQuery({ queryKey: key, enabled: loadState || started,
     queryFn: () => api.resendStatus(documentId).then(r => r.data),
@@ -21,6 +23,9 @@ export function ResendShipmentMarks({ documentId, terminal = false, disabled = f
   const state = status.data
   const active = state?.status === 'queued' || state?.status === 'running'
   const stale = active && Boolean(state?.updated_at) && Date.now() - Date.parse(state!.updated_at!) > 15 * 60_000
+  useEffect(() => {
+    if (state?.id && state.status) stateChange.current?.()
+  }, [state?.id, state?.status])
   useEffect(() => {
     if (state?.status === 'done' && state.id !== completed.current) {
       completed.current = state.id || null

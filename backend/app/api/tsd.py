@@ -26,6 +26,7 @@ from app.api.scans import (
     _resolve_cz_for_boxes,
 )
 from app.core.config import settings
+from app.services.shipment_resend import available as resend_available
 from app.core.logging import logger
 from app.core.security import create_tsd_access_token, create_tsd_refresh_token, decode_token, decrypt_token
 from app.db.models import (
@@ -142,6 +143,8 @@ class TsdOrderShipments(BaseModel):
 
 
 class TsdDocumentDetail(BaseModel):
+    can_resend_marks: bool = False
+    error_message: Optional[str] = None
     collection_started: bool = False
     id: UUID
     name: str
@@ -754,6 +757,7 @@ async def select_tsd_document(
         )
     ).scalar_one()
     return TsdDocumentDetail(
+        can_resend_marks=resend_available(doc), error_message=getattr(doc, 'error_message', None),
         collection_started=collection_started(doc),
         id=doc.id,
         name=doc.name,
@@ -800,6 +804,7 @@ async def get_tsd_document(
     ).scalar_one()
     await db.commit()
     return TsdDocumentDetail(
+        can_resend_marks=resend_available(doc), error_message=getattr(doc, 'error_message', None),
         collection_started=collection_started(doc),
         id=doc.id, name=doc.name, status=doc.status.value, plan=list(doc.plan or []),
         scans=[ScanResponse.model_validate(s) for s in scans], session_id=session.id,

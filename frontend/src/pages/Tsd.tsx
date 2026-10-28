@@ -22,6 +22,7 @@ import { Icon } from '../components/Icon'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
+import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
 import { saveTsdTokens } from '../lib/tsdAuth'
 
 function progressState(added: number, expected: number) {
@@ -558,7 +559,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       inputRef.current?.focus({ preventScroll: true })
     }
   }, [doc.collection_started, targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, packMode.isPending, release.isPending])
-  const scannerBlocked = !doc.collection_started || startCollection.isPending || scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
+  const scannerBlocked = doc.status !== 'draft' || !doc.collection_started || startCollection.isPending || scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
   useTsdScannerFocus(inputRef, scannerBlocked, (value) => setCode((previous) => previous + value))
   const acceptCode = () => {
     const normalized = normalizeScannerInput(code).trim()
@@ -632,6 +633,9 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <TsdConnection />
       </header>
       {doc.active_on_other_device ? <div className="tsd-alert tsd-alert--warn">Отгрузка также открыта на другом ТСД</div> : null}
+      {doc.can_resend_marks && <ResendShipmentMarks key={doc.id} documentId={doc.id} terminal disabled={!online}
+        onStateChange={() => { void qc.invalidateQueries({ queryKey: ['tsd-document', doc.id] }) }} />}
+      {doc.error_message && <div role="alert" className="tsd-alert tsd-alert--error">{doc.error_message}</div>}
       {!doc.collection_started && <section className="tsd-current" style={{ padding: 18 }}>
         <p>Проверьте план отгрузки и начните сборку.</p>
         <button type="button" className="tsd-button tsd-button--primary" disabled={!online || startCollection.isPending}

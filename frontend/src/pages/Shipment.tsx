@@ -315,8 +315,13 @@ export function ShipmentPage({
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
           {!embedded && <button type="button" className="button button--sm" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
-          {document?.kind === 'demand' && document.moysklad_id && document.status === 'accepted' &&
-            <ResendShipmentMarks key={document.id} documentId={document.id} />}
+          {document?.kind === 'demand' && document.moysklad_id && (document.can_resend_marks || document.status === 'accepted') &&
+            <ResendShipmentMarks key={document.id} documentId={document.id} onStateChange={() => {
+              const id = document.id
+              void documentsApi.get(id).then(({ data }) => {
+                if (useScanStore.getState().document?.id === id) setDocument(data)
+              }).catch(() => {})
+            }} />}
           {document && <span className={docStatusCls}>{docStatusText}</span>}
           {document && !embedded && (
             <button
