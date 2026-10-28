@@ -1124,7 +1124,7 @@ class MoySkladService:
             resp.raise_for_status()
             return resp.json()
 
-    async def add_gtin_barcode_to_product(self, product_id: str, gtin: str) -> bool:
+    async def add_gtin_barcode_to_product(self, product_id: str, gtin: str, *, expected_gtins=None) -> bool:
         """Дописать GTIN в штрихкоды товара МС — чтобы будущие сканы этого GTIN
         матчились автоматически через find_product_by_gtin (filter=barcode=...),
         и кладовщику не приходилось сопоставлять повторно.
@@ -1158,6 +1158,10 @@ class MoySkladService:
             for bc in barcodes:
                 if isinstance(bc, dict) and any(str(v) in variants for v in bc.values()):
                     return True  # уже привязан
+            if expected_gtins is not None:
+                from app.services.gtin_card import product_gtins
+                if product_gtins({'barcodes': barcodes}) != expected_gtins:
+                    return False  # The card changed after the user's confirmation.
             key = "gtin" if len(g) == 14 else "ean13"
             new_barcodes = list(barcodes) + [{key: g}]
             put = await client.put(

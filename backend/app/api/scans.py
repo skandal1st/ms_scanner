@@ -438,9 +438,9 @@ async def _create_scan_record(
         return existing, True
 
     await db.refresh(scan)
-    if remember_assignment:
+    if remember_assignment and device_id is None:
         from app.worker.tasks import persist_assigned_gtin_task
-        persist_assigned_gtin_task.delay(str(current_user_id), gtin, moysklad_product_id)
+        persist_assigned_gtin_task.delay(str(current_user_id), gtin, moysklad_product_id, str(document_id))
     await publish_scan(current_user_id, scan)
     if original_code is not None:
         logger.info('scan.input_decoded', document_id=str(document_id), scan_id=str(scan.id),

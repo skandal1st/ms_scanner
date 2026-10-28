@@ -1,9 +1,33 @@
 import axios from 'axios'
 import { installTsdAuth } from '../lib/tsdAuth'
+import { canonicalGtin, confirmGtinConflicts, type GtinConflict } from '../lib/gtinConfirmation'
 
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+})
+
+// Desktop-only mapping writes. Inspect the actual card before local mapping or MS mutations.
+api.interceptors.request.use(async config => {
+  if (config.method !== 'post' || !['/products/link-gtin', '/products/link-gtin-bulk',
+      '/inventory/link-gtin', '/inventory/relink-gtin'].includes(config.url || '')) return config
+  const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data
+  const links = (body.links || [body]) as { gtin: string; moysklad_product_id: string }[]
+  const cards = new Map<string, { name: string; gtins: string[] }>()
+  const conflicts: GtinConflict[] = []
+  for (const link of links) {
+    if (!link.gtin || !link.moysklad_product_id) continue
+    let card = cards.get(link.moysklad_product_id)
+    if (!card) {
+      card = (await api.get<{ name: string; gtins: string[] }>(`/products/${encodeURIComponent(link.moysklad_product_id)}/gtins`)).data
+      cards.set(link.moysklad_product_id, card)
+    }
+    if (card.gtins.length && !card.gtins.includes(canonicalGtin(link.gtin) || link.gtin)) {
+      conflicts.push({ name: card.name, gtin: link.gtin, existing: card.gtins })
+    }
+  }
+  await confirmGtinConflicts(conflicts)
+  return config
 })
 
 api.interceptors.request.use((config) => {
@@ -688,6 +712,8 @@ export interface BulkLinkItem {
 }
 
 export const productsApi = {
+  confirmScanGtin: (document_id: string, gtin: string, product_id: string, existing_gtins: string[]) =>
+    api.post('/products/confirm-scan-gtin', { document_id, gtin, product_id, existing_gtins }),
   search: (q: string) =>
     api.get<ProductSearchItem[]>('/products/search', { params: { q } }),
   linkGtin: (

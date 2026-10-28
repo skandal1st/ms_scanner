@@ -393,22 +393,27 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="persist_assigned_gtin")
-def persist_assigned_gtin_task(self, user_id: str, gtin: str, product_id: str):
+def persist_assigned_gtin_task(self, user_id: str, gtin: str, product_id: str, document_id=None, confirmed_gtins=None):
     """Persist an explicit scanner assignment without external calls in the scan API."""
     try:
-        _run(_persist_assigned_gtin_async(user_id, gtin, product_id))
+        _run(_persist_assigned_gtin_async(user_id, gtin, product_id, document_id, confirmed_gtins))
     except Exception as exc:
         logger.warning('gtin_assignment.persist_failed', user_id=user_id, gtin=gtin, error=str(exc))
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
-async def _persist_assigned_gtin_async(user_id: str, gtin: str, product_id: str):
+async def _persist_assigned_gtin_async(user_id: str, gtin: str, product_id: str, document_id=None, confirmed_gtins=None):
+    # Legacy queued tasks cannot prove whether the assignment came from a TSD.
+    if document_id is None:
+        return
     import redis.asyncio as aioredis
     from uuid import UUID
     from sqlalchemy import select
     from app.core.config import settings
     from app.core.security import decrypt_token
-    from app.db.models import Integration
+    from app.db.models import Integration, Document
+    from app.services.gtin_card import product_gtins
+    from app.services.scan_events import publish_event
     from app.db.session import AsyncSessionLocal
     from app.services.gtin_product_store import get_gtin_product
     from app.services.moysklad import MoySkladService
@@ -418,6 +423,9 @@ async def _persist_assigned_gtin_async(user_id: str, gtin: str, product_id: str)
         # Different GTINs of the same product must not overwrite each other's barcodes.
         async with redis.lock(f'gtin_assignment:{user_id}:{product_id}', timeout=90, blocking_timeout=5):
             async with AsyncSessionLocal() as db:
+                doc = await db.get(Document, UUID(document_id))
+                if not doc or str(doc.user_id) != user_id:
+                    return
                 remembered = await get_gtin_product(db, UUID(user_id), gtin)
                 if not remembered or remembered[0] != product_id:
                     return  # An older task must not undo a newer explicit assignment.
@@ -426,7 +434,16 @@ async def _persist_assigned_gtin_async(user_id: str, gtin: str, product_id: str)
                 if not integration or not integration.moysklad_token:
                     raise ValueError('МойСклад не подключён — не удалось записать GTIN в карточку товара')
                 ms = MoySkladService(decrypt_token(integration.moysklad_token))
-                if not await ms.add_gtin_barcode_to_product(product_id, gtin):
+                product = await ms.get_product_by_id(product_id)
+                if not product:
+                    raise ValueError('Не удалось прочитать карточку товара МойСклад')
+                existing = product_gtins(product)
+                if normalize_gtin_key(gtin) not in existing and existing and existing != confirmed_gtins:
+                    await publish_event(user_id, {'type': 'gtin_assignment_confirmation_required',
+                        'document_id': document_id, 'product_id': product_id, 'gtin': gtin,
+                        'product_name': product.get('name') or '', 'existing_gtins': existing})
+                    return
+                if not await ms.add_gtin_barcode_to_product(product_id, gtin, expected_gtins=existing):
                     raise ValueError('МойСклад не сохранил GTIN в карточке товара — повторяем запись')
                 logger.info('gtin_assignment.persisted', user_id=user_id, gtin=gtin, product_id=product_id)
     finally:

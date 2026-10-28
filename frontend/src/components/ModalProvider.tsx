@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from 'react'
+import { setGtinConfirmationHandler } from '../lib/gtinConfirmation'
 
 type Variant = 'info' | 'error' | 'warn' | 'success'
 
@@ -20,6 +21,7 @@ interface AlertOptions {
 interface ConfirmOptions extends AlertOptions {
   cancelText?: string
   danger?: boolean
+  focusCancel?: boolean
 }
 
 export interface ModalApi {
@@ -87,6 +89,14 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     [push],
   )
 
+  useEffect(() => {
+    setGtinConfirmationHandler(conflicts => confirm(
+      conflicts.map(c => `Товар «${c.name}»: уже есть GTIN ${c.existing.join(', ')}; новый GTIN — ${c.gtin}.`).join('\n')
+        + '\nПроверьте выбранные товары. Добавить новые GTIN в карточки МойСклад?',
+      { title: 'В карточке уже есть другой GTIN', variant: 'warn', okText: 'Добавить GTIN', cancelText: 'Не записывать', focusCancel: true }))
+    return () => setGtinConfirmationHandler(null)
+  }, [confirm])
+
   // Esc закрывает: alert → ок, confirm → отмена (false).
   useEffect(() => {
     if (!dialog) return
@@ -124,7 +134,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
             </div>
             <div className="buttons" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
               {isConfirm && (
-                <button type="button" className="button" onClick={() => close(false)}>
+                <button type="button" className="button" onClick={() => close(false)} autoFocus={dialog.focusCancel}>
                   {dialog.cancelText ?? 'Отмена'}
                 </button>
               )}
@@ -132,7 +142,7 @@ export function ModalProvider({ children }: { children: ReactNode }) {
                 type="button"
                 className={`button ${dialog.danger ? 'button--danger' : 'button--primary'}`}
                 onClick={() => close(isConfirm ? true : undefined)}
-                autoFocus
+                autoFocus={!dialog.focusCancel}
               >
                 {dialog.okText ?? (isConfirm ? 'Подтвердить' : 'ОК')}
               </button>

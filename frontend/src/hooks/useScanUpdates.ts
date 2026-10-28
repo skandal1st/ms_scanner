@@ -1,11 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { scansApi } from '../api/client'
+import { productsApi, scansApi } from '../api/client'
+import { useModal } from '../components/ModalProvider'
 import { useScanStore } from '../store/scanStore'
 import { useDocumentLive, type DocumentEvent } from './useDocumentLive'
 import { applyScanEvent } from '../lib/scanEvents'
 
 // No COM port, keyboard handlers or focus changes: safe for embedded TSD monitoring.
 export function useScanUpdates(documentId: string | null, onVerifyDone?: (failed: boolean) => void) {
+  const modal = useModal()
+  const confirmations = useRef(new Set<string>())
   const syncing = useRef(false)
   const inflightEvents = useRef<DocumentEvent[]>([])
 
@@ -40,6 +43,21 @@ export function useScanUpdates(documentId: string | null, onVerifyDone?: (failed
       // юрлицах. Канал WS общий для аккаунта, поэтому события другой операции
       // никогда не должны менять локальную сессию.
       if (data.document_id && data.document_id !== documentId) return
+      if (data.type === 'gtin_assignment_confirmation_required' && documentId) {
+        const key = `${documentId}:${data.product_id}:${data.gtin}`
+        if (confirmations.current.has(key)) return
+        confirmations.current.add(key)
+        void (async () => {
+          try {
+            const ok = await modal.confirm(`В карточке «${data.product_name}» уже есть GTIN: ${(data.existing_gtins as string[]).join(', ')}. Вы добавляете новый GTIN ${data.gtin}. Проверьте, что выбран правильный товар. Марка уже добавлена в сборку; записать новый GTIN в карточку МойСклад?`,
+              { title: 'В карточке уже есть другой GTIN', variant: 'warn', okText: 'Добавить GTIN', cancelText: 'Не записывать', focusCancel: true })
+            if (ok) await productsApi.confirmScanGtin(documentId, data.gtin, data.product_id, data.existing_gtins)
+          } catch {
+            void modal.alert('Не удалось подтвердить запись GTIN. Марка сохранена в сборке.', { variant: 'error' })
+          } finally { confirmations.current.delete(key) }
+        })()
+        return
+      }
       if (data.type === 'cz_token_expired') {
         useScanStore.getState().setCzTokenExpired(true)
         return

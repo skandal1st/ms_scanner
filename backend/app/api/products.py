@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from uuid import UUID
 
@@ -34,6 +34,28 @@ class LinkGtinRequest(BaseModel):
 
 class LinkGtinResponse(BaseModel):
     updated_count: int
+
+
+class ConfirmScanGtinRequest(BaseModel):
+    document_id: UUID
+    gtin: str = Field(min_length=8, max_length=14)
+    product_id: str = Field(min_length=1, max_length=64)
+    existing_gtins: list[str] = Field(max_length=100)
+
+
+@router.post('/confirm-scan-gtin')
+async def confirm_scan_gtin(body: ConfirmScanGtinRequest,
+        current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    # PC credentials only: tsd_access cannot use get_current_user.
+    await _get_document_owned(db, body.document_id, current_user.id)
+    linked = (await db.execute(select(Scan.id).where(Scan.document_id == body.document_id,
+        Scan.gtin == body.gtin, Scan.moysklad_product_id == body.product_id).limit(1))).scalar_one_or_none()
+    if linked is None:
+        raise HTTPException(409, 'Привязка марки изменилась. Обновите сборку перед записью GTIN.')
+    from app.worker.tasks import persist_assigned_gtin_task
+    persist_assigned_gtin_task.delay(str(current_user.id), body.gtin, body.product_id,
+                                    str(body.document_id), sorted(set(body.existing_gtins)))
+    return {'status': 'queued'}
 
 
 class LinkUpdPositionRequest(BaseModel):
@@ -115,6 +137,17 @@ async def search_products(
     ms = await _get_ms_service(current_user, db)
     rows = await ms.search_products(q, limit=20)
     return [ProductSearchItem.model_validate(r) for r in rows]
+
+
+@router.get('/{product_id}/gtins')
+async def product_gtin_context(product_id: str, current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db)):
+    from app.services.gtin_card import product_gtins
+    ms = await _get_ms_service(current_user, db)
+    product = await ms.get_product_by_id(product_id)
+    if not product:
+        raise HTTPException(404, 'Не удалось прочитать карточку товара МойСклад')
+    return {'name': product.get('name') or '', 'gtins': product_gtins(product)}
 
 
 def _norm_name(s: Optional[str]) -> str:

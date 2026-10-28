@@ -277,7 +277,7 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
         if service.code_key(entry) == service.code_key(candidate):
             return {'duplicate': True, 'id': str(current.id)}
     scan_input = body.code if decoded else raw
-    scan, duplicate = await _create_scan_record(db, doc.id, scan_input, access.user.id, row['product_id'])
+    scan, duplicate = await _create_scan_record(db, doc.id, scan_input, access.user.id, row['product_id'], device_id=access.device_id)
     await db.refresh(doc)
     # Core scanning commits before returning; preserve current state under a fresh row lock.
     doc = await owned(db, access, document_id, revision=True, mutating=True)

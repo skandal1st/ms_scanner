@@ -1,5 +1,6 @@
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
+import pytest
 from uuid import uuid4
 
 from app.api import scans, documents
@@ -76,7 +77,8 @@ def test_conflicting_or_unit_gtins_do_not_inflate_quantity():
     assert plan_pack_quantity([{**pack, "pack_quantities": {}}], gtin) is None
 
 
-async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypatch):
+@pytest.mark.parametrize('terminal', [False, True])
+async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypatch, terminal):
     from app.services import gtin_product_store
     from app.worker.tasks import persist_assigned_gtin_task
     from unittest.mock import Mock
@@ -94,10 +96,14 @@ async def test_manual_position_overrides_gtin_without_changing_raw_mark(monkeypa
     db = NS(execute=AsyncMock(return_value=Result(None)), add=lambda value: None,
             commit=AsyncMock(), refresh=AsyncMock(), flush=AsyncMock())
     raw = "010462016440535821TEST000000001\x1d93TEST"
-    scan, duplicate = await scans._create_scan_record(db, uuid4(), raw, uuid4(), moysklad_product_id="chosen")
+    scan, duplicate = await scans._create_scan_record(db, uuid4(), raw, uuid4(), moysklad_product_id="chosen", device_id=uuid4() if terminal else None)
     assert not duplicate and scan.moysklad_product_id == "chosen"
     assert scan.product_name == "Выбранный товар"
     assert scan.gtin == "04620164405358" and scan.code == raw
     cached.assert_not_awaited()
     assert remember.await_args.args[2:] == ('04620164405358', 'chosen', 'Выбранный товар')
-    assert queue.call_args.args[1:] == ('04620164405358', 'chosen')
+    if terminal:
+        queue.assert_not_called()
+    else:
+        assert queue.call_args.args[1:3] == ('04620164405358', 'chosen')
+        assert len(queue.call_args.args) == 4
