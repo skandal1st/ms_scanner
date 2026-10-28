@@ -25,6 +25,12 @@ def resolve_scan_packaging_task(scan_id, user_id):
     return _run(discover_scan_packaging(scan_id, user_id))
 
 
+@celery_app.task(name='resend_shipment_marks')
+def resend_shipment_marks_task(document_id, user_id, job_id):
+    from app.services.shipment_resend import process
+    return _run(process(document_id, user_id, job_id))
+
+
 @celery_app.task(name='prepare_physical_count')
 def prepare_physical_count_task(session_id):
     return _run(_prepare_physical_count_async(session_id))
@@ -1313,6 +1319,8 @@ async def _cleanup_stale_processing_async() -> int:
                     "Отправка в МойСклад не завершилась за 24 ч — документ сброшен "
                     "в черновик. Проверьте и повторите отправку."
                 )
+            from app.services.shipment_resend import stop_interrupted
+            stop_interrupted(doc, doc.error_message)
         if docs:
             await db.commit()
             from app.core.diagnostics import operation_scope
@@ -1359,6 +1367,8 @@ async def _process_document_traced_async(document_id: str, user_id: str):
                     doc.status = DocumentStatus.draft
                     doc.error_message = (str(exc) if isinstance(exc, ValueError) else
                         "Отправка в МойСклад прервалась. Часть марок могла сохраниться; повторная отправка продолжит с оставшихся.")
+                    from app.services.shipment_resend import stop_interrupted
+                    stop_interrupted(doc, doc.error_message)
                     await db.commit()
             raise
 
@@ -1661,10 +1671,23 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             async with processing_lock(f"ms:{user_id}:{kind}:{doc.moysklad_id}") as acquired:
                 if not acquired:
                     raise ValueError("Этот документ МойСклад уже отправляется из другой сессии. Дождитесь завершения.")
+                shipment_options = {}
+                if kind == 'demand' and not settings.CZ_MOCK_MODE:
+                    import copy
+                    from app.services.shipment_resend import MARKER, save as save_tracking_state
+                    async def tracking_progress(state):
+                        await save_tracking_state(db, doc, state)
+                    shipment_options = {
+                        'tracking_state': copy.deepcopy((doc.upd_meta or {}).get(MARKER) or {}),
+                        'on_tracking_state': tracking_progress,
+                        'shipment_scope': {'moysklad_organization_id': doc.moysklad_organization_id,
+                                           'moysklad_store_id': doc.moysklad_store_id},
+                    }
                 result = await ms.update_document(
                     kind, doc.moysklad_id, scans_data,
                     position_quantities=product_qty, position_prices=product_price,
                     description=ms_description, on_progress=progress,
+                    **shipment_options,
                 )
             if result.get("__moysklad_412__"):
                 reason = _extract_moysklad_error(result.get("body") or "")

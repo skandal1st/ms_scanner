@@ -1241,10 +1241,23 @@ export interface ShipmentCorrectionDetail {
   delta: ShipmentCorrectionDelta | null
 }
 
+export interface ShipmentMarkResendState {
+  id?: string
+  status?: 'queued' | 'running' | 'done' | 'error'
+  expected?: number
+  already?: number
+  added?: number
+  confirmed?: number
+  error?: string | null
+  updated_at?: string
+}
+
 export function shipmentCorrectionsApi(terminal = false) {
   const client = terminal ? tsdClient : api
   const base = '/shipment-corrections'
   return {
+    resendMarks: (id: string) => client.post<ShipmentMarkResendState>(`${base}/${id}/resend-marks`),
+    resendStatus: (id: string) => client.get<ShipmentMarkResendState>(`${base}/${id}/resend-marks`),
     list: () => client.get<{ id: string; name: string; resume: boolean }[]>(base),
     open: (id: string) => client.post<{ id: string }>(`${base}/${id}/open`),
     get: (id: string) => client.get<ShipmentCorrectionDetail>(`${base}/${id}`),

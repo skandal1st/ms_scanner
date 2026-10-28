@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 
-from app.db.models import Document, DocumentStatus
+from app.db.models import Document, DocumentStatus, DocumentKind
 
 
 async def editable_document(db, document_id, user_id):
@@ -21,6 +21,9 @@ async def editable_document(db, document_id, user_id):
         raise HTTPException(409, "Документ обрабатывается или уже завершён. Изменять марки нельзя.")
     if ((getattr(doc, 'upd_meta', None) or {}).get('shipment_correction') or {}).get('job'):
         raise HTTPException(409, 'Исправление уже отправлялось. Повторите сохранение этой версии; изменять марки во время сверки нельзя.')
+    if getattr(doc, 'kind', None) == DocumentKind.demand and getattr(doc, 'moysklad_id', None):
+        from app.services.shipment_resend import assert_idle
+        await assert_idle(db, doc)
     return doc
 
 

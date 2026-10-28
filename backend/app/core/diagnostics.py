@@ -73,13 +73,15 @@ def operation_scope(document_id, user_id, stage):
         current_operation.reset(token)
 
 
-def capture_request(system, method, url, request, status=None, response=None, error=None, *, original_code=None):
+def capture_request(system, method, url, request, status=None, response=None, error=None, *, original_code=None, duration_ms=None):
     operation = current_operation.get()
     if operation is None:
         return
     item = sanitize({'system': system, 'stage': operation.stage, 'method': method,
                      'url': safe_url(url), 'original_code': original_code or operation.code,
                      'request': request, 'status': status, 'response': response, 'error': error})
+    if duration_ms is not None:
+        item['duration_ms'] = duration_ms
     # Keep failures preferentially when a document has thousands of successful requests.
     if len(operation.requests) >= 30:
         index = next((i for i, v in enumerate(operation.requests)

@@ -17,6 +17,13 @@ def fingerprint(document_id, event, reason):
     return hashlib.sha256(f'{document_id}:{event}:{reason}'.encode()).hexdigest()
 
 
+def request_evidence(requests):
+    # The public snapshot keeps only 20 items. A write timeout at the tail must
+    # survive a long sequence of earlier rate-limit responses.
+    return sorted(requests, key=lambda item: (not bool(item.get('error')),
+        not (item.get('status') or 0) >= 500, not (item.get('status') or 0) >= 400))
+
+
 def event_payload(incident, event):
     return {'events': [{'event': event, 'source': 'worker', 'level': 'info' if event.endswith('resolved') else 'error',
         'ts': datetime.now(timezone.utc).isoformat(), 'trace_id': str(incident.trace_id),
@@ -42,8 +49,7 @@ async def record(event, message, *, reason=None, details=None):
             key = fingerprint(operation.document_id, f'{event}:{operation.stage}', reason)
             now = datetime.now(timezone.utc)
             # Failed requests must survive snapshot limits even after many successful batches.
-            evidence = sorted(operation.requests,
-                key=lambda item: not (item.get('error') or (item.get('status') or 0) >= 400))
+            evidence = request_evidence(operation.requests)
             diagnostics = sanitize({'requests': evidence,
                 'dropped_requests': operation.dropped_requests, 'details': details})
             incident_id = uuid4()

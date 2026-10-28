@@ -808,6 +808,11 @@ html, body, #root { height: 100%; }
 .correction-workspace .acc-footer { gap: 8px; flex-wrap: wrap; }
 .correction-picker { padding: 18px; overflow-y: auto; max-width: 900px; width: 100%; box-sizing: border-box; }
 .correction-picker__list { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+.correction-picker__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.correction-picker__row > .correction-picker__item { flex: 1 1 240px; }
+.shipment-mark-resend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.shipment-mark-resend > span { flex-basis: 100%; font-size: 13px; white-space: normal; }
+.shipment-mark-resend__success { color: var(--st-ok-fg); }
 .correction-picker__item { align-items: flex-start; flex-direction: column; padding: 12px; white-space: normal; text-align: left; }
 .correction-target { display: flex; flex-direction: column; gap: 6px; }
 .correction-target select { width: 100%; min-width: 0; }

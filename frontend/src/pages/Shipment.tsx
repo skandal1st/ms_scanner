@@ -22,6 +22,7 @@ import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
+import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
 const UpdExportModal = lazy(() => import('../components/UpdExportModal').then(m => ({ default: m.UpdExportModal })))
 // Temporarily hide outgoing UPD export while the EDI workflow is on hold.
 const UPD_EXPORT_VISIBLE = false
@@ -314,6 +315,8 @@ export function ShipmentPage({
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
           {!embedded && <button type="button" className="button button--sm" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
+          {document?.kind === 'demand' && document.moysklad_id && document.status === 'accepted' &&
+            <ResendShipmentMarks key={document.id} documentId={document.id} />}
           {document && <span className={docStatusCls}>{docStatusText}</span>}
           {document && !embedded && (
             <button

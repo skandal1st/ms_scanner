@@ -49,16 +49,20 @@ async def scope(credentials: HTTPAuthorizationCredentials = Depends(bearer),
     return Scope(user, profile.id, [])
 
 
-async def owned(db, access, document_id, *, revision=False):
-    doc = (await db.execute(select(Document).where(Document.id == document_id,
+async def owned(db, access, document_id, *, revision=False, mutating=False, lock=True):
+    query = select(Document).where(Document.id == document_id,
         Document.user_id == access.user.id, Document.organization_profile_id == access.profile_id,
-        Document.kind == DocumentKind.demand).with_for_update())).scalar_one_or_none()
+        Document.kind == DocumentKind.demand)
+    doc = (await db.execute(query.with_for_update() if lock else query)).scalar_one_or_none()
     if not doc or access.stores and doc.moysklad_store_id not in access.stores:
         raise HTTPException(404, 'Отгрузка недоступна на этом рабочем месте')
     if revision and not service.correction(doc):
         raise HTTPException(409, 'Сначала откройте исправление отгрузки')
     if (doc.upd_meta or {}).get('superseded_by_document_id'):
         raise HTTPException(409, 'Эта версия уже заменена. Откройте актуальное исправление из списка отгрузок.')
+    if mutating:
+        from app.services.shipment_resend import assert_idle
+        await assert_idle(db, doc)
     return doc
 
 
@@ -66,6 +70,54 @@ def bad_request(exc):
     if isinstance(exc, HTTPException):
         return exc
     return HTTPException(409, str(exc)) if isinstance(exc, ValueError) else HTTPException(502, 'Не удалось загрузить или сверить отгрузку в МойСкладе. Повторите попытку.')
+
+
+@router.get('/{source_id}/resend-marks')
+async def resend_status(source_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
+    from app.services import shipment_resend as resend
+    try:
+        source = await resend.resolve_source(db, await owned(db, access, source_id, lock=False), check_edits=False)
+        return resend.public_state(source)
+    except Exception as exc:
+        raise bad_request(exc) from exc
+
+
+@router.post('/{source_id}/resend-marks')
+async def resend_marks(source_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
+    from datetime import datetime, timezone, timedelta
+    from uuid import uuid4
+    from app.services import shipment_resend as resend
+    from app.worker.tasks import resend_shipment_marks_task
+    try:
+        source = await resend.resolve_source(db, await owned(db, access, source_id, lock=False))
+        state = copy.deepcopy((source.upd_meta or {}).get(resend.MARKER) or {})
+        async with processing_lock(f'ms:{source.user_id}:demand:{source.moysklad_id}') as acquired:
+            if not acquired:
+                if state.get('status') in resend.ACTIVE:
+                    return resend.public_state(source)
+                raise ValueError('Отгрузка занята другой операцией. Повторите позже.')
+            # Lock only after acquiring the MS lock, matching the worker's lock order.
+            source = (await db.execute(select(Document).where(Document.id == source.id)
+                .with_for_update().execution_options(populate_existing=True))).scalar_one()
+            if source.status != DocumentStatus.accepted or (source.upd_meta or {}).get('superseded_by_document_id'):
+                raise ValueError('Версия отгрузки изменилась. Откройте актуальную сборку.')
+            state = copy.deepcopy((source.upd_meta or {}).get(resend.MARKER) or {})
+            updated = datetime.fromisoformat(state['updated_at']) if state.get('updated_at') else None
+            if state.get('status') == 'queued' and updated and updated > datetime.now(timezone.utc) - timedelta(minutes=15):
+                return resend.public_state(source)
+            job = {k: v for k, v in state.items() if k == 'in_flight'}
+            job.update(id=str(uuid4()), status='queued', expected=0, already=0, added=0, confirmed=0, error=None)
+            await resend.save(db, source, job)
+        # Release the MS lock before dispatch: a fast worker must be able to acquire it.
+        try:
+            resend_shipment_marks_task.delay(str(source.id), str(source.user_id), job['id'])
+        except Exception as exc:
+            job.update(status='error', error='Не удалось поставить повторную отправку в очередь. Повторите попытку.')
+            await resend.save(db, source, job)
+            raise HTTPException(503, job['error']) from exc
+        return resend.public_state(source)
+    except Exception as exc:
+        raise bad_request(exc) from exc
 
 
 @router.get('')
@@ -94,7 +146,7 @@ async def list_sources(access: Scope = Depends(scope), db: AsyncSession = Depend
 
 @router.post('/{source_id}/open')
 async def open_correction(source_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    source = await owned(db, access, source_id)
+    source = await owned(db, access, source_id, mutating=True)
     if service.correction(source) and source.status != DocumentStatus.accepted:
         return {'id': str(source.id)}
     if source.status != DocumentStatus.accepted:
@@ -169,7 +221,7 @@ class AddCode(BaseModel):
 
 @router.post('/{document_id}/scans')
 async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     await editable_document(db, doc.id, access.user.id)
     state = copy.deepcopy(service.correction(doc))
     from app.services.chestnyznak import strip_ai_brackets, extract_gtin, normalize_gtin_key
@@ -216,7 +268,7 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
     scan, duplicate = await _create_scan_record(db, doc.id, scan_input, access.user.id, row['product_id'])
     await db.refresh(doc)
     # Core scanning commits before returning; preserve current state under a fresh row lock.
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     state = copy.deepcopy(service.correction(doc))
     if state.get('job'):
         raise HTTPException(409, 'Сохранение исправления уже началось')
@@ -237,7 +289,7 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
 
 @router.delete('/{document_id}/scans/{scan_id}')
 async def remove_code(document_id: UUID, scan_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     await editable_document(db, doc.id, access.user.id)
     scan = (await db.execute(select(Scan).where(Scan.id == scan_id, Scan.document_id == doc.id))).scalar_one_or_none()
     if not scan:
@@ -249,7 +301,7 @@ async def remove_code(document_id: UUID, scan_id: UUID, access: Scope = Depends(
 
 @router.post('/{document_id}/verify')
 async def verify(document_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    await owned(db, access, document_id, revision=True)
+    await owned(db, access, document_id, revision=True, mutating=True)
     return await verify_document(document_id, access.user, db)
 
 
@@ -260,7 +312,7 @@ class PreviewRequest(BaseModel):
 
 @router.post('/{document_id}/preview')
 async def preview(document_id: UUID, body: PreviewRequest, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     state = service.correction(doc)
     if state.get('job'):
         return state['job']['delta']
@@ -273,7 +325,7 @@ async def preview(document_id: UUID, body: PreviewRequest, access: Scope = Depen
 
 @router.post('/{document_id}/save')
 async def save(document_id: UUID, body: PreviewRequest, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     if doc.status != DocumentStatus.draft:
         raise HTTPException(409, 'Исправление уже сохраняется или завершено')
     state = copy.deepcopy(service.correction(doc))
@@ -308,7 +360,7 @@ async def save(document_id: UUID, body: PreviewRequest, access: Scope = Depends(
 
 @router.post('/{document_id}/cancel')
 async def cancel(document_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     state = service.correction(doc)
     job = state.get('job') or {}
     if doc.status != DocumentStatus.draft or job.get('completed') or job.get('in_flight') is not None:
@@ -321,7 +373,7 @@ async def cancel(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
 
 @router.post('/{document_id}/rebase')
 async def rebase(document_id: UUID, access: Scope = Depends(scope), db: AsyncSession = Depends(get_db)):
-    doc = await owned(db, access, document_id, revision=True)
+    doc = await owned(db, access, document_id, revision=True, mutating=True)
     if doc.status != DocumentStatus.draft or not service.correction(doc).get('job'):
         raise HTTPException(409, 'Обновление состава доступно после остановки сохранения исправлений.')
     await lock_ms_document(db, access.user.id, 'demand', doc.moysklad_id)

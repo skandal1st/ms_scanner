@@ -66,26 +66,33 @@ def setup_ms(monkeypatch, rows):
     monkeypatch.setattr(settings, "CZ_MOCK_MODE", False)
     ms = MoySkladService("fake-token")
     ms._load_positions_rows = AsyncMock(return_value=rows)
-    ms._load_tracking_codes = AsyncMock(return_value=[])
+    saved = {}
+    ms._load_tracking_codes = AsyncMock(side_effect=lambda client, kind, doc_id, pid: copy.deepcopy(saved.get(pid, [])))
     calls = []
 
     async def request(client, method, url, **kwargs):
         calls.append((method, url, copy.deepcopy(kwargs.get("json"))))
+        if method == 'POST' and url.endswith('/trackingCodes'):
+            saved.setdefault(url.split('/')[-2], []).extend(
+                {**entry, 'id': str(uuid4())} for entry in kwargs['json'])
         return httpx.Response(200, json={}, request=httpx.Request(method, url))
 
     ms._request_with_retry = request
+    async def get_document(kind, doc_id):
+        response = await ms._request_with_retry(None, 'GET', f'{ms.base_url}/entity/{kind}/{doc_id}')
+        response.raise_for_status()
+        return response.json()
+    ms.get_document = AsyncMock(side_effect=get_document)
     return ms, calls
 
 
-async def test_overflow_and_unplanned_products_are_all_sent(monkeypatch):
+async def test_shipment_cannot_silently_change_quantities_or_create_unplanned_positions(monkeypatch):
     ms, calls = setup_ms(monkeypatch, [position(), position("keep", 9, "untouched")])
-    ms._load_positions_rows.side_effect = [[position(), position("keep", 9, "untouched")], [position(), position("new", 1, "r2")]]
-    await ms.update_document("demand", "doc", codes(2) + [{"product_id": "new", "code": "0104660321205858219999999", "quantity": 1}])
-    put = next(body for method, _, body in calls if method == "PUT")
-    assert [p["quantity"] for p in put["positions"]] == [2, 9, 1]
-    assert put["positions"][1]["price"] == 1234
-    assert sum(len(body) for method, _, body in calls if method == "POST") == 3
-    assert all("trackingCodes" not in p for p in put["positions"])
+    with pytest.raises(ValueError, match='Товар из сборки отсутствует'):
+        await ms.update_document('demand', 'doc', codes(2) + [{'product_id': 'new', 'code': '0104660321205858219999999'}])
+    with pytest.raises(ValueError, match='Количество товара'):
+        await ms.update_document('demand', 'doc', codes(2))
+    assert not any(method != 'GET' for method, _, _ in calls)
 
 
 async def test_supply_accessory_quantity_price_and_xml_order(monkeypatch):
@@ -153,7 +160,7 @@ async def test_worker_sends_quantity_only_supply_without_cz(monkeypatch):
 
 
 async def test_25000_marks_use_bounded_batches_and_report_progress(monkeypatch):
-    ms, calls = setup_ms(monkeypatch, [position(qty=10)])
+    ms, calls = setup_ms(monkeypatch, [position(qty=25000)])
     progress = AsyncMock()
     await ms.update_document("demand", "doc", codes(25000), on_progress=progress)
     batches = [body for method, _, body in calls if method == "POST"]
@@ -168,7 +175,7 @@ async def test_read_failure_does_not_write_or_replace_positions(monkeypatch):
     ms._load_positions_rows.side_effect = httpx.ReadTimeout("read failed")
     with pytest.raises(httpx.ReadTimeout):
         await ms.update_document("demand", "doc", codes(2))
-    assert calls == []
+    assert not any(method != 'GET' for method, _, _ in calls)
 
 
 async def test_retry_sends_only_codes_missing_after_partial_failure(monkeypatch):
@@ -182,7 +189,7 @@ async def test_retry_sends_only_codes_missing_after_partial_failure(monkeypatch)
         nonlocal post_calls
         if method == "POST":
             post_calls += 1
-            saved.extend(kwargs["json"])
+            saved.extend({**entry, 'id': str(uuid4())} for entry in kwargs["json"])
             if post_calls == 2:
                 # The server saved this batch, but its response was lost.
                 raise httpx.ReadTimeout("uncertain outcome")
@@ -199,9 +206,9 @@ async def test_retry_sends_only_codes_missing_after_partial_failure(monkeypatch)
 
 async def test_missing_product_rejects_entire_transfer(monkeypatch):
     ms, calls = setup_ms(monkeypatch, [position()])
-    with pytest.raises(ValueError, match="Не все марки"):
+    with pytest.raises(ValueError, match="Товар из сборки"):
         await ms.update_document("demand", "doc", codes(1) + [{"code": "missing"}])
-    assert calls == []
+    assert not any(method != 'GET' for method, _, _ in calls)
 
 
 @pytest.mark.parametrize("status", [DocumentStatus.accepted, DocumentStatus.processing])
@@ -390,7 +397,49 @@ async def test_order_status_setting_rejects_shipment_status_and_preserves_legacy
     assert profile.customer_order_start_state_id is None
 
 async def test_final_transfer_does_not_change_document_states(monkeypatch):
-    ms, calls = setup_ms(monkeypatch, [position()])
+    ms, calls = setup_ms(monkeypatch, [position(qty=501)])
     await ms.update_document('demand', 'doc', codes(501))
-    assert [method for method, _, _ in calls if method != 'GET'] == ['PUT', 'POST', 'POST']
+    assert [method for method, _, _ in calls if method != 'GET'] == ['POST', 'POST']
     assert not any('state' in (body or {}) for _, _, body in calls)
+
+
+async def test_large_shipment_only_appends_760_marks_and_preserves_534_positions(monkeypatch):
+    rows = [position(f'p{i}', 2, f'r{i}') for i in range(534)]
+    before = copy.deepcopy(rows)
+    ms, calls = setup_ms(monkeypatch, rows)
+    desired = [item for i in range(520) for item in codes(2 if i < 240 else 1, f'p{i}')]
+    # Serials are unique within each product GTIN, just as real marks are.
+    for i, item in enumerate(desired):
+        item['code'] = f'010466032120585821{i:07d}'
+    saved_states = []
+    async def persist(state):
+        saved_states.append(copy.deepcopy(state))
+    result = await ms.update_document('demand', 'doc', desired, on_tracking_state=persist,
+        position_prices={'p1': {'price': 999, 'vat': 0}})
+    assert result['confirmed_codes'] == 760
+    assert rows == before
+    assert not any(method in {'PUT', 'PATCH', 'DELETE'} for method, _, _ in calls)
+    assert all(url.endswith('/trackingCodes') for method, url, _ in calls if method == 'POST')
+    assert sum(len(body) for method, _, body in calls if method == 'POST') == 760
+    assert any(state.get('in_flight') for state in saved_states)
+    assert saved_states[-1]['status'] == 'done' and saved_states[-1]['confirmed'] == 760
+    calls.clear()
+    await ms.update_document('demand', 'doc', desired)
+    assert not any(method != 'GET' for method, _, _ in calls)
+
+
+async def test_normal_transfer_does_not_report_success_or_replay_unconfirmed_batch(monkeypatch):
+    ms, calls = setup_ms(monkeypatch, [position(qty=2)])
+    original = ms._request_with_retry
+    async def dropped(client, method, url, **kwargs):
+        if method == 'POST':
+            calls.append((method, url, kwargs['json']))
+            return httpx.Response(200, json=[], request=httpx.Request(method, url))
+        return await original(client, method, url, **kwargs)
+    ms._request_with_retry = dropped
+    state = {}
+    for _ in range(2):
+        with pytest.raises(ValueError, match='не подтвердил|предыдущей записи'):
+            await ms.update_document('demand', 'doc', codes(2), tracking_state=state)
+        assert state['status'] == 'error' and state.get('in_flight') and state['confirmed'] == 0
+    assert len([c for c in calls if c[0] == 'POST']) == 1

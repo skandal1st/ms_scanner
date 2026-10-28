@@ -48,6 +48,16 @@ def test_failed_request_survives_many_successful_batches():
         assert operation.dropped_requests == 71
 
 
+def test_write_timeout_survives_snapshot_after_many_rate_limit_responses():
+    with diagnostics.operation_scope(uuid4(), uuid4(), 'ms.write') as operation:
+        for _ in range(29):
+            diagnostics.capture_request('ms', 'GET', 'https://x/positions', None, 429)
+        diagnostics.capture_request('ms', 'PUT', 'https://x/demand', {'positions': []}, error='ReadTimeout')
+        snapshot = diagnostics.sanitize({'requests': incidents.request_evidence(operation.requests)})
+        assert snapshot['requests'][0]['method'] == 'PUT'
+        assert snapshot['requests'][0]['error'] == 'ReadTimeout'
+
+
 async def test_cz_404_keeps_original_sent_code_group_and_error_body(monkeypatch):
     from app.services import chestnyznak, cz_pg_cache
     raw = '01146056480636891326071421000010824073883'

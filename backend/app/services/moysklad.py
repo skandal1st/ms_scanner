@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections import deque
 from typing import Awaitable, Callable
 import httpx
@@ -118,10 +119,17 @@ class MoySkladService:
         from app.core.diagnostics import capture_request, response_body, safe_url
         method = method.upper()
         for attempt in range(len(self._RATE_LIMIT_DELAYS) + 1):
+            started = time.monotonic()
             try:
                 resp = await client.request(method, url, headers=self.headers, **kwargs)
             except httpx.HTTPError as exc:
-                capture_request('moysklad', method, url, kwargs.get('json'), error=type(exc).__name__)
+                elapsed = int((time.monotonic() - started) * 1000)
+                capture_request('moysklad', method, url, kwargs.get('json'), error=type(exc).__name__, duration_ms=elapsed)
+                body = kwargs.get('json')
+                logger.warning('moysklad.request_failed', method=method, url=safe_url(url),
+                    error_type=type(exc).__name__, duration_ms=elapsed,
+                    positions_count=len(body.get('positions') or []) if isinstance(body, dict) else None,
+                    codes_count=len(body) if isinstance(body, list) else None)
                 if (method == "GET" and isinstance(exc, httpx.TransportError)
                         and attempt < len(self._READ_RETRY_DELAYS)):
                     delay = self._READ_RETRY_DELAYS[attempt]
@@ -131,7 +139,8 @@ class MoySkladService:
                     continue
                 raise
             capture_request('moysklad', method, url, kwargs.get('json'), resp.status_code,
-                            response_body(resp) if resp.status_code >= 400 else None)
+                            response_body(resp) if resp.status_code >= 400 else None,
+                            duration_ms=int((time.monotonic() - started) * 1000))
             if resp.status_code == 429 and attempt < len(self._RATE_LIMIT_DELAYS):
                 delay = self._RATE_LIMIT_DELAYS[attempt]
                 event = "moysklad.rate_limited"
@@ -850,6 +859,9 @@ class MoySkladService:
         position_prices: Optional[Dict[str, Dict[str, Any]]] = None,
         description: Optional[str] = None,
         on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
+        tracking_state: Optional[dict] = None,
+        on_tracking_state: Optional[Callable[[dict], Awaitable[None]]] = None,
+        shipment_scope: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """Preserve existing positions; send all codes in bounded, resumable batches.
 
@@ -858,6 +870,39 @@ class MoySkladService:
         """
         self._validate_kind(kind)
         write_codes = kind in WRITE_TRACKING_CODES_KINDS and not settings.CZ_MOCK_MODE
+        if kind == 'demand' and write_codes:
+            # Shipments already contain their financial plan. Never resubmit it
+            # just to append marks: large PUTs time out and race with MS edits.
+            import copy
+            from types import SimpleNamespace
+            from uuid import uuid4
+            from app.services.shipment_resend import restore
+            state = tracking_state if tracking_state is not None else {}
+            state.update(id=str(uuid4()), status='running', error=None,
+                         confirmed=0, expected=0, already=0, added=0)
+            async def persist():
+                if on_tracking_state:
+                    await on_tracking_state(copy.deepcopy(state))
+            async def progress_persist():
+                await persist()
+                if on_progress:
+                    await on_progress(state.get('already', 0) + state.get('added', 0), state.get('expected', 0))
+            await persist()
+            try:
+                await restore(self, SimpleNamespace(moysklad_id=doc_id, **(shipment_scope or {})),
+                              scans, state, progress_persist)
+            except Exception as exc:
+                state.update(status='error', error=str(exc) if isinstance(exc, ValueError)
+                    else 'МС не подтвердил запись марок. Повторите сверку отгрузки.')
+                await persist()
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 412:
+                    return {'__moysklad_412__': True, 'body': exc.response.text}
+                raise
+            state.update(status='done', error=None)
+            await progress_persist()
+            logger.info('moysklad.shipment_marks.confirmed', doc_id=doc_id,
+                        confirmed=state['confirmed'], added=state['added'], already=state['already'])
+            return {'id': doc_id, 'confirmed_codes': state['confirmed']}
         groups = {}
         for scan in scans:
             pid = scan.get("product_id")

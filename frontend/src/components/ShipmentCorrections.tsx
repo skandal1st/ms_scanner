@@ -9,6 +9,7 @@ import { useResizableWidth } from '../hooks/useResizableWidth'
 import { FlowWorkspaceTabs, type FlowWorkspaceTab } from './FlowWorkspaceTabs'
 import { Icon } from './Icon'
 import { CodeSearchModal } from './CodeSearchModal'
+import { ResendShipmentMarks } from './ResendShipmentMarks'
 
 type CorrectionScan = ShipmentCorrectionDetail['scans'][number]
 
@@ -112,6 +113,7 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
       <div className="flex-row gap-8">
         <button type="button" className="button button--sm" disabled={busy} onClick={onClose}>К отгрузкам</button>
         <h1 className="acc-header__title">Исправить отгрузку</h1>
+        {doc && <ResendShipmentMarks key={doc.id} documentId={doc.id} terminal={terminal} disabled={busy || doc.locked || doc.status === 'processing' || added > 0 || removed > 0} />}
         {doc && <span className={`badge ${doc.status === 'accepted' ? 'badge--ok' : 'badge--warn'}`}>{doc.status === 'accepted' ? 'Сохранено' : doc.status === 'processing' ? 'Сохраняется' : 'Исправление'}</span>}
       </div>
       <span className="acc-header__doc">{doc ? `Отгрузка ${doc.name}` : 'Выберите отправленную отгрузку'}</span>
@@ -124,9 +126,9 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
       <input id="correction-search" className="ui-input ui-input--block" value={search} onChange={e => setSearch(e.target.value)} placeholder="Номер или контрагент" />
       {sources.isLoading && <p role="status">Загружаем отправленные отгрузки…</p>}
       {sources.error && <p role="alert">Не удалось загрузить отгрузки. <button className="button" onClick={() => void sources.refetch()}>Повторить</button></p>}
-      <div className="correction-picker__list">{sources.data?.filter(d => d.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(source => <button type="button" className="button correction-picker__item" key={source.id} disabled={busy} onClick={() => void run(async () => {
+      <div className="correction-picker__list">{sources.data?.filter(d => d.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())).map(source => <div key={source.id} className="correction-picker__row"><button type="button" className="button correction-picker__item" disabled={busy} onClick={() => void run(async () => {
         const { data } = await api.open(source.id); setId(data.id); localStorage.setItem(storageKey, data.id)
-      })}><strong>{source.name}</strong><span className="hint">{source.resume ? 'Продолжить исправление' : 'Открыть исправление'}</span></button>)}</div>
+      })}><strong>{source.name}</strong><span className="hint">{source.resume ? 'Продолжить исправление' : 'Открыть исправление'}</span></button><ResendShipmentMarks documentId={source.id} terminal={terminal} disabled={busy} loadState={false} /></div>)}</div>
       {sources.data?.length === 0 && <p>Отправленных отгрузок пока нет.</p>}
     </section> : !doc ? <section className="correction-picker">
       <p>{detail.error ? 'Не удалось открыть исправление.' : 'Загружаем состав отгрузки…'}</p>
