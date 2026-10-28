@@ -909,6 +909,7 @@ html, body, #root { height: 100%; }
 .tsd-empty { padding: 48px 24px; color: var(--tsd-muted); text-align: center; }
 .tsd-alert { margin: 12px 20px; padding: 12px 14px; border-radius: 7px; font-size: 14px; font-weight: 600; }
 .tsd-alert--error { background: #fff0f0; color: #a41515; }
+.tsd-alert--ok { background: var(--st-ok-bg); color: var(--st-ok-fg); }
 .tsd-alert--warn { background: #fff7df; color: #795000; }
 
 .tsd-login { display: grid; align-content: center; gap: 14px; padding: 30px; }

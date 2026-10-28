@@ -10,6 +10,7 @@ import { buildProgress, effectiveGtinKey, findProgressRowForScan, scanUnits, pro
 import { normalizeScannerInput } from '../lib/scannerLayout'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import { isProblemScan, numberedScans, problemPositionRows } from '../lib/shipmentProblems'
+import { needsVerificationReview, verificationStamp, verificationResultsArrived, verificationReview } from '../lib/tsdVerificationReview'
 import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
@@ -281,6 +282,12 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const [visibleScans, setVisibleScans] = useState(50)
   const [onlyProblemPositions, setOnlyProblemPositions] = useState(false)
   const [onlyProblemMarks, setOnlyProblemMarks] = useState(false)
+  const [checkingMarks, setCheckingMarks] = useState(false)
+  const [verificationResult, setVerificationResult] = useState<ReturnType<typeof verificationReview> | null>(null)
+  const verificationRunRef = useRef<{ baseline: Map<string, string>; accepted: boolean; finishing: boolean } | null>(null)
+  const marksReviewRef = useRef<HTMLDivElement>(null)
+  const [reviewScroll, setReviewScroll] = useState(0)
+  useEffect(() => () => { verificationRunRef.current = null }, [])
   const [repeatedId, setRepeatedId] = useState<string | null>(null)
   const [targetProductId, setTargetProductId] = useState<string | null>(null)
   const submitting = useRef(false)
@@ -301,7 +308,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     },
     initialData: initial,
     refetchInterval: (query) => !query.state.data?.collection_started ? 3000
-      : query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
+      : checkingMarks || query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
   const progress = useMemo(() => sortShipmentProgress(buildProgress(doc.plan, doc.scans)), [doc.plan, doc.scans])
   const hasGroups = progress.rows.some(row => row.folder_name)
@@ -350,10 +357,12 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     .filter(({ row }) => !onlyProblemPositions || problemRows.includes(row))
   const positionScans = doc.scans.filter((item) => positionFilter === 'all'
     || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
-  const problemCount = positionScans.filter(item => isProblemScan(item, null, repeatedId, progress.hasPlan ? progress.rows : undefined)).length
+  const problemMark = (item: typeof last) => isProblemScan(item, null, repeatedId, progress.hasPlan ? progress.rows : undefined)
+    || Boolean(verificationResult && needsVerificationReview(item, progress.hasPlan ? progress.rows : undefined))
+  const problemCount = positionScans.filter(problemMark).length
   const positionScanIds = new Set(positionScans.map(item => item.id))
   const filteredScans = numberedScans(doc.scans).filter(({ scan }) => positionScanIds.has(scan.id)
-    && (!onlyProblemMarks || isProblemScan(scan, null, repeatedId, progress.hasPlan ? progress.rows : undefined)))
+    && (!onlyProblemMarks || problemMark(scan)))
   const selectPosition = (value: typeof positionFilter) => {
     setPositionFilter(value)
     setSelectedScanId(null)
@@ -364,13 +373,83 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     ? Math.min(100, Math.round(progress.total.addedTotal * 100 / progress.total.expected))
     : 0
   const refresh = () => qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] })
+  const finishVerification = async (failed = 0) => {
+    const run = verificationRunRef.current
+    if (!run || run.finishing) return
+    run.finishing = true
+    try {
+      await qc.invalidateQueries({ queryKey: ['tsd-document', initial.id] }, { throwOnError: true })
+      if (verificationRunRef.current !== run) return
+      const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
+      const result = verificationReview(latest.scans, latest.plan, failed)
+      verificationRunRef.current = null
+      setCheckingMarks(false)
+      setVerificationResult(result)
+      setMessage({ kind: result.hasIssues ? 'error' : 'ok', text: result.text })
+      setReviewing(true)
+      setPositionFilter('all')
+      setSelectedScanId(null)
+      setSwipeScanId(null)
+      setVisibleScans(50)
+      setOnlyProblemMarks(result.hasIssues)
+      setReviewScroll(value => value + 1)
+      sound.play(result.hasIssues ? 'error' : 'ok')
+      window.navigator.vibrate?.(result.hasIssues ? [100, 60, 100] : 60)
+    } catch {
+      run.finishing = false
+      setMessage({ kind: 'error', text: 'Не удалось загрузить результаты проверки. Восстанавливаем связь…' })
+    }
+  }
   const verify = useMutation({
     mutationFn: () => tsdApi.verify(doc.id),
-    onSuccess: () => { setMessage({ kind: 'ok', text: 'Проверка всех марок в ЧЗ запущена.' }); void refresh() },
-    onError: (error) => setMessage({ kind: 'error', text: apiMessage(error) }),
+    onMutate: () => {
+      const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
+      verificationRunRef.current = { baseline: new Map(latest.scans.filter(scan => !scan.is_barcode)
+        .map(scan => [scan.id, verificationStamp(scan)])), accepted: false, finishing: false }
+      setCheckingMarks(true)
+      setVerificationResult(null)
+      setMessage({ kind: 'ok', text: 'Проверяем марки в ЧЗ. Дождитесь результата…' })
+    },
+    onSuccess: () => {
+      if (verificationRunRef.current) verificationRunRef.current.accepted = true
+      void refresh()
+    },
+    onError: (error) => {
+      verificationRunRef.current = null
+      setCheckingMarks(false)
+      setMessage({ kind: 'error', text: apiMessage(error) })
+      sound.play('error')
+    },
   })
+  useEffect(() => {
+    const run = verificationRunRef.current
+    if (checkingMarks && run?.accepted && verificationResultsArrived(run.baseline, doc.scans)) void finishVerification()
+  }, [doc.scans, checkingMarks])
+  useEffect(() => {
+    if (!checkingMarks) return
+    const timeout = window.setTimeout(() => {
+      verificationRunRef.current = null
+      setCheckingMarks(false)
+      setMessage({ kind: 'error', text: 'Нет подтверждения завершения проверки. Проверьте связь и повторите проверку марок.' })
+    }, 15 * 60 * 1000)
+    return () => window.clearTimeout(timeout)
+  }, [checkingMarks])
+  useEffect(() => {
+    if (!reviewScroll) return
+    const frame = requestAnimationFrame(() => {
+      const element = marksReviewRef.current
+      if (!element) return
+      element.style.scrollMarginTop = `${(scannerDockRef.current?.offsetHeight || 160) + 8}px`
+      element.scrollIntoView({ block: 'start', behavior: 'instant' })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [reviewScroll])
   useDocumentLive(initial.id, true, (event) => {
-    if (event.type === 'verify_done') { void refresh(); setMessage({ kind: event.failed ? 'error' : 'ok', text: event.failed ? 'Часть марок не удалось проверить. Посмотрите результаты у каждой марки.' : 'Проверка завершена. Посмотрите результаты у каждой марки.' }); return }
+    if (event.type === 'verify_done') {
+      if (verificationRunRef.current) void finishVerification(Number(event.failed) || 0)
+      else void refresh()
+      return
+    }
     liveDuringFetch.current?.push(event)
     if (event.type === 'scans_changed' || (event.type === 'scan_update' && !qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id])?.scans.some(item => item.id === event.scan_id))) {
       void refresh(); return
@@ -383,6 +462,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     networkMode: 'always',
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: (result) => {
+      setVerificationResult(null)
       setLastScannedId(result.id)
       setRepeatedId(result.duplicate ? result.id : null)
       setSelectedScanId(null)
@@ -519,7 +599,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
           <button type="submit" className="tsd-button" aria-label="Принять код" disabled={!online || !code.trim() || scannerBlocked}><Icon name="check" size={20} /></button>
         </form>
         <div className="tsd-dock-meta">
-          <button type="button" className="tsd-button" disabled={!online || verify.isPending || doc.status !== 'draft'} onClick={() => verify.mutate()}>Проверить все марки в ЧЗ</button>
+          <button type="button" className="tsd-button" disabled={!online || checkingMarks || verify.isPending || doc.status !== 'draft' || !doc.scans.some(item => !item.is_barcode)} aria-busy={checkingMarks} onClick={() => verify.mutate()}>{checkingMarks ? 'Проверяем марки в ЧЗ…' : 'Проверить все марки в ЧЗ'}</button>
           <span title={target?.product_name}>{targetProductId ? `Марки → ${target?.product_name || 'Позиция недоступна'}` : 'Авто по GTIN'}</span>
           {(selectedPosition?.product_id || targetProductId) && <button type="button" className="tsd-button" aria-pressed={!targetProductId} disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
           {selectedPosition?.product_id && <button type="button"
@@ -602,12 +682,19 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'all'} onClick={() => selectPosition('all')}>Все сканы</button>
             <button type="button" className="tsd-button" aria-pressed={positionFilter === 'other'} onClick={() => selectPosition('other')}>Вне плана</button>
           </div>
+          <div ref={marksReviewRef} aria-label="Результаты проверки марок">
+          {verificationResult && <div className={`tsd-alert ${verificationResult.hasIssues ? 'tsd-alert--error' : 'tsd-alert--ok'}`}
+            role={verificationResult.hasIssues ? 'alert' : 'status'}>
+            <strong>{verificationResult.text}</strong>
+            {verificationResult.hasIssues && <p>{onlyProblemMarks ? 'Показаны только проблемные марки. Снимите фильтр, чтобы увидеть все сканы.' : 'Показаны все сканы.'}</p>}
+          </div>}
           <h3>Сканы: {filteredScans.length}</h3>
           <label className="shipment-problem-filter">
             <input type="checkbox" checked={onlyProblemMarks} onChange={e => { setOnlyProblemMarks(e.target.checked); setVisibleScans(50) }} />
             Только проблемные марки ({problemCount})
           </label>
           {filteredScans.length === 0 && <p className="hint">{onlyProblemMarks ? 'Проблемных марок нет.' : 'По выбранной позиции ещё нет сканов.'}</p>}
+          </div>
           <div className="tsd-mark-list">
             {filteredScans.slice(0, visibleScans).map(({ scan: item, number }) => <TsdSwipeMark key={item.id}
               className={`tsd-mark tsd-progress--${item.verification?.ms_error || item.verification?.owner_result === 'mismatch' || (item.status !== 'pending' && !rowForScan(item)) || ['invalid', 'used_in_other_doc', 'unknown_product', 'overflow'].includes(item.status) ? 'overflow' : item.verification?.checked_at && item.status === 'valid' ? 'done' : 'partial'}${item.id === lastScanned?.id ? ' tsd-recent-scan' : ''}`}
