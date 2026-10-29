@@ -52,7 +52,7 @@ async def test_scan_prefers_exact_plan_alias_over_stale_cache(monkeypatch):
     cached.assert_not_awaited()
 
 
-async def test_chabacco_pack_scans_keep_distinct_flavors_and_ten_units(monkeypatch):
+async def test_pack_aliases_match_flavors_but_wait_for_actual_composition(monkeypatch):
     gtins = ["04660515330359", "04660515330496", "04660515330571"]
     plan = [{"gtin": f"04680617419{i:03}", "pack_gtins": [gtin],
              "pack_quantities": {gtin: 10}, "product_id": f"flavor-{i}",
@@ -64,7 +64,8 @@ async def test_chabacco_pack_scans_keep_distinct_flavors_and_ten_units(monkeypat
         raw = f"01{gtin}21TEST000000001\x1d93TEST"
         scan, duplicate = await scans._create_scan_record(db, uuid4(), raw, uuid4())
         assert not duplicate and scan.moysklad_product_id == f"flavor-{i}"
-        assert scan.box_quantity == 10 and scan.code == raw and not scan.is_box
+        assert scan.box_quantity is None and scan.code == raw and not scan.is_box
+        assert scan.status.value == 'pending'
 
 
 def test_conflicting_or_unit_gtins_do_not_inflate_quantity():

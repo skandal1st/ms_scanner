@@ -518,6 +518,26 @@ class GtinArchive(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
 
+class GtinPackaging(Base):
+    """Public GTIN packaging facts only; no marks, owners or tenant mappings.
+
+    UNIT=1, GROUP=2, BOX=4. Atomic bitwise OR preserves contradictory evidence
+    across concurrent workers; a conflicting GTIN is never a fast-path UNIT.
+    """
+    __tablename__ = 'gtin_packaging'
+    __table_args__ = (
+        CheckConstraint('type_mask BETWEEN 1 AND 7', name='ck_gtin_packaging_type_mask'),
+        CheckConstraint('observations > 0', name='ck_gtin_packaging_observations'),
+    )
+
+    gtin = Column(String(14), primary_key=True)
+    type_mask = Column(Integer, nullable=False)
+    observations = Column(Integer, nullable=False)
+    last_source = Column(String(16), nullable=False)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class GtinCzGroup(Base):
     """Кэш «GTIN → товарная группа ЧЗ (pg)» — засевается из trackingType карточки МС.
 

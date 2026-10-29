@@ -52,3 +52,31 @@ async def test_single_lookup_uses_same_identity_and_keeps_owner(transport):
     transport(reply)
     result = await ChestnyZnakService(token='test',mock=False,product_groups=['otp']).get_code_info(COMPACT)
     assert result.owner_inn == '123'
+
+
+async def test_single_success_learns_public_packaging_without_an_extra_cz_request(transport, monkeypatch):
+    from app.services import packaging_catalog
+    learn = AsyncMock()
+    monkeypatch.setattr(packaging_catalog, 'record_observations', learn)
+    calls = []
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(200,json=[{'cisInfo': {'cis':COMPACT[:21],
+            'gtin':COMPACT[:14], 'generalPackageType':'UNIT', 'ownerInn':'private'}}])
+    transport(reply)
+    await ChestnyZnakService(token='test',mock=False,product_groups=['otp']).get_code_info(COMPACT)
+    assert len(calls) == 1
+    learn.assert_awaited_once_with([(COMPACT[:14],COMPACT[:14],'UNIT',False)], source='cz_info')
+
+
+async def test_batch_success_learns_types_but_not_private_mark_fields(transport, monkeypatch):
+    from app.services import packaging_catalog
+    learn = AsyncMock()
+    monkeypatch.setattr(packaging_catalog, 'record_observations', learn)
+    def reply(request):
+        code = json.loads(request.content)[0]
+        return httpx.Response(200,json=[{'cisInfo': {'requestedCis':code,
+            'gtin':COMPACT[:14], 'generalPackageType':'GROUP', 'child':['private-child'], 'ownerInn':'private'}}])
+    transport(reply)
+    await ChestnyZnakService(token='test',mock=False,product_groups=['otp']).check_codes([COMPACT])
+    learn.assert_awaited_once_with([(COMPACT[:14],COMPACT[:14],'GROUP',True)], source='cz_batch')

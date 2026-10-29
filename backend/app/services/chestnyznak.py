@@ -1016,6 +1016,9 @@ class ChestnyZnakService:
                 withdraw_reason=(ci.get("withdrawReason") or None),
             )
             await set_cached_pg(gtin_key, pg)
+            from app.services.packaging_catalog import record_observations
+            await record_observations([(gtin_key, info.gtin, info.package_type,
+                                        bool(first_layer or info.children))], source='cz_info')
             logger.info(
                 "cz.code_info.ok",
                 pg=pg,
@@ -1277,6 +1280,7 @@ class ChestnyZnakService:
                     had_infra_failure = True
                 continue
             cache_gtins = set()
+            packaging_facts = []
             for entry in body:
                 if not isinstance(entry, dict):
                     continue
@@ -1293,6 +1297,8 @@ class ChestnyZnakService:
                             reasons[remaining[key]] = str(msg)
                     continue
                 child = [c for c in (ci.get("child") or []) if isinstance(c, str)]
+                packaging_facts.append((extract_gtin(orig), _digits_gtin14_from_value(ci.get('gtin')),
+                                        ci.get('generalPackageType') or ci.get('packageType'), bool(child)))
                 results[orig] = CisCheck(
                     code=orig,
                     found=True,
@@ -1320,6 +1326,8 @@ class ChestnyZnakService:
                     results[original] = replace(results[orig], code=original)
             for gtin in cache_gtins:
                 await set_cached_pg(gtin, pg)
+            from app.services.packaging_catalog import record_observations
+            await record_observations(packaging_facts, source='cz_batch')
 
         # Если cises/info не вернул сведения, проверяем исходный полный код через
         # cises/check. Этот ответ подтверждает статус, но не сведения о владельце.

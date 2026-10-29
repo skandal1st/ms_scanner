@@ -23,7 +23,8 @@ def packaging_metadata(info, original_gtin):
             raise ValueError('Не удалось определить однородный состав упаковки. Нажмите «Проверить марки».')
         return {'gtin': next(iter(gtins)), 'package_type': kind if kind in {'GROUP', 'BOX'} else 'GROUP',
                 'box_quantity': len(children), 'child_codes': children, 'keep_aggregate': True}
-    return {'gtin': info.gtin or original_gtin, 'package_type': kind or 'UNIT'}
+    return {'gtin': info.gtin or original_gtin, 'package_type': kind or 'UNIT',
+            'box_quantity': None, 'child_codes': None, 'keep_aggregate': False}
 
 
 async def discover_scan_packaging(scan_id, user_id):
@@ -44,8 +45,6 @@ async def discover_scan_packaging(scan_id, user_id):
             groups = await _get_cz_product_groups(db, user_id, document_id)
             info = await ChestnyZnakService(token=token, mock=False, product_groups=groups).get_code_info(scan.code)
             metadata = packaging_metadata(info, scan.gtin)
-            from app.services.scan_packaging_cache import remember_unit_evidence
-            await remember_unit_evidence(user_id, document_id, scan.gtin, info)
             product = unique_plan_product(doc.plan, metadata['gtin'])
             if product is None:
                 integration = (await db.execute(select(Integration).where(Integration.user_id == doc.user_id))).scalar_one_or_none()

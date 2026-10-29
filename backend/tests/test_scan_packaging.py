@@ -149,7 +149,7 @@ async def test_unpack_task_keeps_whole_pack_until_composition_received(monkeypat
         assert not p.box_expanded
 
 
-async def test_opening_legacy_plan_updates_pack_metadata_and_existing_counts():
+async def test_opening_legacy_plan_never_reclassifies_existing_marks_from_ms_packs():
     p = pack()
     p.box_quantity = None
     p.package_type = None
@@ -161,7 +161,8 @@ async def test_opening_legacy_plan_updates_pack_metadata_and_existing_counts():
     result = NS(scalars=lambda: NS(all=lambda: [p]))
     db = NS(execute=AsyncMock(side_effect=[Result(doc), result]), commit=AsyncMock())
     await refresh_legacy_pack_plan(db, doc, ms)
-    assert p.box_quantity == 10 and p.package_type == 'GROUP' and p.keep_aggregate
+    assert doc.plan == fresh
+    assert p.box_quantity is None and p.package_type is None and not p.keep_aggregate
     await refresh_legacy_pack_plan(db, doc, ms)
     ms.build_plan.assert_awaited_once()
 

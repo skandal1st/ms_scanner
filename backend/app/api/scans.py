@@ -339,10 +339,8 @@ async def _create_scan_record(
     # уточнит связку. Только для обычных КМ (короб опознаётся своей задачей).
     resolved_pid = moysklad_product_id
     if not is_box and gtin:
-        from app.services.plan_matching import unique_plan_product, plan_pack_quantity
+        from app.services.plan_matching import unique_plan_product
         planned = unique_plan_product(doc_obj.plan, gtin)
-        if box_quantity is None:
-            box_quantity = plan_pack_quantity(doc_obj.plan, gtin)
         if resolved_pid is None and planned:
             resolved_pid = planned["product_id"]
             initial_name = (planned.get("product_name") or "").strip() or None
@@ -386,7 +384,7 @@ async def _create_scan_record(
                           and needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity))
     if discover_packaging and resolved_pid and not box_quantity:
         from app.services.scan_packaging_cache import has_confirmed_unit
-        if await has_confirmed_unit(current_user_id, document_id, gtin):
+        if await has_confirmed_unit(current_user_id, document_id, gtin, db=db):
             discover_packaging = False
     if discover_packaging:
         scan_values.update(status=ScanStatus.pending, verification={'source': 'packaging_pending', 'checked_at': None})

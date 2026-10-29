@@ -53,7 +53,8 @@ def test_deus_block_stored_as_regular_product_barcode_still_gets_discovered():
 def test_actual_unit_from_cz_keeps_single_unit_semantics():
     metadata = service.packaging_metadata(NS(package_type='UNIT', children=[],
                                             gtin='04640195516373'), '04640195516373')
-    assert metadata == {'gtin': '04640195516373', 'package_type': 'UNIT'}
+    assert metadata == {'gtin': '04640195516373', 'package_type': 'UNIT',
+                        'box_quantity': None, 'child_codes': None, 'keep_aggregate': False}
 
 
 @pytest.mark.parametrize('state', ['ready', 'removed', 'finished', 'verified'])
@@ -132,7 +133,7 @@ async def test_known_product_skips_packaging_wait_only_with_confirmed_unit_evide
     scan, duplicate = await scans._create_scan_record(db, doc_id,
         '010463033960889721UNIT00000001\x1d93TEST', user_id)
     assert not duplicate
-    scan_packaging_cache.has_confirmed_unit.assert_awaited_once_with(user_id, doc_id, '04630339608897')
+    scan_packaging_cache.has_confirmed_unit.assert_awaited_once_with(user_id, doc_id, '04630339608897', db=db)
     assert scan.moysklad_product_id == 'product'
     assert scan.verified_at is None  # Packaging evidence never certifies the mark.
     if confirmed:
