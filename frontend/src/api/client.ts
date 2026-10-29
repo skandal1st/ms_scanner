@@ -7,6 +7,45 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 })
 
+export interface GtinAuditCard {
+  id: string
+  name: string
+  archived: boolean
+  gtins: string[]
+  pack_gtins: string[]
+  url: string | null
+}
+export interface GtinAuditRun {
+  id: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  phase: string
+  products_checked: number
+  summary: Record<string, number> | null
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  finished_at: string | null
+  updated_at: string
+}
+export interface GtinAuditStatus { job: GtinAuditRun | null; report: GtinAuditRun | null }
+export interface GtinAuditFinding {
+  id: string
+  kind: 'mapping' | 'duplicate'
+  category: string
+  gtin: string
+  saved_product_id: string | null
+  saved_product_name: string | null
+  saved_card: GtinAuditCard | null
+  candidates: GtinAuditCard[]
+}
+export interface GtinAuditPage { total: number; page: number; page_size: number; items: GtinAuditFinding[] }
+export const gtinControlApi = {
+  status: () => api.get<GtinAuditStatus>('/gtin-control'),
+  refresh: () => api.post<GtinAuditRun>('/gtin-control/refresh'),
+  findings: (params: { run_id: string; kind: 'mapping' | 'duplicate'; category?: string; q?: string;
+    include_archived?: boolean; page: number }) => api.get<GtinAuditPage>('/gtin-control/findings', { params }),
+}
+
 // Desktop-only mapping writes. Inspect the actual card before local mapping or MS mutations.
 api.interceptors.request.use(async config => {
   if (config.method !== 'post' || !['/products/link-gtin', '/products/link-gtin-bulk',

@@ -1,0 +1,56 @@
+.gtin-control { max-width: 1560px; margin: 0 auto; padding: 28px 24px 40px; color: var(--ms-text); }
+.gtin-control__header { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.gtin-control h1 { font-size: 22px; margin: 0 0 6px; }
+.gtin-control h2 { font-size: 17px; margin: 14px 0 6px; }
+.gtin-control__header p, .gtin-control__scope, .gtin-control__muted { color: var(--ms-text-muted); }
+.gtin-control__header p { margin: 0; }
+.gtin-control__scope { margin: 18px 0; line-height: 1.6; }
+.gtin-control__progress { display: flex; align-items: center; gap: 10px; padding: 14px; background: var(--st-info-bg); color: var(--st-info-fg); border-radius: var(--r-sm); margin-bottom: 16px; }
+.gtin-control__summary { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 24px; margin: 24px 0 14px; color: var(--ms-text-muted); font-variant-numeric: tabular-nums; }
+.gtin-control__summary strong { color: var(--ms-text); font-weight: 500; }
+.gtin-control__results { border: 1px solid var(--ms-border); border-radius: var(--r-md); background: var(--ms-bg); overflow: hidden; }
+.gtin-control__tabs { display: flex; border-bottom: 1px solid var(--ms-border-light); background: var(--surface-2); }
+.gtin-control__tabs button { display: flex; align-items: center; gap: 10px; padding: 15px 20px; background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--ms-text-muted); cursor: pointer; font: inherit; }
+.gtin-control__tabs button[aria-selected="true"] { border-bottom-color: var(--brand); background: var(--ms-bg); color: var(--brand-strong); font-weight: 600; }
+.gtin-control__tabs button:hover { background: var(--brand-tint); }
+.gtin-control__tabs span { font-variant-numeric: tabular-nums; font-weight: 400; }
+.gtin-control__filters { display: flex; align-items: end; gap: 20px; padding: 20px 20px 12px; flex-wrap: wrap; }
+.gtin-control__filters label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-weight: 500; }
+.gtin-control__filters input:not([type="checkbox"]), .gtin-control__filters select { width: 100%; min-height: 36px; }
+.gtin-control__search { flex: 1; min-width: 230px; max-width: 500px; }
+.gtin-control__filters label.gtin-control__archive { flex-direction: row; align-items: center; min-height: 36px; gap: 8px; }
+.gtin-control__explanation { padding: 0 20px 16px; margin: 0; color: var(--ms-text-muted); line-height: 1.6; max-width: 110ch; }
+.gtin-control__table-wrap { overflow-x: auto; }
+.gtin-control__table { width: 100%; border-collapse: collapse; table-layout: fixed; font-variant-numeric: tabular-nums; }
+.gtin-control__table th, .gtin-control__table td { padding: 16px 18px; text-align: left; vertical-align: top; border-top: 1px solid var(--ms-border-light); overflow-wrap: anywhere; line-height: 1.5; }
+.gtin-control__table th { font-size: 11px; letter-spacing: .03em; font-weight: 500; background: var(--surface-2); color: var(--ms-text-muted); }
+.gtin-control__table th:first-child { width: 165px; }
+.gtin-control__table th:last-child { width: 25%; }
+.gtin-control__table tbody tr:hover { background: var(--brand-tint); }
+.gtin-control__code code { white-space: nowrap; font-family: var(--ms-font-mono); font-size: 12px; }
+.gtin-control__product + .gtin-control__product { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ms-border-light); }
+.gtin-control__product a { color: var(--brand-strong); text-decoration: underline; text-underline-offset: 3px; }
+.gtin-control__product a svg { margin-left: 5px; vertical-align: middle; }
+.gtin-control__product-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 11px; color: var(--ms-text-muted); margin-top: 5px; overflow-wrap: anywhere; }
+.gtin-control__current-name { margin-top: 10px; }
+.gtin-control__reason .badge { white-space: normal; text-align: left; }
+.gtin-control .badge--muted { background: var(--st-mut-bg); color: var(--st-mut-fg); border-color: var(--st-mut-bd); }
+.gtin-control__reason p { color: var(--ms-text-muted); margin: 10px 0 0; font-size: 12px; }
+.gtin-control__details { margin-top: 10px; font-size: 12px; }
+.gtin-control__details summary { cursor: pointer; color: var(--brand-strong); }
+.gtin-control__details p { overflow-wrap: anywhere; }
+.gtin-control__empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 22px; text-align: center; }
+.gtin-control__empty > svg { color: var(--ms-text-muted); }
+.gtin-control__empty p { max-width: 65ch; color: var(--ms-text-muted); line-height: 1.7; }
+.gtin-control__pagination { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-top: 1px solid var(--ms-border-light); color: var(--ms-text-muted); font-variant-numeric: tabular-nums; }
+.gtin-control__pagination > div { display: flex; align-items: center; gap: 14px; }
+@media (max-width: 760px) {
+  .gtin-control { padding: 20px 12px; }
+  .gtin-control__header { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .gtin-control__filters { align-items: stretch; gap: 14px; padding: 16px; }
+  .gtin-control__filters > label { flex: 1 1 100%; max-width: none; min-width: 0; }
+  .gtin-control__tabs button { padding: 14px 12px; gap: 6px; font-size: 12px; }
+  .gtin-control__explanation { padding: 0 16px 16px; }
+  .gtin-control__table { min-width: 850px; }
+  .gtin-control__pagination { align-items: flex-start; flex-direction: column; }
+}

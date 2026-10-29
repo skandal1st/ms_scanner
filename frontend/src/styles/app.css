@@ -157,6 +157,25 @@ html, body, #root { height: 100%; }
   display: block;
 }
 .app-nav__spacer { flex: 1; }
+.app-nav__links {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #65728d var(--chrome);
+}
+.app-nav__links > a { flex-shrink: 0; white-space: nowrap; }
+.app-nav > :not(.app-nav__links) { flex-shrink: 0; }
+@media (max-width: 760px) {
+  .app-nav { display: grid; grid-template-columns: minmax(0, 1fr) auto; height: auto; padding: 8px 12px; gap: 8px; }
+  .app-nav__brand { grid-column: 1; grid-row: 1; }
+  .app-nav > button { grid-column: 2; grid-row: 1; }
+  .app-nav > .field-row { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  .app-nav__links { grid-column: 1 / -1; grid-row: 3; min-height: 36px; }
+}
 .app-nav a, .app-nav button {
   font-family: var(--ms-font);
   font-size: 13px;

@@ -431,6 +431,45 @@ class GtinProductMap(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class GtinAuditRun(Base):
+    __tablename__ = 'gtin_audit_runs'
+    __table_args__ = (
+        Index('uq_gtin_audit_active_user', 'user_id', unique=True,
+              postgresql_where=text("status IN ('queued', 'running')")),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
+    status = Column(String(16), nullable=False, default='queued')
+    phase = Column(String(32), nullable=False, default='queued')
+    products_checked = Column(Integer, nullable=False, default=0)
+    summary = Column(JSONB, nullable=True)
+    error_message = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class GtinAuditFinding(Base):
+    __tablename__ = 'gtin_audit_findings'
+    __table_args__ = (
+        Index('ix_gtin_audit_findings_page', 'run_id', 'kind', 'priority', 'gtin'),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id = Column(UUID(as_uuid=True), ForeignKey('gtin_audit_runs.id', ondelete='CASCADE'), nullable=False)
+    kind = Column(String(16), nullable=False)
+    category = Column(String(40), nullable=False)
+    priority = Column(Integer, nullable=False)
+    gtin = Column(String(14), nullable=False)
+    saved_product_id = Column(String(64), nullable=True)
+    saved_product_name = Column(String(500), nullable=True)
+    saved_card = Column(JSONB, nullable=True)
+    candidates = Column(JSONB, nullable=False)
+    search_text = Column(Text, nullable=False)
+
+
 class GtinNameMap(Base):
     """База знаний «GTIN → наименование товара» из первичных XML УПД (ЭДО Saby).
 

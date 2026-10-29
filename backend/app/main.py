@@ -124,6 +124,8 @@ app.include_router(acceptance.router, dependencies=[Depends(require_active_subsc
 app.include_router(support.router)
 # Инвентаризация и Контроль марок — только полная версия (см. require_full_edition).
 app.include_router(mark_control.router, dependencies=[Depends(require_full_edition), Depends(require_active_subscription)])
+from app.api import gtin_control
+app.include_router(gtin_control.router, dependencies=[Depends(require_full_edition), Depends(require_active_subscription)])
 app.include_router(inventory.router, dependencies=[Depends(require_full_edition), Depends(require_active_subscription)])
 
 

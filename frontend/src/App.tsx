@@ -23,6 +23,7 @@ import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwi
 import { enforceComScannerMode } from './lib/scannerMode'
 
 const TsdPage = lazy(() => import('./pages/Tsd').then((module) => ({ default: module.TsdPage })))
+const GtinControlPage = lazy(() => import('./pages/GtinControl').then((module) => ({ default: module.GtinControlPage })))
 
 // Одноразово мигрируем старую локальную настройку «USB-клавиатура» в обязательный COM.
 enforceComScannerMode()
@@ -58,6 +59,7 @@ const NAV_ITEMS: { to: string; label: string; icon: IconName; fullOnly?: boolean
   { to: '/writeoff', label: 'Списание', icon: 'writeoff' },
   { to: '/check', label: 'Проверка', icon: 'check' },
   { to: '/mark-control', label: 'Контроль марок', icon: 'check', fullOnly: true },
+  { to: '/gtin-control', label: 'Контроль GTIN', icon: 'scan', fullOnly: true },
   { to: '/inventory', label: 'Инвентаризация', icon: 'check' },
   { to: '/settings', label: 'Настройки', icon: 'settings' },
   { to: '/help', label: 'Помощь', icon: 'help' },
@@ -91,6 +93,7 @@ function Layout({ children }: { children: React.ReactNode }) {
         <span className="app-nav__brand">
           <img src="/logo-light.svg" alt="Скандата" className="app-nav__logo-img" />
         </span>
+        <div className="app-nav__links">
         {navItems.map((item) => (
           <NavLink
             key={item.to}
@@ -110,7 +113,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             )}
           </NavLink>
         ))}
-        <span className="app-nav__spacer" />
+        </div>
         <OrganizationProfileSwitcher compact />
         <button type="button" onClick={handleLogout}>
           <Icon name="logout" size={16} className="app-nav__icon" />
@@ -221,6 +224,13 @@ export default function App() {
               </RequireAuth>
             }
           />
+          <Route path="/gtin-control" element={
+            <RequireAuth><RequireFull><Layout>
+              <Suspense fallback={<div className="gtin-control">Загружаем контроль GTIN…</div>}>
+                <GtinControlPage />
+              </Suspense>
+            </Layout></RequireFull></RequireAuth>
+          } />
           <Route
             path="/inventory"
             element={
