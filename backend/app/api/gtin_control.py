@@ -1,4 +1,5 @@
 """Account-scoped, desktop-only access to persisted GTIN audits."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import UUID
@@ -6,14 +7,67 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user
-from app.db.models import User, Integration, GtinAuditRun, GtinAuditFinding
+from app.db.models import User, Integration, GtinAuditRun, GtinAuditFinding, NkProduct
+from app.core.config import settings
 from app.db.session import get_db
 from app.services.document_guard import processing_lock
 from app.services.gtin_audit import ACTIVE, CATEGORIES
 
 router = APIRouter(prefix='/gtin-control', tags=['gtin-control'])
+
+
+class NationalCatalogRequest(BaseModel):
+    run_id: UUID
+    gtin: str = Field(pattern=r'^[0-9]{14}$')
+    refresh: bool = False
+
+
+def nk_view(row, source):
+    return {'gtin': row.gtin, 'status': 'found' if row.found else 'not_found',
+            'good_name': row.good_name, 'brand_name': row.brand_name, 'category': row.category,
+            'checked_at': row.fetched_at, 'source': source}
+
+
+@router.post('/national-catalog')
+async def national_catalog(body: NationalCatalogRequest, current_user: User = Depends(get_current_user),
+                           db: AsyncSession = Depends(get_db)):
+    owned = (await db.execute(select(GtinAuditFinding.id).join(GtinAuditRun).where(
+        GtinAuditRun.id == body.run_id, GtinAuditRun.user_id == current_user.id,
+        GtinAuditRun.status == 'done', GtinAuditFinding.gtin == body.gtin).limit(1))).scalar_one_or_none()
+    if not owned:
+        raise HTTPException(404, 'GTIN не найден в доступном отчёте проверки.')
+    cached = await db.get(NkProduct, body.gtin)
+    if cached and not body.refresh:
+        at = cached.fetched_at
+        if at and at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        if at and at > datetime.now(timezone.utc) - timedelta(minutes=10):
+            return nk_view(cached, 'cache')
+    if not settings.nk_enabled:
+        raise HTTPException(503, 'Национальный каталог не подключён. Обратитесь к администратору Skandata.')
+    await db.rollback()  # Do not hold a database transaction during external IO.
+    from app.services.national_catalog import lookup_products_detailed
+    try:
+        found, missing = await asyncio.wait_for(lookup_products_detailed([body.gtin]), timeout=20)
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(504, 'Национальный каталог не ответил вовремя. Повторите проверку позже.') from exc
+    card = found.get(body.gtin)
+    if card is None and body.gtin not in missing:
+        raise HTTPException(502, 'Не удалось получить ответ Национального каталога. Повторите проверку позже.')
+    values = {'gtin': body.gtin, 'found': card is not None,
+              'good_name': card.good_name if card else None, 'brand_name': card.brand_name if card else None,
+              'category': card.category if card else None, 'fetched_at': datetime.now(timezone.utc)}
+    statement = insert(NkProduct).values(**values)
+    await db.execute(statement.on_conflict_do_update(index_elements=['gtin'],
+        set_={key: statement.excluded[key] for key in values if key != 'gtin'}))
+    await db.commit()
+    return {'gtin': body.gtin, 'status': 'found' if card else 'not_found',
+            'good_name': values['good_name'], 'brand_name': values['brand_name'], 'category': values['category'],
+            'checked_at': values['fetched_at'], 'source': 'national_catalog'}
 
 
 def run_view(row):

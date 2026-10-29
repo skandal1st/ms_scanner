@@ -39,9 +39,20 @@ export interface GtinAuditFinding {
   candidates: GtinAuditCard[]
 }
 export interface GtinAuditPage { total: number; page: number; page_size: number; items: GtinAuditFinding[] }
+export interface GtinNationalCatalogResult {
+  gtin: string
+  status: 'found' | 'not_found'
+  good_name: string | null
+  brand_name: string | null
+  category: string | null
+  checked_at: string
+  source: 'cache' | 'national_catalog'
+}
 export const gtinControlApi = {
   status: () => api.get<GtinAuditStatus>('/gtin-control'),
   refresh: () => api.post<GtinAuditRun>('/gtin-control/refresh'),
+  nationalCatalog: (run_id: string, gtin: string, refresh = false) =>
+    api.post<GtinNationalCatalogResult>('/gtin-control/national-catalog', { run_id, gtin, refresh }),
   findings: (params: { run_id: string; kind: 'mapping' | 'duplicate'; category?: string; q?: string;
     include_archived?: boolean; page: number }) => api.get<GtinAuditPage>('/gtin-control/findings', { params }),
 }

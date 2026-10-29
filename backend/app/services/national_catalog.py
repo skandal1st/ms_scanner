@@ -20,6 +20,8 @@ Best-effort: любая ошибка (нет ключа, сеть, 4xx/5xx НК)
 Док: https://docs.crpt.ru/gismt/API_НК/ — метод v3/product.
 """
 import asyncio
+import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -29,6 +31,19 @@ import httpx
 from app.core.config import settings
 from app.core.logging import logger
 from app.services.chestnyznak import normalize_gtin_key
+
+
+class _RedactNkApiKey(logging.Filter):
+    """HTTPX logs full request URLs; NK credentials must remain server-only."""
+    def filter(self, record):
+        message = record.getMessage()
+        if 'apikey=' in message.lower():
+            record.msg = re.sub(r'([?&]apikey=)[^&\s"]+', r'\1[скрыто]', message, flags=re.IGNORECASE)
+            record.args = ()
+        return True
+
+
+logging.getLogger('httpx').addFilter(_RedactNkApiKey())
 
 
 # ── Глобальный троттлинг под лимит НК (100/5мин на метод) ──────────────────────
@@ -140,7 +155,7 @@ async def _fetch_one(
             if attempt < settings.NK_MAX_RETRIES:
                 await asyncio.sleep(min(0.5 * (2 ** attempt), 8.0))
                 continue
-            logger.warning("nk.lookup_http_error", gtin=key, error=str(exc))
+            logger.warning("nk.lookup_http_error", gtin=key, error_type=type(exc).__name__)
             return ERROR, None
 
         if resp.status_code == 200:
@@ -208,7 +223,7 @@ async def lookup_products_detailed(
                 else:
                     errors += 1
     except Exception as exc:  # noqa: BLE001 — резолвер не критичен, не роняем поток
-        logger.warning("nk.lookup_failed", error=str(exc))
+        logger.warning("nk.lookup_failed", error_type=type(exc).__name__)
         return found, not_found
 
     logger.info(

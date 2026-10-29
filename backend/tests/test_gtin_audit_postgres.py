@@ -13,7 +13,7 @@ from sqlalchemy.pool import NullPool
 from app.api import gtin_control
 from app.core.config import settings
 from app.core.security import encrypt_token
-from app.db.models import User, Integration, GtinProductMap, GtinAuditRun, GtinAuditFinding
+from app.db.models import User, Integration, GtinProductMap, GtinAuditRun, GtinAuditFinding, NkProduct
 from app.services import gtin_audit_job
 from app.services.gtin_audit import Catalog
 from app.worker import tasks
@@ -104,4 +104,33 @@ async def test_failed_refresh_preserves_previous_success_and_does_not_publish_pa
             assert 'полный каталог' in state['job']['error_message']
             assert not (await db.execute(select(GtinAuditFinding.id).where(GtinAuditFinding.run_id == next_run['id']))).all()
     finally:
+        await cleanup(engine, factory, user)
+
+
+async def test_nk_check_persists_cache_without_changing_saved_mapping(monkeypatch):
+    from app.services import national_catalog as nk
+    engine, factory, user = await setup(monkeypatch)
+    gtin = '099999' + str(uuid4().int)[-8:]
+    monkeypatch.setattr(settings, 'NK_ENABLED', True)
+    monkeypatch.setattr(settings, 'NK_API_KEY', 'fixture-no-live-key')
+    lookup = AsyncMock(return_value=({gtin: nk.NkCard(gtin, 'Товар НК 120 г', 'Бренд', 'Категория')}, set()))
+    monkeypatch.setattr(nk, 'lookup_products_detailed', lookup)
+    try:
+        async with factory() as db:
+            run = GtinAuditRun(user_id=user.id, status='done', phase='done')
+            db.add(run); await db.flush()
+            db.add(GtinAuditFinding(run_id=run.id, kind='duplicate', category='duplicate_active', priority=1,
+                                    gtin=gtin, candidates=[], search_text=gtin))
+            await db.commit()
+            body = gtin_control.NationalCatalogRequest(run_id=run.id, gtin=gtin)
+            first = await gtin_control.national_catalog(body, user, db)
+            second = await gtin_control.national_catalog(body, user, db)
+            assert first['source'] == 'national_catalog' and second['source'] == 'cache'
+            assert (await db.get(NkProduct, gtin)).good_name == 'Товар НК 120 г'
+            lookup.assert_awaited_once_with([gtin])
+            mapping = (await db.execute(select(GtinProductMap).where(GtinProductMap.user_id == user.id))).scalar_one()
+            assert mapping.product_id == 'old-card'
+    finally:
+        async with factory() as db:
+            await db.execute(delete(NkProduct).where(NkProduct.gtin == gtin)); await db.commit()
         await cleanup(engine, factory, user)

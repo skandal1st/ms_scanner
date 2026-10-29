@@ -39,6 +39,16 @@
 .gtin-control__details { margin-top: 10px; font-size: 12px; }
 .gtin-control__details summary { cursor: pointer; color: var(--brand-strong); }
 .gtin-control__details p { overflow-wrap: anywhere; }
+.gtin-control__nk-button { margin-top: 10px; display: flex; white-space: nowrap; }
+.gtin-control__table td.gtin-control__nk-cell { padding: 0; }
+.gtin-control__nk { padding: 18px 20px; background: var(--surface-2); }
+.gtin-control__nk-heading, .gtin-control__nk-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.gtin-control__nk-heading h2 { font-size: 14px; margin: 0; }
+.gtin-control__nk-heading code { font-size: 12px; }
+.gtin-control__nk-data { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; margin: 18px 0; }
+.gtin-control__nk-data dt { font-size: 12px; color: var(--ms-text-muted); margin-bottom: 5px; }
+.gtin-control__nk-data dd { margin: 0; }
+.gtin-control__nk-footer { font-size: 12px; color: var(--ms-text-muted); }
 .gtin-control__empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 22px; text-align: center; }
 .gtin-control__empty > svg { color: var(--ms-text-muted); }
 .gtin-control__empty p { max-width: 65ch; color: var(--ms-text-muted); line-height: 1.7; }
@@ -52,5 +62,7 @@
   .gtin-control__tabs button { padding: 14px 12px; gap: 6px; font-size: 12px; }
   .gtin-control__explanation { padding: 0 16px 16px; }
   .gtin-control__table { min-width: 850px; }
+  .gtin-control__nk { width: calc(100vw - 26px); max-width: 100%; box-sizing: border-box; }
+  .gtin-control__nk-data { grid-template-columns: 1fr; gap: 12px; }
   .gtin-control__pagination { align-items: flex-start; flex-direction: column; }
 }

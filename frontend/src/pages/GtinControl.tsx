@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { gtinControlApi, type GtinAuditCard, type GtinAuditFinding, type GtinAuditStatus } from '../api/client'
 import { Icon } from '../components/Icon'
@@ -23,9 +23,9 @@ const phases: Record<string, string> = {
   queued: 'Проверка ожидает запуска', active_catalog: 'Читаем действующие карточки МС',
   archived_catalog: 'Читаем архивные карточки МС', analyzing: 'Сравниваем GTIN и сохранённые привязки',
 }
-function errorText(error: unknown) {
+function errorText(error: unknown, fallback = 'Не удалось загрузить контроль GTIN. Проверьте связь и повторите попытку.') {
   return (error as { response?: { data?: { detail?: string } } })?.response?.data?.detail
-    || 'Не удалось загрузить контроль GTIN. Проверьте связь и повторите попытку.'
+    || fallback
 }
 
 function Product({ card, gtin }: { card: GtinAuditCard; gtin: string }) {
@@ -40,10 +40,47 @@ function Product({ card, gtin }: { card: GtinAuditCard; gtin: string }) {
   </div>
 }
 
-function Finding({ item, mapping }: { item: GtinAuditFinding; mapping: boolean }) {
+function NationalCatalogCheck({ runId, gtin, onClose }: { runId: string; gtin: string; onClose: () => void }) {
+  const cache = useQueryClient()
+  const key = ['gtin-national-catalog', runId, gtin]
+  const result = useQuery({ queryKey: key, queryFn: () => gtinControlApi.nationalCatalog(runId, gtin).then(r => r.data),
+    staleTime: 10 * 60 * 1000, retry: false })
+  const refresh = useMutation({ mutationFn: () => gtinControlApi.nationalCatalog(runId, gtin, true).then(r => r.data),
+    onSuccess: data => cache.setQueryData(key, data) })
+  const data = result.data
+  return <section className="gtin-control__nk" aria-label={`Национальный каталог: ${gtin}`}>
+    <div className="gtin-control__nk-heading"><h2>Национальный каталог · <code>{gtin}</code></h2>
+      <button type="button" className="button button--sm" onClick={onClose}>Скрыть</button></div>
+    {(result.isLoading || refresh.isPending) && <p role="status">Получаем сведения о товаре из Национального каталога…</p>}
+    {(result.error || refresh.error) && <div className="alert alert--error" role="alert">
+      {errorText(refresh.error || result.error, 'Не удалось получить сведения Национального каталога. Повторите проверку позже.')}{data && ' Ниже показан предыдущий полученный ответ.'}
+      <button type="button" className="button button--sm" disabled={refresh.isPending} onClick={() => refresh.mutate()}>Повторить проверку</button>
+    </div>}
+    {data && <>
+      {data.status === 'found' ? <dl className="gtin-control__nk-data">
+        <div><dt>Наименование товара</dt><dd>{data.good_name || 'Наименование не указано'}</dd></div>
+        <div><dt>Бренд</dt><dd>{data.brand_name || 'Не указан'}</dd></div>
+        <div><dt>Категория</dt><dd>{data.category || 'Не указана'}</dd></div>
+      </dl> : <p>Карточка с этим GTIN в Национальном каталоге не найдена. Это само по себе не подтверждает ошибку марки.</p>}
+      <div className="gtin-control__nk-footer"><span>Данные НК от {date(data.checked_at)}{data.source === 'cache' ? ' · сохранённый ответ' : ''}</span>
+        <button type="button" className="button button--sm" disabled={result.isFetching || refresh.isPending} onClick={() => refresh.mutate()}>
+          <Icon name="refresh" size={13} />Обновить из НК
+        </button></div>
+      <p className="gtin-control__muted">Сравните сведения НК с карточками МС. Сохранённые привязки и карточки товаров не изменяются.</p>
+    </>}
+  </section>
+}
+
+function Finding({ item, mapping, runId }: { item: GtinAuditFinding; mapping: boolean; runId: string }) {
   const category = categories[item.category]
-  return <tr>
-    <td className="gtin-control__code"><code>{item.gtin}</code></td>
+  const [checking, setChecking] = useState(false)
+  return <Fragment><tr>
+    <td className="gtin-control__code"><code>{item.gtin}</code>
+      <button type="button" className="button button--sm gtin-control__nk-button" onClick={() => setChecking(value => !value)}
+        aria-expanded={checking} aria-label={`Проверить GTIN ${item.gtin} в Национальном каталоге`}>
+        <Icon name="check" size={13} />Проверить в НК
+      </button>
+    </td>
     {mapping && <td>
       <div>{item.saved_product_name || 'Без сохранённого названия'}</div>
       <div className="gtin-control__product-meta">ID: {item.saved_product_id || '—'}</div>
@@ -67,7 +104,9 @@ function Finding({ item, mapping }: { item: GtinAuditFinding; mapping: boolean }
       <span className={`badge badge--${category?.severity || 'warn'}`}>{category?.label || item.category}</span>
       <p>{category?.description}</p>
     </td>
-  </tr>
+  </tr>{checking && <tr><td colSpan={mapping ? 4 : 3} className="gtin-control__nk-cell">
+    <NationalCatalogCheck runId={runId} gtin={item.gtin} onClose={() => setChecking(false)} />
+  </td></tr>}</Fragment>
 }
 
 export function GtinControlPage() {
@@ -165,7 +204,7 @@ export function GtinControlPage() {
               : <div className="gtin-control__table-wrap"><table className="gtin-control__table">
                 <thead><tr><th scope="col">GTIN</th>{tab === 'mapping' && <th scope="col">Сохранено в Skandata</th>}
                   <th scope="col">Карточки с этим GTIN в МС</th><th scope="col">Результат проверки</th></tr></thead>
-                <tbody>{items.map(item => <Finding key={item.id} item={item} mapping={tab === 'mapping'} />)}</tbody>
+                <tbody>{items.map(item => <Finding key={item.id} item={item} mapping={tab === 'mapping'} runId={report.id} />)}</tbody>
               </table></div>}
           </div>
           {findings.data && <footer className="gtin-control__pagination">
