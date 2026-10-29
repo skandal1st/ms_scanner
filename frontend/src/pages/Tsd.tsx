@@ -14,11 +14,10 @@ import { needsVerificationReview, verificationStamp, verificationResultsArrived,
 import { verificationLabel, ownerCheckLabel } from '../lib/scanVerification'
 import { TsdPwaControls, TsdConnection, useTsdOnline } from '../components/TsdPwaControls'
 import { useTsdSound } from '../hooks/useTsdSound'
-import { useTsdScannerFocus } from '../hooks/useTsdScannerFocus'
+import { TsdScanInput } from '../components/TsdScanInput'
 import { useDocumentLive, type DocumentEvent } from '../hooks/useDocumentLive'
 import { applyScanEvent } from '../lib/scanEvents'
 import { parseTsdDocumentCode } from '../lib/tsdLinks'
-import { Icon } from '../components/Icon'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
@@ -269,7 +268,8 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const sound = useTsdSound()
   const qc = useQueryClient()
   const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
-  const [code, setCode] = useState('')
+  const [hasCode, setHasCode] = useState(false)
+  const [inputResetVersion, setInputResetVersion] = useState(0)
   const [lastCode, setLastCode] = useState('')
   const [lastScannedId, setLastScannedId] = useState<string | null>(null)
   const [pickingView, setPickingView] = useState<'card' | 'list'>(() =>
@@ -353,17 +353,29 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const activePack = selectedScan || lastScanned
   const canChangePack = activePack && !activePack.is_barcode
     && scanPackageType(activePack) !== 'UNIT'
-  const problemRows = problemPositionRows(progress, doc.scans, null, repeatedId)
-  const visiblePositions = progress.rows.map((row, index) => ({ row, index }))
-    .filter(({ row }) => !onlyProblemPositions || problemRows.includes(row))
-  const positionScans = doc.scans.filter((item) => positionFilter === 'all'
-    || (positionFilter === 'other' ? !rowForScan(item) : rowForScan(item) === progress.rows[positionFilter]))
-  const problemMark = (item: typeof last) => isProblemScan(item, null, repeatedId, progress.hasPlan ? progress.rows : undefined)
-    || Boolean(verificationResult && needsVerificationReview(item, progress.hasPlan ? progress.rows : undefined))
-  const problemCount = positionScans.filter(problemMark).length
-  const positionScanIds = new Set(positionScans.map(item => item.id))
-  const filteredScans = numberedScans(doc.scans).filter(({ scan }) => positionScanIds.has(scan.id)
-    && (!onlyProblemMarks || problemMark(scan)))
+  const showReview = listView || reviewing
+  const visiblePositions = useMemo(() => {
+    if (!showReview) return []
+    const problems = onlyProblemPositions
+      ? new Set(problemPositionRows(progress, doc.scans, null, repeatedId)) : null
+    return progress.rows.map((row, index) => ({ row, index }))
+      .filter(({ row }) => !problems || problems.has(row))
+  }, [showReview, onlyProblemPositions, progress, doc.scans, repeatedId])
+  const orderedScans = useMemo(() => showReview ? numberedScans(doc.scans) : [], [showReview, doc.scans])
+  const { problemCount, filteredScans } = useMemo(() => {
+    let problemCount = 0
+    const filteredScans: typeof orderedScans = []
+    for (const item of orderedScans) {
+      const row = positionFilter === 'all' ? undefined : findProgressRowForScan(item.scan, progress.rows)
+      if (positionFilter !== 'all'
+          && (positionFilter === 'other' ? Boolean(row) : row !== progress.rows[positionFilter])) continue
+      const problem = isProblemScan(item.scan, null, repeatedId, progress.hasPlan ? progress.rows : undefined)
+        || Boolean(verificationResult && needsVerificationReview(item.scan, progress.hasPlan ? progress.rows : undefined))
+      if (problem) problemCount++
+      if (!onlyProblemMarks || problem) filteredScans.push(item)
+    }
+    return { problemCount, filteredScans }
+  }, [orderedScans, positionFilter, progress, repeatedId, verificationResult, onlyProblemMarks])
   const selectPosition = (value: typeof positionFilter) => {
     setPositionFilter(value)
     setSelectedScanId(null)
@@ -462,7 +474,10 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const scan = useMutation({
     networkMode: 'always',
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
+      // Ignore any older recovery snapshot without reverting live updates that
+      // arrived while it was loading. The acknowledged scan is authoritative.
+      await qc.cancelQueries({ queryKey: ['tsd-document', initial.id] }, { revert: false })
       setVerificationResult(null)
       setLastScannedId(result.id)
       setRepeatedId(result.duplicate ? result.id : null)
@@ -481,15 +496,14 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         : overPlan ? { kind: 'error', text: `Марка добавлена сверх плана: ${matched.product_name}` }
         : { kind: 'ok', text: result.product_name || matched.product_name || 'Скан принят' })
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], { ...latest, scans: mergedScans })
-      setCode('')
-      refresh()
+      setInputResetVersion(value => value + 1)
       sound.play(result.status === 'used_in_other_doc' ? 'used_in_other_doc' : errorFeedback ? 'error' : 'ok')
       window.navigator.vibrate?.(errorFeedback ? [80, 60, 80] : 60)
       inputRef.current?.focus({ preventScroll: true })
     },
     onError: (error) => {
       setMessage({ kind: 'error', text: apiMessage(error) })
-      setCode('')
+      setInputResetVersion(value => value + 1)
       window.navigator.vibrate?.([120, 80, 120])
       sound.play('error')
       inputRef.current?.focus({ preventScroll: true })
@@ -522,7 +536,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     onSuccess: () => {
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => previous
         ? { ...previous, collection_started: true } : previous)
-      setCode('')
+      setInputResetVersion(value => value + 1)
       setReviewing(false)
       setMessage(null)
       refresh()
@@ -560,8 +574,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     }
   }, [doc.collection_started, targetProductId, scan.isPending, undo.isPending, complete.isPending, remove.isPending, packMode.isPending, release.isPending])
   const scannerBlocked = doc.status !== 'draft' || !doc.collection_started || startCollection.isPending || scan.isPending || undo.isPending || complete.isPending || remove.isPending || packMode.isPending || release.isPending
-  useTsdScannerFocus(inputRef, scannerBlocked, (value) => setCode((previous) => previous + value))
-  const acceptCode = () => {
+  const acceptCode = (code: string) => {
     const normalized = normalizeScannerInput(code).trim()
     if (!normalized || submitting.current || scannerBlocked) return
     if (!online) {
@@ -579,35 +592,21 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     setMessage(null)
     scan.mutate({ code: normalized, productId: target?.product_id || undefined })
   }
-  const acceptRef = useRef(acceptCode)
-  acceptRef.current = acceptCode
-  useEffect(() => {
-    // Keyboard-wedge scanners may paste an entire code without an Enter suffix.
-    // No offline or pending scan queue; the positions list never blocks the scanner.
-    if (!code.trim() || !online || scannerBlocked) return
-    const timer = window.setTimeout(() => acceptRef.current(), 500)
-    return () => window.clearTimeout(timer)
-  }, [code, online, scannerBlocked])
-  const submit = (event: FormEvent) => { event.preventDefault(); acceptCode() }
   return (
     <main className="tsd-shell tsd-picking">
       <section ref={scannerDockRef} className="tsd-scanner-dock" aria-label="Сканер маркировки">
-        <form className={`tsd-scan-box tsd-scan-box--compact ${message ? `tsd-scan-box--${message.kind}` : ''}`} onSubmit={submit}>
-          <label htmlFor="tsd-scan-input"><Icon name="scan" size={20} /><span className="tsd-visually-hidden">Сканируйте штрихкод</span></label>
-          <input id="tsd-scan-input" ref={inputRef} value={code} onChange={(e) => setCode(e.target.value)}
-            readOnly={scannerBlocked} inputMode="text" placeholder={!doc.collection_started ? 'Сначала начните сборку' : scan.isPending ? 'Записываем скан…' : 'Сканируйте марку'}
-            autoComplete="off" autoCapitalize="off" spellCheck={false} enterKeyHint="send" />
-          <button type="submit" className="tsd-button" aria-label="Принять код" disabled={!online || !code.trim() || scannerBlocked}><Icon name="check" size={20} /></button>
-        </form>
+        <TsdScanInput inputRef={inputRef} blocked={scannerBlocked} online={online}
+          collectionStarted={Boolean(doc.collection_started)} pending={scan.isPending} messageKind={message?.kind}
+          resetVersion={inputResetVersion} onHasCodeChange={setHasCode} onScan={acceptCode} />
         <div className="tsd-dock-meta">
           <button type="button" className="tsd-button" disabled={!online || checkingMarks || verify.isPending || doc.status !== 'draft' || !doc.scans.some(item => !item.is_barcode)} aria-busy={checkingMarks} onClick={() => verify.mutate()}>{checkingMarks ? 'Проверяем марки в ЧЗ…' : 'Проверить все марки в ЧЗ'}</button>
           <span title={target?.product_name}>{targetProductId ? `Марки → ${target?.product_name || 'Позиция недоступна'}` : 'Авто по GTIN'}</span>
-          {(selectedPosition?.product_id || targetProductId) && <button type="button" className="tsd-button" aria-pressed={!targetProductId} disabled={scannerBlocked || Boolean(code.trim())} onClick={() => setTargetProductId(null)}>Авто</button>}
+          {(selectedPosition?.product_id || targetProductId) && <button type="button" className="tsd-button" aria-pressed={!targetProductId} disabled={scannerBlocked || hasCode} onClick={() => setTargetProductId(null)}>Авто</button>}
           {selectedPosition?.product_id && <button type="button"
             className={`tsd-button${targetProductId === selectedPosition.product_id ? ' tsd-button--primary' : ''}`}
             aria-pressed={targetProductId === selectedPosition.product_id}
             title={`Сканировать в позицию: ${selectedPosition.product_name}`}
-            disabled={scannerBlocked || Boolean(code.trim())}
+            disabled={scannerBlocked || hasCode}
             onClick={() => {
               setTargetProductId(selectedPosition.product_id!)
               setSelectedScanId(null)
@@ -618,7 +617,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         {canChangePack && <div className="tsd-pack-control" aria-label="Обработка упаковки">
           <span>{selectedScan ? 'Выбранная упаковка' : 'Последняя упаковка'} · {scanPackageLabel(activePack)}</span>
           <button type="button" className="tsd-button tsd-button--primary"
-            disabled={!online || scannerBlocked || Boolean(code.trim()) || activePack.status === 'pending'
+            disabled={!online || scannerBlocked || hasCode || activePack.status === 'pending'
               || ['invalid', 'used_in_other_doc'].includes(activePack.status) || doc.status !== 'draft'}
             onClick={() => packMode.mutate(activePack)}>
             {activePack.status === 'pending' ? 'Получаем состав…' : packActionLabel(activePack)}
@@ -737,12 +736,12 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <button type="button" className="tsd-button tsd-button--danger" disabled={!online || scannerBlocked || !last} onClick={() => undo.mutate()}>
           Отменить свой скан
         </button>
-        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || scannerBlocked || Boolean(code.trim())} onClick={() => complete.mutate()}>
+        <button type="button" className="tsd-button tsd-button--primary" disabled={!online || scannerBlocked || hasCode} onClick={() => complete.mutate()}>
           Завершить сборку
         </button>
       </footer>
       <div className="tsd-release">
-        <button type="button" className="tsd-button" disabled={!online || scannerBlocked || Boolean(code.trim())}
+        <button type="button" className="tsd-button" disabled={!online || scannerBlocked || hasCode}
           onClick={() => release.mutate()}>{release.isPending ? 'Убираем с этого ТСД…' : 'Убрать сборку из работы на этом ТСД'}</button>
         <p className="hint">Марки сохранятся. Другие ТСД смогут продолжить сборку, а вы сможете открыть её снова.</p>
       </div>
