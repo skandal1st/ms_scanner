@@ -198,15 +198,18 @@ function scanMatchesPlanRow(
 
 /** Evaluate the committed result once, whether HTTP or the live event arrived first. */
 export function progressAfterScan(plan: PlanItem[] | undefined, scans: Scan[], result: Scan) {
-  const resolved = scans.find(item => item.id === result.id && item.box_quantity != null)
-  if (resolved && result.verification?.source === 'sscc_pending') result = resolved
+  const resolved = scans.find(item => item.id === result.id)
+  if (resolved && ['sscc_pending', 'packaging_pending'].includes(result.verification?.source || '')
+      && (resolved.status !== 'pending' || resolved.box_quantity != null)) {
+    result = { ...resolved, duplicate: result.duplicate }
+  }
   const merged = [result, ...scans.filter(item => item.id !== result.id)]
   const progress = buildProgress(plan, merged)
   const matched = findProgressRowForScan(result, progress.rows)
   const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
   const overPlan = Boolean(matched && matched.expected > 0 && !result.duplicate && !rejected
     && matched.addedTotal > matched.expected)
-  return { scans: merged, matched, overPlan }
+  return { scans: merged, matched, overPlan, scan: result }
 }
 
 export function findProgressRowForScan(scan: Scan, rows: ProgressRow[]): ProgressRow | undefined {
@@ -411,7 +414,8 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       // Upsert по id: повторный скан штрихкода немаркированного товара возвращает тот
       // же скан с обновлённым box_quantity — заменяем строку, а не плодим дубль.
       const idx = state.scans.findIndex((s) => s.id === scan.id)
-      if (idx >= 0 && scan.verification?.source === 'sscc_pending' && state.scans[idx].box_quantity != null) {
+      if (idx >= 0 && ['sscc_pending', 'packaging_pending'].includes(scan.verification?.source || '')
+          && (state.scans[idx].status !== 'pending' || state.scans[idx].box_quantity != null)) {
         return { flashScanId: null }
       }
       const scans =

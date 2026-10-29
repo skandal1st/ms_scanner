@@ -10,6 +10,18 @@ function load(file, context = {}) {
   return exports;
 }
 const { applyScanEvent } = load('lib/scanEvents.ts');
+
+test('late packaging upserts cannot undo resolved units, blocks or their assigned position', () => {
+  for (const units of [null,10]) {
+    const resolved={id:'pack',status:'scanned',box_quantity:units,moysklad_product_id:'target',verification:null};
+    const pending={...resolved,status:'pending',box_quantity:null,moysklad_product_id:null,
+      verification:{source:'packaging_pending'}};
+    const [result]=applyScanEvent([resolved],{type:'scan_upsert',scan:pending});
+    assert.equal(result.status,'scanned');
+    assert.equal(result.box_quantity,units);
+    assert.equal(result.moysklad_product_id,'target');
+  }
+});
 test('one shared scan is upserted without a duplicate and deleted on every surface', () => {
   let scans = [{id:'a',box_quantity:1}];
   scans = applyScanEvent(scans, {type:'scan_upsert',scan:{id:'a',box_quantity:2}});

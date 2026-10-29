@@ -106,6 +106,22 @@ test('a late pending HTTP response cannot roll back the resolved live SSCC resul
   store.getState().setScans([resolved]);store.getState().addScan(pending);
   assert.equal(store.getState().scans[0].status,'valid');
 });
+
+test('late discovery responses preserve UNIT and GROUP progress and the resolved target',()=>{
+  const plan=[item('peach',['04620164405358'])];
+  for (const units of [null,10]) {
+    const resolved={...scan('04620164405358','peach','scanned'),box_quantity:units,verification:null};
+    const pending={...resolved,gtin:'04630339608897',moysklad_product_id:null,status:'pending',
+      box_quantity:null,verification:{source:'packaging_pending'}};
+    const result=progressAfterScan(plan,[resolved],pending);
+    assert.equal(result.scan.status,'scanned');
+    assert.equal(result.matched.product_id,'peach');
+    assert.equal(result.matched.addedTotal,units || 1);
+    const store=exposed.useScanStore;
+    store.getState().setScans([resolved]);store.getState().addScan(pending);
+    assert.equal(store.getState().scans[0].status,'scanned');
+  }
+});
 test('same GTIN on two products is not counted twice or assigned arbitrarily',()=>{
   const plan=[item('true',['04620164405358']),item('hard',['04620164405358'])];
   assert.equal(buildProgress(plan,[scan('04620164405358')]).total.addedTotal,0);

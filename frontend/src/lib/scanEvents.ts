@@ -1,13 +1,22 @@
 import type { Scan } from '../api/client'
 import type { DocumentEvent } from '../hooks/useDocumentLive'
 
+/** Discovery may finish over WS before the initial POST reaches the terminal. */
+export function preferResolvedScan(existing: Scan | undefined, incoming: Scan): Scan {
+  const pendingSource = incoming.verification?.source
+  if (existing && ['sscc_pending', 'packaging_pending'].includes(pendingSource || '')
+      && (existing.status !== 'pending' || existing.box_quantity != null)) {
+    return { ...existing, duplicate: incoming.duplicate }
+  }
+  return incoming
+}
+
 export function applyScanEvent(scans: Scan[], event: DocumentEvent): Scan[] {
   if (event.type === 'scans_reset') return []
   if (event.type === 'scan_removed') return scans.filter(item => item.id !== event.scan_id)
   if (event.type === 'scan_upsert') {
-    const value = event.scan as Scan
-    if (value.verification?.source === 'sscc_pending'
-        && scans.some(item => item.id === value.id && item.box_quantity != null)) return scans
+    const incoming = event.scan as Scan
+    const value = preferResolvedScan(scans.find(item => item.id === incoming.id), incoming)
     const found = scans.some(item => item.id === value.id)
     return found ? scans.map(item => item.id === value.id ? value : item) : [value, ...scans]
   }

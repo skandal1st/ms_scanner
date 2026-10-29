@@ -384,6 +384,10 @@ async def _create_scan_record(
     from app.services.scan_packaging import needs_packaging_discovery
     discover_packaging = (not is_box and local_status == ScanStatus.scanned
                           and needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity))
+    if discover_packaging and resolved_pid and not box_quantity:
+        from app.services.scan_packaging_cache import has_confirmed_unit
+        if await has_confirmed_unit(current_user_id, document_id, gtin):
+            discover_packaging = False
     if discover_packaging:
         scan_values.update(status=ScanStatus.pending, verification={'source': 'packaging_pending', 'checked_at': None})
     if is_box and sscc_unpack is not None and local_status == ScanStatus.pending:

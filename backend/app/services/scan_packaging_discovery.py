@@ -44,6 +44,8 @@ async def discover_scan_packaging(scan_id, user_id):
             groups = await _get_cz_product_groups(db, user_id, document_id)
             info = await ChestnyZnakService(token=token, mock=False, product_groups=groups).get_code_info(scan.code)
             metadata = packaging_metadata(info, scan.gtin)
+            from app.services.scan_packaging_cache import remember_unit_evidence
+            await remember_unit_evidence(user_id, document_id, scan.gtin, info)
             product = unique_plan_product(doc.plan, metadata['gtin'])
             if product is None:
                 integration = (await db.execute(select(Integration).where(Integration.user_id == doc.user_id))).scalar_one_or_none()

@@ -2,6 +2,7 @@
 import json
 import secrets
 import httpx
+from time import perf_counter
 from datetime import datetime, timezone
 from typing import Optional, Literal
 from uuid import UUID
@@ -845,6 +846,7 @@ async def create_tsd_scan(
     device: TsdDevice = Depends(get_shipping_device),
     db: AsyncSession = Depends(get_db),
 ):
+    started = perf_counter()
     device_id = device.id
     doc = await _owned_tsd_document(db, device, document_id)
     from app.services.document_guard import editable_document
@@ -881,7 +883,8 @@ async def create_tsd_scan(
     response = ScanResponse.model_validate(scan)
     response.duplicate = duplicate
     logger.info(
-        "tsd.scan.created", device_id=str(device_id), document_id=str(document_id), scan_id=str(scan.id)
+        "tsd.scan.created", device_id=str(device_id), document_id=str(document_id), scan_id=str(scan.id),
+        duration_ms=round((perf_counter() - started) * 1000, 1), status=scan.status.value,
     )
     return response
 

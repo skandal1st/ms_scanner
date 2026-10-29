@@ -483,14 +483,16 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       setRepeatedId(result.duplicate ? result.id : null)
       setSelectedScanId(null)
       setScanNavigation(value => value + 1)
-      const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
-      const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
+      const { scans: mergedScans, matched, overPlan, scan: effectiveScan } = progressAfterScan(latest.plan, latest.scans, result)
+      result = effectiveScan
+      const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const resolvingPackage = result.status === 'pending' && ['packaging_pending', 'sscc_pending'].includes(result.verification?.source || '')
-      const errorFeedback = Boolean(result.duplicate || rejected || (!matched && !resolvingPackage) || overPlan)
+      const errorFeedback = Boolean(result.duplicate || rejected || result.error_message || (!matched && !resolvingPackage) || overPlan)
       setMessage(result.duplicate
         ? { kind: 'error', text: 'Этот код уже отсканирован' }
         : rejected ? { kind: 'error', text: result.error_message || 'Не удалось распознать марку' }
+        : result.error_message ? { kind: 'error', text: result.error_message }
         : resolvingPackage ? { kind: 'ok', text: 'Определяем товар и состав упаковки…' }
         : !matched ? { kind: 'error', text: `Скан записан, но GTIN ${effectiveGtinKey(result) || 'не определён'} отсутствует в плане отгрузки` }
         : overPlan ? { kind: 'error', text: `Марка добавлена сверх плана: ${matched.product_name}` }

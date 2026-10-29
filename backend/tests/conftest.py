@@ -8,6 +8,9 @@ def isolate_live_delivery(monkeypatch):
     from app.api import scans, tsd
     from app.services import document_guard, scan_events, shipment_resend
     from app.worker import tasks
+    from app.services import scan_packaging_cache
+    monkeypatch.setattr(scan_packaging_cache, 'has_confirmed_unit', AsyncMock(return_value=False))
+    monkeypatch.setattr(scan_packaging_cache, 'remember_unit_evidence', AsyncMock())
     monkeypatch.setattr(tasks.resolve_scan_packaging_task, 'delay', Mock())
     monkeypatch.setattr(tasks.discover_sscc_task, 'delay', Mock())
     monkeypatch.setattr(shipment_resend, 'assert_idle', AsyncMock())

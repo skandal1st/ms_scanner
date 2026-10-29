@@ -115,3 +115,29 @@ async def test_unknown_gtin_schedules_discovery_and_queue_failure_remains_retrya
     else:
         assert scan.status == ScanStatus.pending
         assert scan.verification['source'] == 'packaging_pending'
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+async def test_known_product_skips_packaging_wait_only_with_confirmed_unit_evidence(monkeypatch, confirmed):
+    from app.api import scans
+    from app.worker import tasks
+    from app.services import scan_packaging_cache
+    user_id, doc_id = uuid4(), uuid4()
+    doc = NS(kind='demand', plan=[{'product_id': 'product', 'product_name': 'Test product',
+                                 'gtin': '04630339608897'}])
+    monkeypatch.setattr(scans, 'editable_document', AsyncMock(return_value=doc))
+    monkeypatch.setattr(scans, 'get_cached_pg', AsyncMock(return_value=None))
+    monkeypatch.setattr(scan_packaging_cache, 'has_confirmed_unit', AsyncMock(return_value=confirmed))
+    db = NS(execute=AsyncMock(return_value=Result(None)), add=Mock(), commit=AsyncMock(), refresh=AsyncMock())
+    scan, duplicate = await scans._create_scan_record(db, doc_id,
+        '010463033960889721UNIT00000001\x1d93TEST', user_id)
+    assert not duplicate
+    scan_packaging_cache.has_confirmed_unit.assert_awaited_once_with(user_id, doc_id, '04630339608897')
+    assert scan.moysklad_product_id == 'product'
+    assert scan.verified_at is None  # Packaging evidence never certifies the mark.
+    if confirmed:
+        assert scan.status == ScanStatus.scanned and scan.verification is None
+        tasks.resolve_scan_packaging_task.delay.assert_not_called()
+    else:
+        assert scan.status == ScanStatus.pending
+        tasks.resolve_scan_packaging_task.delay.assert_called_once()
