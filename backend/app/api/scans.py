@@ -236,6 +236,7 @@ async def _create_scan_record(
     box_quantity: Optional[int] = None,
     gtin_override: Optional[str] = None,
     device_id: Optional[UUID] = None,
+    sscc_unpack: Optional[bool] = None,
 ) -> tuple[Scan, bool]:
     """
     Создаёт скан. Возвращает (scan, is_duplicate).
@@ -385,6 +386,9 @@ async def _create_scan_record(
                           and needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity))
     if discover_packaging:
         scan_values.update(status=ScanStatus.pending, verification={'source': 'packaging_pending', 'checked_at': None})
+    if is_box and sscc_unpack is not None and local_status == ScanStatus.pending:
+        scan_values.update(box_expanded=sscc_unpack,
+                           verification={'source': 'sscc_pending', 'unpack': sscc_unpack})
     scan = None
     if original_code is not None:
         canonical_exists = (await db.execute(select(Scan.id).where(
@@ -472,8 +476,15 @@ async def _create_scan_record(
         user_id=str(current_user_id),
     )
     if is_box:
-        from app.worker.tasks import verify_box_task
-        verify_box_task.delay(str(scan.id), str(current_user_id))
+        from app.worker.tasks import verify_box_task, discover_sscc_task
+        task = discover_sscc_task if sscc_unpack is not None else verify_box_task
+        try:
+            task.delay(str(scan.id), str(current_user_id))
+        except Exception:
+            scan.status = ScanStatus.invalid
+            scan.error_message = 'Не удалось запустить проверку короба. Удалите короб и отсканируйте повторно.'
+            await db.commit()
+            await publish_scan(current_user_id, scan)
     elif discover_packaging:
         from app.worker.tasks import resolve_scan_packaging_task
         try:
@@ -702,40 +713,15 @@ async def _create_box_scans_core(
     """
     sscc = normalize_sscc(sscc)
 
-    # Короб целиком: один скан-короб, quantity и GTIN из ЧЗ sscc_check.
-    if not unpack:
-        try:
-            info = await cz.get_sscc_info(sscc, plan_gtins)
-        except CZApiError as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
-        scan, is_dup = await _create_scan_record(
-            db,
-            document_id,
-            sscc,
-            current_user_id,
-            is_box=True,
-            box_quantity=info.quantity,
-            gtin_override=info.gtin,
-            device_id=device_id,
-        )
-        resp = ScanResponse.model_validate(scan)
-        resp.duplicate = is_dup
-        return [resp]
-
-    # Раскрытие на штучные КМ: состав короба берём из ЧЗ (aggregated/list).
-    try:
-        member_codes = await cz.unpack_box(sscc, plan_gtins)
-    except CZApiError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
-
-    responses: List[ScanResponse] = []
-    for code in member_codes:
-        scan, is_dup = await _create_scan_record(db, document_id, code, current_user_id, device_id=device_id)
-        resp = ScanResponse.model_validate(scan)
-        resp.duplicate = is_dup
-        responses.append(resp)
-
-    return responses
+    # Authorization was checked locally by _resolve_cz_for_boxes. External calls
+    # belong to the worker: even unpacking keeps a single durable SSCC scan.
+    scan, is_dup = await _create_scan_record(
+        db, document_id, sscc, current_user_id, is_box=True,
+        device_id=device_id, sscc_unpack=unpack,
+    )
+    resp = ScanResponse.model_validate(scan)
+    resp.duplicate = is_dup
+    return [resp]
 
 
 def _plan_gtins(plan: Optional[list]) -> list:
@@ -756,12 +742,9 @@ async def create_box_scans(
     """
     Принять SSCC-код короба.
 
-    ``unpack=True`` — раскрыть на индивидуальные KM (по скану на каждый). Состав
-    короба берётся из ЧЗ (``cises/aggregated/list`` по SSCC); при недоступности —
-    502 с пояснением (переключить на «целиком» или сканировать поштучно).
-
-    ``unpack=False`` — сохранить короб целиком: один скан с ``is_box=True`` и
-    ``box_quantity`` из ЧЗ (``sscc_check``); в МС уйдёт одним ``transportpack``.
+    Сразу сохранить SSCC со статусом pending и запустить фоновую проверку.
+    ``unpack=True`` — состав будет в child_codes, в МС уйдут отдельные КМ.
+    ``unpack=False`` — количество из ЧЗ, в МС уйдёт один transportpack.
 
     В проде (CZ_MOCK_MODE=false) требуется включённый режим коробов в настройках и
     действующий вход в Честный Знак по УКЭП; в dev/mock — без ограничений.

@@ -101,6 +101,7 @@ export function useScanner(documentId: string | null) {
           if (repeatedId) flashScan(repeatedId)
           if (hadConflict) playBeep('used_in_other_doc')
           else if (hadError) playBeep('error')
+          else playBeep('ok')
           return
         }
 

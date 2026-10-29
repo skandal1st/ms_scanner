@@ -301,7 +301,7 @@ export function ProgressTable({ shipment = false, signatureInn, tabbed = false, 
             <Icon name="warning" size={14} /> Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
           </div>
           {progress.offPlanRows.map((row) => (
-            <div key={row.gtin} style={styles.offPlanRow}>
+            <div key={row.scanIds[0]} style={styles.offPlanRow}>
               <span style={styles.offPlanName} title={row.gtin}>
                 {row.product_name}
                 <span style={styles.offPlanCount}>

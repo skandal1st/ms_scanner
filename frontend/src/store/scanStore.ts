@@ -136,6 +136,7 @@ export function normalizeGtinKey(g: string | number | null | undefined): string 
 
 /** GTIN для прогресса: поле скана или лёгкий разбор сырой CIS без пересборки строки (фоллбек для UI). */
 export function effectiveGtinKey(scan: Scan): string | null {
+  if (scan.is_box && !scan.gtin) return null
   const k = normalizeGtinKey(scan.gtin)
   if (k) return k
   const c = scan.code.trim()
@@ -150,6 +151,7 @@ export function effectiveGtinKey(scan: Scan): string | null {
 
 /** Сколько единиц товара представляет скан: короб/блок = box_quantity, обычный = 1. */
 export function scanUnits(scan: Scan): number {
+  if (scan.is_box && scan.box_quantity == null) return 0
   if (scan.box_quantity != null) return scan.box_quantity
   return 1
 }
@@ -185,6 +187,7 @@ function scanMatchesPlanRow(
   planProductId: string | null | undefined,
   aliases: string[] = [],
 ): boolean {
+  if (planProductId && scan.moysklad_product_id) return scan.moysklad_product_id === planProductId
   const byPid =
     Boolean(planProductId && scan.moysklad_product_id) &&
     scan.moysklad_product_id === planProductId
@@ -195,6 +198,8 @@ function scanMatchesPlanRow(
 
 /** Evaluate the committed result once, whether HTTP or the live event arrived first. */
 export function progressAfterScan(plan: PlanItem[] | undefined, scans: Scan[], result: Scan) {
+  const resolved = scans.find(item => item.id === result.id && item.box_quantity != null)
+  if (resolved && result.verification?.source === 'sscc_pending') result = resolved
   const merged = [result, ...scans.filter(item => item.id !== result.id)]
   const progress = buildProgress(plan, merged)
   const matched = findProgressRowForScan(result, progress.rows)
@@ -208,6 +213,7 @@ export function findProgressRowForScan(scan: Scan, rows: ProgressRow[]): Progres
   const byProduct = scan.moysklad_product_id
     ? rows.filter((row) => row.product_id === scan.moysklad_product_id) : []
   if (byProduct.length === 1) return byProduct[0]
+  if (scan.moysklad_product_id && rows.some(row => row.product_id)) return undefined
   const byGtin = rows.filter((row) => scanMatchesPlanRow(scan, normalizeGtinKey(row.gtin), null, row.gtins))
   return byGtin.length === 1 ? byGtin[0] : undefined
 }
@@ -224,6 +230,7 @@ export function selectionMatchesScan(sel: PositionSelection, scan: Scan): boolea
 
 /** Строка прогресса соответствует выбранной позиции (для подсветки позиции). */
 export function selectionMatchesRow(sel: PositionSelection, row: ProgressRow): boolean {
+  if (sel.productId && row.product_id) return sel.productId === row.product_id
   const byPid = Boolean(sel.productId && row.product_id) && row.product_id === sel.productId
   const byGtin = Boolean(sel.gtinKey && (normalizeGtinKey(row.gtin) === sel.gtinKey || row.gtins?.includes(sel.gtinKey)))
   return byPid || byGtin
@@ -280,15 +287,17 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       Boolean(findProgressRowForScan(s, rows))
     const offGroups = new Map<string, OffPlanRow>()
     for (const s of scans) {
+      if (s.is_box && s.status === 'pending' && s.box_quantity == null) continue
       // ВАЖНО: статус `scanned` (принят локально, ещё НЕ проверен в ЧЗ) сюда не берём.
       // Марка может принадлежать плану через товар МС, но связь GTIN→товар проставляется
       // только на «Проверить марки» (бэк резолвит moysklad_product_id по реальному GTIN);
       // до этого GTIN марки часто не совпадает ни с plan.gtin (внутренний код МС), ни с
       // pack_gtins. Клеймить непроверенную марку «отсканирована ошибочно» — вводит в
       // заблуждение. Классифицируем как «не в плане» только уже проверенные коды.
-      if (!['valid', 'overflow', 'pending'].includes(s.status)) continue
+      if (!['valid', 'overflow', 'pending'].includes(s.status)
+          && !(s.status === 'scanned' && s.moysklad_product_id)) continue
       if (inPlan(s)) continue
-      const k = groupKey(s)
+      const k = `${s.moysklad_product_id || ''}:${groupKey(s)}`
       let g = offGroups.get(k)
       if (!g) {
         g = { gtin: s.gtin || k, product_name: '', addedTotal: 0, scanIds: [] }
@@ -402,6 +411,9 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       // Upsert по id: повторный скан штрихкода немаркированного товара возвращает тот
       // же скан с обновлённым box_quantity — заменяем строку, а не плодим дубль.
       const idx = state.scans.findIndex((s) => s.id === scan.id)
+      if (idx >= 0 && scan.verification?.source === 'sscc_pending' && state.scans[idx].box_quantity != null) {
+        return { flashScanId: null }
+      }
       const scans =
         idx >= 0
           ? state.scans.map((s) => (s.id === scan.id ? scan : s))

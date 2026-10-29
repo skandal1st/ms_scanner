@@ -81,9 +81,30 @@ test('two marks match second barcode and update the exact TSD position',()=>{
   assert.equal(result.total.addedTotal,2);
   assert.equal(findProgressRowForScan(s,result.rows).product_id,'monster');
 });
-test('True matches plan alias despite old out-of-plan Hard product id',()=>{
+test('explicit out-of-plan product is visible instead of filling a different product by GTIN',()=>{
   const result=buildProgress([item('true',['04620164405358'])],[scan('04620164405358','hard')]);
-  assert.equal(result.rows[0].addedTotal,1);
+  assert.equal(result.rows[0].addedTotal,0);
+  assert.equal(result.offPlanRows.length,1);
+  assert.equal(result.offPlanRows[0].addedTotal,1);
+});
+
+test('unresolved SSCC has no unit GTIN or invented single pack quantity',()=>{
+  const s={id:'box',code:'00046402759700345554',is_box:true,status:'pending'};
+  assert.equal(exposed.effectiveGtinKey(s),null);
+  assert.equal(exposed.scanUnits(s),0);
+  assert.equal(buildProgress(undefined,[s]).total.addedTotal,0);
+});
+
+test('a late pending HTTP response cannot roll back the resolved live SSCC result',()=>{
+  const plan=[item('peach',['04620164405358'])];
+  const resolved={...scan('04620164405358','peach','valid'),is_box:true,box_quantity:20};
+  const pending={...resolved,gtin:null,moysklad_product_id:null,status:'pending',box_quantity:null,verification:{source:'sscc_pending'}};
+  const result=progressAfterScan(plan,[resolved],pending);
+  assert.equal(result.scans[0].box_quantity,20);
+  assert.equal(result.matched.product_id,'peach');
+  const store=exposed.useScanStore;
+  store.getState().setScans([resolved]);store.getState().addScan(pending);
+  assert.equal(store.getState().scans[0].status,'valid');
 });
 test('same GTIN on two products is not counted twice or assigned arbitrarily',()=>{
   const plan=[item('true',['04620164405358']),item('hard',['04620164405358'])];
@@ -105,4 +126,10 @@ test('manual position wins over a GTIN from another row',()=>{
   assert.equal(findProgressRowForScan(s,result.rows).product_id,'chosen');
   assert.equal(result.rows[0].addedTotal,0);
   assert.equal(result.rows[1].addedTotal,1);
+});
+
+test('free collection still finds GTIN rows when there is no product plan',()=>{
+  const s=scan('04620164405358','known','valid');
+  const progress=buildProgress(undefined,[s]);
+  assert.equal(findProgressRowForScan(s,progress.rows).addedTotal,1);
 });

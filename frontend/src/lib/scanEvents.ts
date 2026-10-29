@@ -6,6 +6,8 @@ export function applyScanEvent(scans: Scan[], event: DocumentEvent): Scan[] {
   if (event.type === 'scan_removed') return scans.filter(item => item.id !== event.scan_id)
   if (event.type === 'scan_upsert') {
     const value = event.scan as Scan
+    if (value.verification?.source === 'sscc_pending'
+        && scans.some(item => item.id === value.id && item.box_quantity != null)) return scans
     const found = scans.some(item => item.id === value.id)
     return found ? scans.map(item => item.id === value.id ? value : item) : [value, ...scans]
   }

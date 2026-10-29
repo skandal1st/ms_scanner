@@ -965,6 +965,13 @@ async def process_document(
         )
     )
     scanned_count = scanned_q.scalar_one()
+    if scanned_count and skip_cz:
+        resolving_boxes = (await db.execute(select(Scan.id).where(
+            Scan.document_id == document_id, Scan.is_box.is_(True),
+            Scan.box_quantity.is_(None), Scan.status == ScanStatus.pending,
+        ).limit(1))).scalar_one_or_none()
+        if resolving_boxes:
+            raise HTTPException(409, 'Дождитесь фоновой проверки коробов перед отправкой документа.')
     if scanned_count and not skip_cz:
         raise HTTPException(
             status_code=409,

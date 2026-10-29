@@ -471,7 +471,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       const rejected = ['invalid', 'used_in_other_doc', 'unknown_product'].includes(result.status)
       const latest = qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id]) || doc
       const { scans: mergedScans, matched, overPlan } = progressAfterScan(latest.plan, latest.scans, result)
-      const resolvingPackage = result.status === 'pending' && result.verification?.source === 'packaging_pending'
+      const resolvingPackage = result.status === 'pending' && ['packaging_pending', 'sscc_pending'].includes(result.verification?.source || '')
       const errorFeedback = Boolean(result.duplicate || rejected || (!matched && !resolvingPackage) || overPlan)
       setMessage(result.duplicate
         ? { kind: 'error', text: 'Этот код уже отсканирован' }

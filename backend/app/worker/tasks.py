@@ -25,6 +25,16 @@ def resolve_scan_packaging_task(scan_id, user_id):
     return _run(discover_scan_packaging(scan_id, user_id))
 
 
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name='discover_sscc')
+def discover_sscc_task(self, scan_id, user_id):
+    from app.services.sscc_discovery import discover_sscc
+    try:
+        return _run(discover_sscc(scan_id, user_id))
+    except Exception as exc:
+        logger.warning('scan.sscc_task_failed', scan_id=scan_id, error_type=type(exc).__name__)
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
 @celery_app.task(name='resend_shipment_marks')
 def resend_shipment_marks_task(document_id, user_id, job_id):
     from app.services.shipment_resend import process
@@ -378,18 +388,15 @@ async def _enrich_scan_product_name_from_plan(db, scan) -> None:
             if name and not scan.product_name:
                 scan.product_name = name
             return
-    for p in doc.plan:
-        if not isinstance(p, dict):
-            continue
-        if normalize_gtin_key(p.get("gtin")) != normalize_gtin_key(scan.gtin):
-            continue
-        pid = p.get("product_id")
-        if pid and isinstance(pid, str) and not scan.moysklad_product_id:
-            scan.moysklad_product_id = pid
-        name = (p.get("product_name") or "").strip()
-        if name and not scan.product_name:
-            scan.product_name = name
+    # Explicit assignments are never silently replaced by a matching barcode.
+    if scan.moysklad_product_id:
         return
+    from app.services.plan_matching import unique_plan_product
+    planned = unique_plan_product(doc.plan, scan.gtin)
+    if planned:
+        scan.moysklad_product_id = planned['product_id']
+        if not scan.product_name:
+            scan.product_name = planned.get('product_name')
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=5, name="persist_assigned_gtin")
@@ -537,6 +544,10 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
         scan = scan_result.scalar_one_or_none()
         if not scan:
             logger.error("verify_code.scan_not_found", scan_id=scan_id)
+            return
+        if scan.is_box and not scan.box_quantity:
+            from app.services.sscc_discovery import discover_sscc
+            await discover_sscc(scan_id, user_id)
             return
 
         # Пакетный флоу: precheck — результат батч-проверки в ЧЗ (check_codes) по этому

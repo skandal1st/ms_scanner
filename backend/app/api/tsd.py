@@ -396,6 +396,8 @@ async def device_me(
 
 
 def _scan_units(scan: Scan) -> int:
+    if scan.is_box and scan.box_quantity is None:
+        return 0
     return int(scan.box_quantity or 1)
 
 

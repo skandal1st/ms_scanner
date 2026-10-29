@@ -4,7 +4,7 @@ import type { PlanProgress, ProgressRow } from '../store/scanStore'
 
 export function isProblemScan(scan: Scan, signatureInn?: string | null, repeatedId?: string | null, planRows?: ProgressRow[]): boolean {
   return scan.id === repeatedId
-    || Boolean(planRows?.length && !findProgressRowForScan(scan, planRows))
+    || Boolean(scan.status !== 'pending' && planRows?.length && !findProgressRowForScan(scan, planRows))
     || ['invalid', 'duplicate', 'overflow', 'unknown_product', 'used_in_other_doc'].includes(scan.status)
     || Boolean(scan.withdrawn || scan.verification?.ms_error || scan.verification?.child_issues?.length
       || scan.verification?.owner_result === 'mismatch' || scan.verification?.owner_result === 'unknown'
