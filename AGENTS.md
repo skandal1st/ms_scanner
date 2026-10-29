@@ -26,12 +26,15 @@ docker compose run --rm frontend npm run build            # TS-чек + Vite б�
 
 Прод-деплой (`docker-compose.prod.yml` + Caddy + LE):
 ```bash
-ssh root@92.118.113.252 'cd /root/ms_scanner && git pull --ff-only origin main \
+ssh skand@37.18.102.53 "sudo bash -lc 'cd /root/ms_scanner && git pull --ff-only origin main \
   && docker compose -f docker-compose.prod.yml build backend worker frontend \
   && docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head \
-  && docker compose -f docker-compose.prod.yml up -d --force-recreate backend worker frontend'
+  && docker compose -f docker-compose.prod.yml up -d --force-recreate backend worker frontend'"
 ```
 Важно: при изменении дескриптора `moysklad-descriptor.xml` или scope в `<access><permissions>` — нужно вручную **перезалить XML в `dev.moysklad.ru` и переустановить решение** на тестовом аккаунте, иначе Vendor API не выдаст обновлённый MC-токен.
+
+После переноса 29.10.2026 старый `92.118.113.252` служит только прокси.
+Не запускать там backend, worker и виджеты. См. `ops/migration/README.md`.
 
 ## Architecture
 

@@ -1,0 +1,26 @@
+# NEW server rehearsal only. Copy the existing Caddy TLS storage beforehand.
+# Public writes, widget callbacks and UI remain unavailable during rehearsal.
+skandata.ru {
+    handle /health {
+        reverse_proxy backend:8000
+    }
+    handle {
+        respond "Migration rehearsal: writes are unavailable" 503
+    }
+}
+sverka.skandata.ru {
+    handle /healthz {
+        reverse_proxy ms-sverka:8766
+    }
+    handle {
+        respond "Migration rehearsal: writes are unavailable" 503
+    }
+}
+otgruzka.skandata.ru {
+    handle /healthz {
+        reverse_proxy ms-order-import:8767
+    }
+    handle {
+        respond "Migration rehearsal: writes are unavailable" 503
+    }
+}

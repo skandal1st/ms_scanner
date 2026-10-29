@@ -1,0 +1,3 @@
+services:
+  sverka:
+    image: skandata-migration/sverka:20261029

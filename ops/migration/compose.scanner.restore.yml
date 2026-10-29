@@ -1,0 +1,18 @@
+# Use with -p ms_scanner and docker-compose.prod.yml, --no-build --pull never.
+services:
+  backend:
+    image: skandata-migration/backend:20261029
+  worker:
+    image: skandata-migration/worker:20261029
+  frontend:
+    image: skandata-migration/frontend:20261029
+  caddy:
+    image: skandata-migration/caddy:20261029
+  postgres:
+    image: skandata-migration/postgres:20261029
+  redis:
+    image: skandata-migration/redis:20261029
+    volumes:
+      - redis_data:/data
+volumes:
+  redis_data:

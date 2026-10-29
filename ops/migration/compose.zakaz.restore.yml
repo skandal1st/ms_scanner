@@ -1,0 +1,3 @@
+services:
+  order-import:
+    image: skandata-migration/order-import:20261029

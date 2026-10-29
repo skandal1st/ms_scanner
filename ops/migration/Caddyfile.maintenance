@@ -1,0 +1,5 @@
+skandata.ru, sverka.skandata.ru, otgruzka.skandata.ru {
+    header Retry-After "60"
+    header Cache-Control "no-store"
+    respond "Service migration in progress. Please retry shortly." 503
+}

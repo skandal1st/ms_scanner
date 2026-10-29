@@ -1,0 +1,31 @@
+{
+  "observed_date_moscow": "2026-10-29",
+  "source": {"ssh": "root@92.118.113.252", "hostname": "spb-3-vm-enap", "os": "Ubuntu 24.04.4", "root_used": "23G", "root_free": "5.8G"},
+  "target": {"ssh": "skand@37.18.102.53", "hostname": "skandata", "os": "Ubuntu 24.04.5", "vcpu": 4, "ram_mib": 15993, "root_free": "91G", "sudo_noninteractive": true},
+  "dns": {"domains": ["skandata.ru", "sverka.skandata.ru", "otgruzka.skandata.ru"], "current_a": "92.118.113.252", "observed_ttl_seconds": 600, "aaaa_observed": false},
+  "projects": [
+    {"name": "ms_scanner", "path": "/root/ms_scanner", "compose": ["docker-compose.prod.yml"], "commit": "cf3086eb7a0a5675f1cd6154a1ebbd4143f6e4c5", "env_files": [".env"], "note": "Live Caddyfile and public instruction differ from Git; preserve actual files. Include downloads and ignored CryptoPro asset if rebuilding."},
+    {"name": "ms_sverka", "path": "/opt/ms_sverka", "compose": ["docker-compose.pilot.yml"], "env_files": [".env.vendor"], "note": "Not a Git checkout. Config requires SKANDATA_DOCKER_NETWORK=ms_scanner_default; use --env-file .env.vendor. In-memory ActJobs must finish before stopping."},
+    {"name": "ms_zakaz", "path": "/opt/ms_zakaz", "compose": ["docker-compose.yml", "docker-compose.vendor.yml"], "env_files": [".env.vendor"], "note": "Not a Git checkout. Use both Compose files and original environment."}
+  ],
+  "shared_network": "ms_scanner_default",
+  "volumes": [
+    {"name": "ms_scanner_postgres_data", "service": "postgres", "kind": "PostgreSQL 16", "approx_size": "802M", "transfer": "pg_dump -Fc / pg_restore, final dump after all writers stop"},
+    {"name": "ms_sverka_vendor_data", "service": "sverka", "kind": "SQLite and auxiliary files", "active_database": "vendor.sqlite3", "approx_bytes": 175607, "transfer": "whole volume after writer stops; online rehearsal database via sqlite backup API"},
+    {"name": "ms_zakaz_order_data", "service": "order-import", "kind": "SQLite and auxiliary files", "active_database": "state.sqlite", "approx_bytes": 1925120, "transfer": "whole volume after writer stops; preserve WAL/SHM if present"},
+    {"name": "ms_scanner_caddy_data", "service": "caddy", "kind": "TLS certificates and ACME accounts", "transfer": "protected storage snapshot"},
+    {"name": "ms_scanner_caddy_config", "service": "caddy", "kind": "Caddy persisted configuration", "transfer": "protected storage snapshot"},
+    {"name": "bc7162091f986a77f3187739ef3c1884a8a7423ebee57fbdf66b2d9f23e07afe", "service": "redis", "kind": "anonymous /data volume; RDB enabled, AOF disabled", "transfer": "fresh final Redis snapshot after producers/consumers stop; restore to a NAMED volume on target"}
+  ],
+  "images": [
+    {"container": "ms_scanner-backend-1", "id": "sha256:3ea4106dd148409a4a80ea3ae304482c79ae6c022ae6186bb702b6870adc0747", "target_tag": "skandata-migration/backend:20261029"},
+    {"container": "ms_scanner-worker-1", "id": "sha256:4adea8ee2d369948cc08ad621f0dc5dd0088124938c2319a189ac0e543aac06d", "target_tag": "skandata-migration/worker:20261029"},
+    {"container": "ms_scanner-frontend-1", "id": "sha256:d04fe0f9cc2f2f9e4b76cb66934f04ca31b9989e1e963142050f5e01a3b91eac", "target_tag": "skandata-migration/frontend:20261029"},
+    {"container": "ms_scanner-caddy-1", "id": "sha256:77c07d5ebfa5be9fd6c820d2094ae662c9e7eeb9bf98346b7f639900263ee2a2", "target_tag": "skandata-migration/caddy:20261029"},
+    {"container": "ms_scanner-postgres-1", "id": "sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229", "target_tag": "skandata-migration/postgres:20261029"},
+    {"container": "ms_scanner-redis-1", "id": "sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99", "target_tag": "skandata-migration/redis:20261029"},
+    {"container": "ms-sverka", "id": "sha256:bec14b111bcbec71854e84c81bdc45c52f7d570649c5f644cb6ac4710049d7f5", "target_tag": "skandata-migration/sverka:20261029"},
+    {"container": "ms-order-import", "id": "sha256:e2b9255c1cf433634c4019e5a6144a9050410b82bc631ed200118ca3c81a071d", "target_tag": "skandata-migration/order-import:20261029"}
+  ],
+  "secrets_policy": "Values stay on hosts and encrypted SSH streams. Copy original application and encryption secrets; do not regenerate them. No secrets in this manifest."
+}

@@ -1,0 +1,10 @@
+# OLD server only, after the new server is the sole writable primary.
+# Replace NEW_SERVER_IP with 37.18.102.53. Keep the old Caddy TLS volumes.
+skandata.ru, sverka.skandata.ru, otgruzka.skandata.ru {
+    reverse_proxy https://NEW_SERVER_IP:443 {
+        header_up Host {host}
+        transport http {
+            tls_server_name {host}
+        }
+    }
+}
