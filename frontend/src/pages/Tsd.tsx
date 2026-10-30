@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { orderSearchPage, useOrderSearch } from '../hooks/useOrderSearch'
 import axios from 'axios'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -23,6 +23,7 @@ import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
 import { saveTsdTokens } from '../lib/tsdAuth'
+import { isTsdDocumentClosed, retryTsdDocument } from '../lib/tsdDocumentLifecycle'
 
 function progressState(added: number, expected: number) {
   return expected > 0 && added > expected ? 'overflow'
@@ -297,7 +298,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const scannerDockRef = useRef<HTMLElement>(null)
   const positionRefs = useRef<(HTMLButtonElement | null)[]>([])
   const liveDuringFetch = useRef<DocumentEvent[] | null>(null)
-  const { data: doc = initial } = useQuery({
+  const { data: doc = initial, error: documentError } = useQuery({
     queryKey: ['tsd-document', initial.id],
     queryFn: async () => {
       const events: DocumentEvent[] = []
@@ -308,9 +309,13 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       } finally { if (liveDuringFetch.current === events) liveDuringFetch.current = null }
     },
     initialData: initial,
-    refetchInterval: (query) => !query.state.data?.collection_started ? 3000
+    retry: retryTsdDocument,
+    refetchInterval: (query) => isTsdDocumentClosed(query.state.error) ? false : !query.state.data?.collection_started ? 3000
       : checkingMarks || query.state.data?.scans.some((item) => item.status === 'pending') ? 1500 : false,
   })
+  useEffect(() => {
+    if (isTsdDocumentClosed(documentError) || doc.status === 'accepted') onBack()
+  }, [documentError, doc.status, onBack])
   const progress = useMemo(() => sortShipmentProgress(buildProgress(doc.plan, doc.scans)), [doc.plan, doc.scans])
   const hasGroups = progress.rows.some(row => row.folder_name)
   const last = doc.scans[0]
@@ -761,24 +766,36 @@ export function TsdPage() {
   useEffect(() => { if (context.data && mode && !allowed.includes(mode)) { setMode(null); setDocument(null); setActiveId(null); setRequestedId(null); localStorage.removeItem('tsd_document_id') } }, [context.data, mode])
   const requestedOnce = useRef<string | null>(null)
   const [activeId, setActiveId] = useState(() => localStorage.getItem('tsd_document_id'))
+  const previousActiveId = useRef(activeId)
   const [document, setDocument] = useState<TsdDocumentDetail | null>(null)
+  useEffect(() => {
+    const previousId = previousActiveId.current
+    previousActiveId.current = activeId
+    // Remove the snapshot after the picker unmounts, so its observer cannot refetch it.
+    if (previousId && previousId !== activeId) qc.removeQueries({ queryKey: ['tsd-document', previousId], exact: true })
+  }, [activeId, qc])
   const restored = useQuery({
     queryKey: ['tsd-document', activeId],
     queryFn: () => tsdApi.getDocument(activeId!).then((r) => r.data),
     enabled: authorized && mode === 'shipment' && Boolean(activeId) && !document && !requestedId && Boolean(context.data) && allowed.includes('shipment'),
+    retry: retryTsdDocument,
   })
   const open = (doc: TsdDocumentDetail) => {
     localStorage.setItem('tsd_document_id', doc.id)
     setActiveId(doc.id)
     setDocument(doc)
   }
-  const back = () => {
+  const back = useCallback(() => {
     localStorage.removeItem('tsd_document_id')
     setActiveId(null)
     setDocument(null)
     setRequestedId(null)
     window.history.replaceState({}, '', '/tsd')
-  }
+    void qc.invalidateQueries({ queryKey: ['tsd-orders'] })
+  }, [qc])
+  useEffect(() => {
+    if (activeId && (isTsdDocumentClosed(restored.error) || restored.data?.status === 'accepted')) back()
+  }, [activeId, restored.error, restored.data?.status, back])
   const fromLink = useMutation({
     networkMode: 'always',
     mutationFn: (id: string) => tsdApi.selectDocument(id).then((r) => r.data),
