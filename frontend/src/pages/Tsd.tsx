@@ -20,6 +20,7 @@ import { applyScanEvent } from '../lib/scanEvents'
 import { parseTsdDocumentCode } from '../lib/tsdLinks'
 import { TsdSwipeMark } from '../components/TsdSwipeMark'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
+import { PackagingRecheck } from '../components/PackagingRecheck'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
 import { saveTsdTokens } from '../lib/tsdAuth'
@@ -621,6 +622,9 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
             }}>Режим добавления</button>}
           <button type="button" data-tsd-sound className="tsd-button" aria-label={sound.active ? 'Отключить звук' : 'Включить звук'} aria-pressed={sound.active} onClick={() => void sound.toggle()}>{sound.active ? 'Звук вкл.' : 'Звук выкл.'}</button>
         </div>
+        {activePack && <PackagingRecheck key={activePack.id} scan={activePack} terminal
+          disabled={!online || scannerBlocked || hasCode || checkingMarks}
+          onQueued={() => { void refresh() }} />}
         {canChangePack && <div className="tsd-pack-control" aria-label="Обработка упаковки">
           <span>{selectedScan ? 'Выбранная упаковка' : 'Последняя упаковка'} · {scanPackageLabel(activePack)}</span>
           <button type="button" className="tsd-button tsd-button--primary"

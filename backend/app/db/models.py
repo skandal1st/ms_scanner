@@ -538,6 +538,21 @@ class GtinPackaging(Base):
     last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
+class GtinPackagingFormat(Base):
+    """Public CZ evidence scoped to a code format; never stores individual marks."""
+    __tablename__ = 'gtin_packaging_formats'
+    __table_args__ = (
+        CheckConstraint('type_mask BETWEEN 1 AND 7', name='ck_packaging_format_mask'),
+        CheckConstraint('observations > 0', name='ck_packaging_format_observations'),
+    )
+    gtin = Column(String(14), primary_key=True)
+    code_format = Column(String(24), primary_key=True)
+    type_mask = Column(Integer, nullable=False)
+    observations = Column(Integer, nullable=False)
+    last_quantity = Column(Integer, nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class GtinCzGroup(Base):
     """Кэш «GTIN → товарная группа ЧЗ (pg)» — засевается из trackingType карточки МС.
 

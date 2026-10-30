@@ -194,10 +194,16 @@ async def test_cz_pack_type_fetches_composition_without_child_field(monkeypatch,
 @pytest.mark.parametrize('pg', ['tobacco', 'otp', 'ncp', 'antiseptic'])
 @pytest.mark.parametrize('brackets', [False, True])
 def test_ai02_logistics_identifier_is_never_shortened_as_a_unit_mark(pg, brackets):
-    from app.services.chestnyznak import cis_for_cz_info
+    from app.services.chestnyznak import cis_for_cz_info, cis_string_for_moysklad_api
+    from app.services.moysklad import MoySkladService
     raw = '020080208412846113260930102MSCS21110429237250'
     displayed = '(02)00802084128461(13)260930(10)2MSCS(21)1104292(37)250'
     assert cis_for_cz_info(displayed if brackets else raw, pg) == raw
+    value = displayed if brackets else raw
+    assert cis_string_for_moysklad_api(value, pg.upper()) == raw
+    ms = MoySkladService('fake')
+    assert ms._tracking_code_entry({'code': value, 'is_box': False}, pg.upper()) == {'cis': raw, 'type': 'trackingcode'}
+    assert ms._cis_dedup_key(value) == raw
 
 
 async def test_ai02_box_fetches_all_250_leaves_with_original_identifier(monkeypatch):

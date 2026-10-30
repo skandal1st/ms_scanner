@@ -608,6 +608,11 @@ export interface Scan {
   verified_at?: string | null
   verification?: {
     source: string
+    request_id?: string
+    packaging_checked_at?: string
+    packaging_rule_saved?: boolean
+    packaging_request_id?: string
+    packaging_message?: string
     checked_at?: string | null
     format_valid?: boolean
     owner_result?: 'match' | 'mismatch' | 'unknown'
@@ -725,6 +730,7 @@ export const scansApi = {
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   packMode: (scan_id: string, unpack: boolean) => api.post<Scan>(`/scans/item/${scan_id}/pack-mode`, { unpack }),
+  recheckPackaging: (scan_id: string) => api.post<Scan>(`/scans/item/${scan_id}/recheck-packaging`),
   list: (document_id: string) => api.get<Scan[]>(`/scans/${document_id}`),
   delete: (scan_id: string) => api.delete(`/scans/${scan_id}`),
   /** Удалить пачку сканов по id (напр. позицию не из плана целиком). */
@@ -1154,6 +1160,8 @@ export const tsdApi = {
   release: (id: string) => tsdClient.post(`/tsd/documents/${id}/release`),
   packMode: (id: string, scanId: string, unpack: boolean) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/pack-mode`, { unpack }),
+  recheckPackaging: (id: string, scanId: string) =>
+    tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/recheck-packaging`),
 }
 
 export interface ProductGroup {

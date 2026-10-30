@@ -459,6 +459,11 @@ def cis_string_for_moysklad_api(
     """
     if not stored:
         return stored
+    # Logistics IDs include date/lot/serial fields. Applying the unit crypto-tail
+    # gate here collapses distinct packages that share the same GTIN and date.
+    logistic = _logistic_gs1_cis(stored)
+    if logistic:
+        return logistic
     parts: list[str] = []
     for ch in stored.strip():
         o = ord(ch)

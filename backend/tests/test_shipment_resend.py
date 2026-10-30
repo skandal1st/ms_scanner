@@ -22,6 +22,21 @@ def row(codes, product='product', quantity=115):
             'product_id': product, 'product_name': 'Товар', 'tracking_type': 'OTP'}
 
 
+def test_distinct_afzal_logistics_blocks_keep_full_identifiers_and_real_duplicates_are_still_rejected():
+    ms = MoySkladService('fake')
+    blocks = [f'020080208415458313260930102MSCS21{serial}3710'
+              for serial in ['1101221','1101227','1101238','1101236','1101244']]
+    desired = [{'code': code, 'product_id':'product','quantity':10,'is_box':False} for code in blocks]
+    expected, actual, batches = service.missing_batches(ms, {'position':row([],quantity=50)}, desired)
+    assert len(expected)==5 and not actual
+    assert [entry['cis'] for entry in batches['position']]==blocks
+    assert all(entry['type']=='trackingcode' for entry in batches['position'])
+    with pytest.raises(ValueError,match='повторяющиеся'):
+        service.missing_batches(ms, {'position':row([],quantity=60)}, desired+[desired[0]])
+    _, actual, batches = service.missing_batches(ms, {'position':row(blocks,quantity=50)}, desired)
+    assert len(actual)==5 and not batches  # Readback is idempotent without another POST.
+
+
 def fixture(monkeypatch, expected=115, existing=59, *, drop=False, timeout=False):
     ms = MoySkladService('fake')
     ms.rows = {'position': row([code(i) for i in range(existing)], quantity=expected)}

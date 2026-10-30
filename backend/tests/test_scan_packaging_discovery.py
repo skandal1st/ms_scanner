@@ -67,7 +67,7 @@ async def test_discovery_preserves_raw_code_and_requires_later_verification(monk
              plan=[{'product_id': 'product', 'gtin': '04630339608705', 'product_name': 'Dzen Roll'}])
     children = [f'010463033960870521SERIAL{i}' for i in range(10)]
     db = NS(get=AsyncMock(side_effect=[scan, doc]), rollback=AsyncMock(), commit=AsyncMock(),
-            execute=AsyncMock(side_effect=[Result(doc), Result(None if state == 'removed' else scan)]))
+            execute=AsyncMock(side_effect=[Result(doc), Result(None if state == 'removed' else scan), Result(None)]))
     @asynccontextmanager
     async def session():
         yield db
@@ -133,7 +133,8 @@ async def test_known_product_skips_packaging_wait_only_with_confirmed_unit_evide
     scan, duplicate = await scans._create_scan_record(db, doc_id,
         '010463033960889721UNIT00000001\x1d93TEST', user_id)
     assert not duplicate
-    scan_packaging_cache.has_confirmed_unit.assert_awaited_once_with(user_id, doc_id, '04630339608897', db=db)
+    scan_packaging_cache.has_confirmed_unit.assert_awaited_once_with(user_id, doc_id, '04630339608897', db=db,
+        code='010463033960889721UNIT00000001\x1d93TEST')
     assert scan.moysklad_product_id == 'product'
     assert scan.verified_at is None  # Packaging evidence never certifies the mark.
     if confirmed:

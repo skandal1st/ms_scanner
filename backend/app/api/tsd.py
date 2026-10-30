@@ -839,6 +839,18 @@ async def change_tsd_pack_mode(document_id: UUID, scan_id: UUID, body: PackModeR
     return await set_scan_pack_mode(db, scan, device.user_id, body.unpack)
 
 
+@router.post('/documents/{document_id}/scans/{scan_id}/recheck-packaging', response_model=ScanResponse)
+async def recheck_tsd_packaging(document_id: UUID, scan_id: UUID,
+                                device: TsdDevice = Depends(get_shipping_device), db: AsyncSession = Depends(get_db)):
+    await _owned_tsd_document(db, device, document_id)
+    scan = (await db.execute(select(Scan).where(Scan.id == scan_id,
+        Scan.document_id == document_id))).scalar_one_or_none()
+    if not scan:
+        raise HTTPException(404, 'Марка не найдена')
+    from app.services.packaging_recheck import start
+    return ScanResponse.model_validate(await start(db, scan, device.user_id))
+
+
 @router.post("/documents/{document_id}/scans", response_model=ScanResponse)
 async def create_tsd_scan(
     document_id: UUID,

@@ -10,6 +10,7 @@ export function scanPackageType(scan: Scan): 'UNIT' | 'GROUP' | 'BOX' {
 export function scanPackageLabel(scan: Scan): string {
   if (scan.status === 'pending' && scan.is_box && scan.box_quantity == null) return 'Короб · проверяется в фоне…'
   if (scan.status === 'pending' && scan.verification?.source === 'packaging_pending') return 'Определяем упаковку…'
+  if (scan.status === 'pending' && scan.verification?.source === 'packaging_recheck') return 'Уточняем упаковку в ЧЗ…'
   if (scan.is_barcode) return `Штрихкод · ${scan.box_quantity || 1} шт.`
   const type = scanPackageType(scan)
   if (type === 'UNIT') return 'Отдельная марка · 1 шт.'

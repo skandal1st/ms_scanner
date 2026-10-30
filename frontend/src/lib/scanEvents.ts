@@ -4,6 +4,8 @@ import type { DocumentEvent } from '../hooks/useDocumentLive'
 /** Discovery may finish over WS before the initial POST reaches the terminal. */
 export function preferResolvedScan(existing: Scan | undefined, incoming: Scan): Scan {
   const pendingSource = incoming.verification?.source
+  if (existing && pendingSource === 'packaging_recheck'
+      && existing.verification?.packaging_request_id === incoming.verification?.request_id) return existing
   if (existing && ['sscc_pending', 'packaging_pending'].includes(pendingSource || '')
       && (existing.status !== 'pending' || existing.box_quantity != null)) {
     return { ...existing, duplicate: incoming.duplicate }

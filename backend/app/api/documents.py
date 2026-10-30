@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_, and_
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
@@ -967,8 +967,9 @@ async def process_document(
     scanned_count = scanned_q.scalar_one()
     if scanned_count and skip_cz:
         resolving_boxes = (await db.execute(select(Scan.id).where(
-            Scan.document_id == document_id, Scan.is_box.is_(True),
-            Scan.box_quantity.is_(None), Scan.status == ScanStatus.pending,
+            Scan.document_id == document_id, Scan.status == ScanStatus.pending,
+            or_(and_(Scan.is_box.is_(True), Scan.box_quantity.is_(None)),
+                Scan.verification['source'].astext == 'packaging_recheck'),
         ).limit(1))).scalar_one_or_none()
         if resolving_boxes:
             raise HTTPException(409, 'Дождитесь фоновой проверки коробов перед отправкой документа.')

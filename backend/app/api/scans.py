@@ -176,6 +176,17 @@ async def change_scan_pack_mode(scan_id: UUID, body: PackModeRequest,
     return await set_scan_pack_mode(db, scan, current_user.id, body.unpack)
 
 
+@router.post('/item/{scan_id}/recheck-packaging', response_model=ScanResponse)
+async def recheck_packaging(scan_id: UUID, current_user: User = Depends(get_current_user),
+                            db: AsyncSession = Depends(get_db)):
+    scan = (await db.execute(select(Scan).join(Document).where(
+        Scan.id == scan_id, Document.user_id == current_user.id))).scalar_one_or_none()
+    if not scan:
+        raise HTTPException(404, 'Марка не найдена')
+    from app.services.packaging_recheck import start
+    return ScanResponse.model_validate(await start(db, scan, current_user.id))
+
+
 class CreateBoxRequest(BaseModel):
     document_id: UUID
     sscc: str
@@ -255,6 +266,7 @@ async def _create_scan_record(
     code = decoded if decoded is not None else code.strip()
     from app.services.chestnyznak import _logistic_gs1_cis
     logistic = _logistic_gs1_cis(code) if not is_box else None
+    known_packaging = bool(logistic)
     gtin = gtin_override if is_box else extract_gtin(code)
 
     doc_obj = await editable_document(db, document_id, current_user_id)
@@ -306,7 +318,10 @@ async def _create_scan_record(
         local_error = f"Код уже используется в документе «{conflict_doc_name}»"
     elif not is_box:
         vr = verify_code_local_gs1(code)
-        if vr.valid or (logistic and vr.status == 'NO_SERIAL'):
+        if not vr.valid and vr.status == 'NO_SERIAL' and not known_packaging:
+            from app.services.packaging_formats import known_aggregate
+            known_packaging = await known_aggregate(db, code)
+        if vr.valid or (known_packaging and vr.status == 'NO_SERIAL'):
             # A valid contents GTIN admits the logistics label for background
             # discovery only. CZ must determine its composition and quantity.
             local_status = ScanStatus.scanned
@@ -327,7 +342,7 @@ async def _create_scan_record(
     # КИ. reconstructed/exact и коды с настоящим GS проходят как обычно. Группа неизвестна
     # (промах кэша) → не судим, оставляем scanned (доберётся пакетной проверкой).
     # См. project_hid_datamatrix_gs_spike.
-    if local_status == ScanStatus.scanned and gtin and "\x1d" not in code and not logistic:
+    if local_status == ScanStatus.scanned and gtin and "\x1d" not in code and not known_packaging:
         pg = await get_cached_pg(db, gtin)
         if pg and cis_confidence_for_pg(code, pg) == "ambiguous":
             local_status = ScanStatus.invalid
@@ -385,10 +400,10 @@ async def _create_scan_record(
     )
     from app.services.scan_packaging import needs_packaging_discovery
     discover_packaging = (not is_box and local_status == ScanStatus.scanned
-                          and (bool(logistic) or needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity)))
-    if discover_packaging and resolved_pid and not box_quantity and not logistic:
+                          and (known_packaging or needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity)))
+    if discover_packaging and resolved_pid and not box_quantity and not known_packaging:
         from app.services.scan_packaging_cache import has_confirmed_unit
-        if await has_confirmed_unit(current_user_id, document_id, gtin, db=db):
+        if await has_confirmed_unit(current_user_id, document_id, gtin, db=db, code=code):
             discover_packaging = False
     if discover_packaging:
         scan_values.update(status=ScanStatus.pending, verification={'source': 'packaging_pending', 'checked_at': None})

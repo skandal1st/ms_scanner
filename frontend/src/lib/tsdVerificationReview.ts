@@ -16,7 +16,7 @@ export function verificationResultsArrived(baseline: Map<string, string>, scans:
   const current = new Map(scans.map(scan => [scan.id, scan]))
   return [...baseline].every(([id, stamp]) => {
     const scan = current.get(id)
-    return !scan || Boolean(scan.verification && scan.verification.source !== 'packaging_pending'
+    return !scan || Boolean(scan.verification && !['packaging_pending', 'packaging_recheck'].includes(scan.verification.source)
       && verificationStamp(scan) !== stamp)
   })
 }

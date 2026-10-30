@@ -11,6 +11,15 @@ function load(file, context = {}) {
 }
 const { applyScanEvent } = load('lib/scanEvents.ts');
 
+test('late recheck response cannot replace the completed result, but a new request can', () => {
+  const resolved={id:'pack',status:'scanned',box_quantity:10,
+    verification:{source:'packaging',packaging_request_id:'first'}};
+  const pending={id:'pack',status:'pending',verification:{source:'packaging_recheck',request_id:'first'}};
+  assert.equal(applyScanEvent([resolved],{type:'scan_upsert',scan:pending})[0],resolved);
+  const newer={...pending,verification:{source:'packaging_recheck',request_id:'second'}};
+  assert.equal(applyScanEvent([resolved],{type:'scan_upsert',scan:newer})[0].status,'pending');
+});
+
 test('late packaging upserts cannot undo resolved units, blocks or their assigned position', () => {
   for (const units of [null,10]) {
     const resolved={id:'pack',status:'scanned',box_quantity:units,moysklad_product_id:'target',verification:null};

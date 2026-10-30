@@ -12,6 +12,7 @@ import { Icon } from './Icon'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { isProblemScan, numberedScans } from '../lib/shipmentProblems'
 import { useMarksPanelVisible } from './FlowWorkspaceTabs'
+import { PackagingRecheck } from './PackagingRecheck'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
@@ -302,6 +303,12 @@ function ScanRow({
       {isExpanded && (
         <tr>
           <td colSpan={number !== undefined ? 5 : 4} className="scans-expanded">
+            <PackagingRecheck key={scan.id} scan={scan} disabled={document?.status !== 'draft'}
+              onQueued={data => {
+                const current = useScanStore.getState().scans.find(item => item.id === scan.id)
+                if (current?.verification?.packaging_request_id === data.verification?.request_id) return
+                useScanStore.getState().updateScan(scan.id, data)
+              }} />
             {isAggregate && <div className="scans-expanded__row">
               <span>{scanPackageLabel(scan)}</span>
               <button type="button" className="button" disabled={changingPack || scan.status === 'pending' || document?.status !== 'draft'}

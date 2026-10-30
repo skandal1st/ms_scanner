@@ -25,6 +25,15 @@ def resolve_scan_packaging_task(scan_id, user_id):
     return _run(discover_scan_packaging(scan_id, user_id))
 
 
+@celery_app.task(bind=True, max_retries=3, name='recheck_scan_packaging')
+def recheck_scan_packaging_task(self, scan_id, user_id, request_id):
+    from app.services.packaging_recheck import run
+    try:
+        return _run(run(scan_id, user_id, request_id))
+    except Exception as exc:
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
 @celery_app.task(name='gtin_audit')
 def gtin_audit_task(run_id, user_id):
     from app.services.gtin_audit_job import run_audit

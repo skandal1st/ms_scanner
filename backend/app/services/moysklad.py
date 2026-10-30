@@ -713,6 +713,10 @@ class MoySkladService:
         чтении в gs1-форме (``01<GTIN>21<серия>``) — сравнение по сырой строке их не
         свяжет. Приводим к (GTIN, серия) через тот же парсер, что и остальной поток.
         """
+        from app.services.chestnyznak import _logistic_gs1_cis
+        logistic = _logistic_gs1_cis(cis or '')
+        if logistic:
+            return logistic
         g, s = parse_gs1_km_gtin_serial(normalize_km_ai_prefix((cis or "").strip()))
         if g and s:
             return f"{g}|{s.strip()}"

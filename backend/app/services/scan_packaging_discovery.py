@@ -65,6 +65,9 @@ async def discover_scan_packaging(scan_id, user_id):
             return
         for field, value in metadata.items():
             setattr(scan, field, value)
+        if metadata and not error and info and (package_type(info.package_type) or info.children):
+            from app.services.packaging_formats import learn
+            await learn(db, scan.code, metadata)
         # An explicit scanner target always takes precedence over inferred packaging ownership.
         if not scan.moysklad_product_id and product:
             scan.moysklad_product_id = product['product_id']
