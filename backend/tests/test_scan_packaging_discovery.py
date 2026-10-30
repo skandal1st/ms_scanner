@@ -142,3 +142,49 @@ async def test_known_product_skips_packaging_wait_only_with_confirmed_unit_evide
     else:
         assert scan.status == ScanStatus.pending
         tasks.resolve_scan_packaging_task.delay.assert_called_once()
+
+
+@pytest.mark.parametrize('displayed', [False, True])
+async def test_afzal_logistics_label_is_discovered_even_when_its_contents_have_cached_unit_evidence(monkeypatch, displayed):
+    from app.api import scans
+    from app.worker import tasks
+    from app.services import scan_packaging_cache
+    raw = '020080208415458313260930102MSCS2111012213710'
+    code = '(02)00802084154583(13)260930(10)2MSCS(21)1101221(37)10' if displayed else raw
+    doc = NS(kind='demand', plan=[{'product_id': 'chief', 'product_name': 'Afzal Chief 40 g',
+                                 'gtin': '02000000061177', 'gtins': ['02000000061177', '00802084154583']}])
+    monkeypatch.setattr(scans, 'editable_document', AsyncMock(return_value=doc))
+    monkeypatch.setattr(scans, 'get_cached_pg', AsyncMock(return_value='otp'))
+    monkeypatch.setattr(scan_packaging_cache, 'has_confirmed_unit', AsyncMock(return_value=True))
+    delay = Mock()
+    monkeypatch.setattr(tasks.resolve_scan_packaging_task, 'delay', delay)
+    db = NS(execute=AsyncMock(return_value=Result(None)), add=Mock(), commit=AsyncMock(), refresh=AsyncMock())
+    scan, duplicate = await scans._create_scan_record(db, uuid4(), code, uuid4())
+    assert not duplicate and scan.code == code
+    assert scan.gtin == '00802084154583' and scan.moysklad_product_id == 'chief'
+    assert scan.status == ScanStatus.pending and scan.error_message is None
+    assert scan.box_quantity is None and scan.verified_at is None
+    assert scan.verification['source'] == 'packaging_pending'
+    scan_packaging_cache.has_confirmed_unit.assert_not_awaited()
+    scans.get_cached_pg.assert_not_awaited()
+    delay.assert_called_once()
+    # Real CZ response uses bare unit codes. Quantity comes from composition,
+    # never from trusting the label's trailing AI 37.
+    children = ['00802084154583VWCG>f;', '00802084154583vX3Fpi*']
+    metadata = service.packaging_metadata(NS(package_type='BOX', children=children), scan.gtin)
+    assert metadata['gtin'] == scan.gtin and metadata['box_quantity'] == 2
+
+
+async def test_logistics_label_with_bad_contents_gtin_stays_invalid(monkeypatch):
+    from app.api import scans
+    from app.worker import tasks
+    monkeypatch.setattr(scans, 'editable_document', AsyncMock(return_value=NS(kind='demand', plan=[])))
+    monkeypatch.setattr(scans, 'get_gtin_product', AsyncMock(return_value=None))
+    delay = Mock()
+    monkeypatch.setattr(tasks.resolve_scan_packaging_task, 'delay', delay)
+    db = NS(execute=AsyncMock(return_value=Result(None)), add=Mock(), commit=AsyncMock(), refresh=AsyncMock())
+    scan, _ = await scans._create_scan_record(db, uuid4(),
+        '020080208415458413260930102MSCS2111012213710', uuid4())
+    assert scan.status == ScanStatus.invalid
+    assert scan.error_message == 'Неверная контрольная сумма GTIN'
+    delay.assert_not_called()

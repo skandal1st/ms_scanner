@@ -299,6 +299,12 @@ def parse_gs1_km_gtin_serial(code: str) -> tuple[Optional[str], Optional[str]]:
     if not code:
         return (None, None)
 
+    # AI 02 identifies the contents of a logistics package, not a bare KM.
+    # Its batch/date/serial fields must not be interpreted as a unit serial.
+    logistic = _logistic_gs1_cis(code)
+    if logistic:
+        return (logistic[2:16], None)
+
     # Потребительская упаковка табачных групп использует компактный фиксированный
     # формат без AI и GS: GTIN(14) + серия(7) + МРЦ(4) + код проверки(4).
     # Последние 8 символов не являются частью серии.

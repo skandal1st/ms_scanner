@@ -253,6 +253,8 @@ async def _create_scan_record(
     decoded = decode_base64_mark(code) if not is_box else None
     original_code = code if decoded is not None else None
     code = decoded if decoded is not None else code.strip()
+    from app.services.chestnyznak import _logistic_gs1_cis
+    logistic = _logistic_gs1_cis(code) if not is_box else None
     gtin = gtin_override if is_box else extract_gtin(code)
 
     doc_obj = await editable_document(db, document_id, current_user_id)
@@ -304,7 +306,9 @@ async def _create_scan_record(
         local_error = f"Код уже используется в документе «{conflict_doc_name}»"
     elif not is_box:
         vr = verify_code_local_gs1(code)
-        if vr.valid:
+        if vr.valid or (logistic and vr.status == 'NO_SERIAL'):
+            # A valid contents GTIN admits the logistics label for background
+            # discovery only. CZ must determine its composition and quantity.
             local_status = ScanStatus.scanned
             gtin = normalize_gtin_key(vr.gtin) or gtin
             local_serial = vr.serial
@@ -323,7 +327,7 @@ async def _create_scan_record(
     # КИ. reconstructed/exact и коды с настоящим GS проходят как обычно. Группа неизвестна
     # (промах кэша) → не судим, оставляем scanned (доберётся пакетной проверкой).
     # См. project_hid_datamatrix_gs_spike.
-    if local_status == ScanStatus.scanned and gtin and "\x1d" not in code:
+    if local_status == ScanStatus.scanned and gtin and "\x1d" not in code and not logistic:
         pg = await get_cached_pg(db, gtin)
         if pg and cis_confidence_for_pg(code, pg) == "ambiguous":
             local_status = ScanStatus.invalid
@@ -381,8 +385,8 @@ async def _create_scan_record(
     )
     from app.services.scan_packaging import needs_packaging_discovery
     discover_packaging = (not is_box and local_status == ScanStatus.scanned
-                          and needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity))
-    if discover_packaging and resolved_pid and not box_quantity:
+                          and (bool(logistic) or needs_packaging_discovery(doc_obj.plan, gtin, resolved_pid, box_quantity)))
+    if discover_packaging and resolved_pid and not box_quantity and not logistic:
         from app.services.scan_packaging_cache import has_confirmed_unit
         if await has_confirmed_unit(current_user_id, document_id, gtin, db=db):
             discover_packaging = False
