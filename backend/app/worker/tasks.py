@@ -122,6 +122,10 @@ def _build_moysklad_scans_data(
     """
     rows: list[dict] = []
     for scan in scans:
+        from app.services.chestnyznak import _logistic_gs1_cis
+        logistic = _logistic_gs1_cis(scan.code)
+        if logistic and not scan.child_codes:
+            raise ValueError('Для передачи логистической упаковки в МС нужен состав пачек из ЧЗ. Уточните упаковку и проверьте марки.')
         pid_default = (
             scan.moysklad_product_id
             or (
@@ -134,7 +138,9 @@ def _build_moysklad_scans_data(
         if expanded_sscc and not scan.child_codes:
             raise ValueError("Состав раскрытого SSCC-короба не получен. Раскройте короб повторно.")
         send_whole_box = kind == "demand" and bool(
-            (scan.is_box and not expanded_sscc) or (not scan.is_box and getattr(scan, "keep_aggregate", False)))
+            (scan.is_box and not expanded_sscc) or (not scan.is_box and getattr(scan, "keep_aggregate", False))) and not logistic
+        # MS Remap rejects AI 02 logistics IDs as trackingcode. Preserve the
+        # scanned package in our UI, but write its verified unit marks to MS.
         if scan.child_codes and not send_whole_box:
             # Развёрнутый агрегат: в МС пишем КМ вложенных пачек поштучно.
             for child_code in scan.child_codes:

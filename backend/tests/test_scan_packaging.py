@@ -35,6 +35,20 @@ def test_group_and_transport_pack_are_distinct():
     assert len(children) == 2 and all(row['quantity'] == 1 for row in children)
 
 
+@pytest.mark.parametrize('kind',['demand','supply'])
+def test_ai02_packages_write_unit_marks_to_ms_without_changing_ui_packaging(kind):
+    children=[f'00802084154583UNIT{i:03d}' for i in range(10)]
+    p=pack(code='020080208415458313260930102MSCS2111012213710',gtin='00802084154583',
+        child_codes=children,package_type='BOX',keep_aggregate=True)
+    rows=tasks._build_moysklad_scans_data([p],kind,{})
+    assert len(rows)==10 and [r['code'] for r in rows]==children
+    assert all(r['quantity']==1 and not r['is_box'] and r['product_id']=='flavor' for r in rows)
+    assert p.keep_aggregate and p.box_quantity==10 and p.child_codes==children
+    p.child_codes=None
+    with pytest.raises(ValueError,match='нужен состав пачек'):
+        tasks._build_moysklad_scans_data([p],kind,{})
+
+
 @pytest.mark.parametrize('is_box', [False, True])
 async def test_pack_mode_with_known_children_never_calls_cz(monkeypatch, is_box):
     p = pack(is_box=is_box, package_type='BOX' if is_box else 'GROUP')
