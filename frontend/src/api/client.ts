@@ -37,7 +37,11 @@ export interface GtinAuditFinding {
   saved_product_name: string | null
   saved_card: GtinAuditCard | null
   candidates: GtinAuditCard[]
+  current_mapping?: GtinMapping | null
 }
+export interface GtinMapping { product_id: string; product_name: string | null; updated_at: string }
+export interface GtinSyncSelection { run_id: string; finding_id: string; target_product_id: string }
+export interface GtinSyncPreview { gtin: string; before: GtinMapping; target: GtinAuditCard }
 export interface GtinAuditPage { total: number; page: number; page_size: number; items: GtinAuditFinding[] }
 export interface GtinNationalCatalogResult {
   gtin: string
@@ -49,6 +53,11 @@ export interface GtinNationalCatalogResult {
   source: 'cache' | 'national_catalog'
 }
 export const gtinControlApi = {
+  syncPreview: (selection: GtinSyncSelection) => api.post<GtinSyncPreview>('/gtin-control/sync-preview', selection),
+  syncMapping: (selection: GtinSyncSelection, preview: GtinSyncPreview) =>
+    api.post<{ gtin: string; mapping: GtinMapping }>('/gtin-control/sync', { ...selection,
+      expected_product_id: preview.before.product_id, expected_product_name: preview.before.product_name,
+      expected_updated_at: preview.before.updated_at, target_name: preview.target.name }),
   status: () => api.get<GtinAuditStatus>('/gtin-control'),
   refresh: () => api.post<GtinAuditRun>('/gtin-control/refresh'),
   nationalCatalog: (run_id: string, gtin: string, refresh = false) =>

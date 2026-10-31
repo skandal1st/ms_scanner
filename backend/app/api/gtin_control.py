@@ -11,7 +11,8 @@ from sqlalchemy.dialects.postgresql import insert
 from pydantic import BaseModel, Field
 
 from app.api.deps import get_current_user
-from app.db.models import User, Integration, GtinAuditRun, GtinAuditFinding, NkProduct
+from app.db.models import User, Integration, GtinAuditRun, GtinAuditFinding, NkProduct, GtinProductMap
+from app.services import gtin_mapping_sync
 from app.core.config import settings
 from app.db.session import get_db
 from app.services.document_guard import processing_lock
@@ -24,6 +25,18 @@ class NationalCatalogRequest(BaseModel):
     run_id: UUID
     gtin: str = Field(pattern=r'^[0-9]{14}$')
     refresh: bool = False
+
+
+@router.post('/sync-preview')
+async def sync_preview(body: gtin_mapping_sync.Selection, current_user: User = Depends(get_current_user),
+                       db: AsyncSession = Depends(get_db)):
+    return await gtin_mapping_sync.preview(db, current_user.id, body)
+
+
+@router.post('/sync')
+async def sync_mapping(body: gtin_mapping_sync.Confirmation, current_user: User = Depends(get_current_user),
+                       db: AsyncSession = Depends(get_db)):
+    return await gtin_mapping_sync.apply(db, current_user.id, body)
 
 
 def nk_view(row, source):
@@ -153,6 +166,9 @@ async def findings(run_id: UUID, kind: Literal['mapping', 'duplicate'] = 'mappin
     rows = (await db.execute(select(GtinAuditFinding).where(*filters)
         .order_by(GtinAuditFinding.priority, GtinAuditFinding.gtin, GtinAuditFinding.id)
         .offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    mappings = (await db.execute(select(GtinProductMap).where(GtinProductMap.user_id == current_user.id,
+        GtinProductMap.gtin.in_([row.gtin for row in rows])))).scalars().all() if rows else []
+    current = {row.gtin: gtin_mapping_sync.mapping_view(row) for row in mappings}
     return {'total': total, 'page': page, 'page_size': page_size, 'items': [
-        {key: getattr(row, key) for key in ('id', 'kind', 'category', 'gtin', 'saved_product_id',
-            'saved_product_name', 'saved_card', 'candidates')} for row in rows]}
+        {**{key: getattr(row, key) for key in ('id', 'kind', 'category', 'gtin', 'saved_product_id',
+            'saved_product_name', 'saved_card', 'candidates')}, 'current_mapping': current.get(row.gtin)} for row in rows]}

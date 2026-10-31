@@ -28,7 +28,7 @@ function errorText(error: unknown, fallback = 'Не удалось загруз�
     || fallback
 }
 
-function Product({ card, gtin }: { card: GtinAuditCard; gtin: string }) {
+function Product({ card, gtin, onSync, selected = false }: { card: GtinAuditCard; gtin: string; onSync?: () => void; selected?: boolean }) {
   const link = card.url && /^https:\/\/online\.moysklad\.ru\//.test(card.url) ? card.url : null
   return <div className="gtin-control__product">
     <div>{link ? <a href={link} target="_blank" rel="noopener noreferrer">{card.name}<Icon name="link" size={12} /></a> : card.name}</div>
@@ -37,7 +37,45 @@ function Product({ card, gtin }: { card: GtinAuditCard; gtin: string }) {
       {card.pack_gtins.includes(gtin) && <span>GTIN упаковки</span>}
       <span title={card.id}>ID: {card.id}</span>
     </div>
+    {onSync && !card.archived && card.gtins.includes(gtin) && <button type="button" className="button button--sm gtin-control__nk-button"
+      aria-expanded={selected} aria-label={`Синхронизировать с МС: ${card.name}`} onClick={onSync}>Синхронизировать с МС</button>}
   </div>
+}
+
+function MappingSync({ runId, item, targetId, onClose }: {
+  runId: string; item: GtinAuditFinding; targetId: string; onClose: () => void
+}) {
+  const cache = useQueryClient()
+  const selection = { run_id: runId, finding_id: item.id, target_product_id: targetId }
+  const preview = useQuery({ queryKey: ['gtin-sync-preview', runId, item.id, targetId],
+    queryFn: () => gtinControlApi.syncPreview(selection).then(r => r.data), retry: false, staleTime: 0 })
+  const save = useMutation({ mutationFn: () => gtinControlApi.syncMapping(selection, preview.data!).then(r => r.data),
+    onSuccess: () => { void cache.invalidateQueries({ queryKey: ['gtin-control-findings'] }) },
+  })
+  const value = preview.data
+  const same = value?.before.product_id === value?.target.id && value?.before.product_name === value?.target.name
+  return <section className="gtin-control__nk" aria-label={`Синхронизация GTIN ${item.gtin}`}>
+    <div className="gtin-control__nk-heading"><h2>Обновить внутреннюю привязку · {item.gtin}</h2>
+      <button type="button" className="button button--sm" disabled={save.isPending} onClick={onClose}>Закрыть</button></div>
+    {preview.isFetching && <p role="status">Читаем актуальную карточку МС и внутреннюю привязку…</p>}
+    {(preview.error || save.error) && <div className="alert alert--error" role="alert">
+      {errorText(save.error || preview.error, 'Не удалось синхронизировать привязку. Повторите попытку.')}
+      <button type="button" className="button button--sm" disabled={save.isPending || preview.isFetching}
+        onClick={() => { save.reset(); void preview.refetch() }}>Заново проверить данные</button>
+    </div>}
+    {save.isSuccess ? <p role="status">Внутренняя привязка обновлена: <strong>{save.data.mapping.product_name}</strong>.
+      Следующие сканы будут использовать эту привязку.</p> : value && !preview.isError && <>
+      <dl className="gtin-control__sync-data">
+        <div><dt>Сейчас в нашей базе</dt><dd>{value.before.product_name || 'Без названия'}<small>ID: {value.before.product_id}</small></dd></div>
+        <div><dt>Будет взято из МС</dt><dd>{value.target.name}<small>ID: {value.target.id}</small></dd></div>
+      </dl>
+      {same ? <p role="status">Привязка и название уже совпадают с МС.</p> : <>
+        <p>Проверьте товар, фасовку и сведения НК перед заменой. Карточки МС и марки в существующих сборках останутся без изменений.</p>
+        <button type="button" className="button button--primary" disabled={save.isPending || preview.isFetching || save.isError}
+          onClick={() => save.mutate()}>{save.isPending ? 'Обновляем привязку…' : 'Обновить привязку в нашей базе'}</button>
+      </>}
+    </>}
+  </section>
 }
 
 function NationalCatalogCheck({ runId, gtin, onClose }: { runId: string; gtin: string; onClose: () => void }) {
@@ -74,6 +112,11 @@ function NationalCatalogCheck({ runId, gtin, onClose }: { runId: string; gtin: s
 function Finding({ item, mapping, runId }: { item: GtinAuditFinding; mapping: boolean; runId: string }) {
   const category = categories[item.category]
   const [checking, setChecking] = useState(false)
+  const [syncTarget, setSyncTarget] = useState<string | null>(null)
+  const current = item.current_mapping === undefined ? { product_id: item.saved_product_id, product_name: item.saved_product_name } : item.current_mapping
+  const changed = current && (current.product_id !== item.saved_product_id || current.product_name !== item.saved_product_name)
+  const product = (card: GtinAuditCard) => <Product key={card.id} card={card} gtin={item.gtin}
+    selected={syncTarget === card.id} onSync={mapping ? () => setSyncTarget(card.id) : undefined} />
   return <Fragment><tr>
     <td className="gtin-control__code"><code>{item.gtin}</code>
       <button type="button" className="button button--sm gtin-control__nk-button" onClick={() => setChecking(value => !value)}
@@ -82,21 +125,22 @@ function Finding({ item, mapping, runId }: { item: GtinAuditFinding; mapping: bo
       </button>
     </td>
     {mapping && <td>
-      <div>{item.saved_product_name || 'Без сохранённого названия'}</div>
-      <div className="gtin-control__product-meta">ID: {item.saved_product_id || '—'}</div>
-      {item.saved_card && item.saved_card.name !== item.saved_product_name &&
+      <div>{current ? current.product_name || 'Без сохранённого названия' : 'Привязка удалена'}</div>
+      <div className="gtin-control__product-meta">ID: {current?.product_id || '—'}</div>
+      {changed && <p className="gtin-control__current-name">Привязка обновлена после отчёта. Для пересчёта расхождений обновите проверку.</p>}
+      {!changed && item.saved_card && item.saved_card.name !== item.saved_product_name &&
         <div className="gtin-control__current-name">Сейчас в МС: {item.saved_card.name}</div>}
-      {item.saved_card?.archived && <span className="badge badge--muted">Архив</span>}
-      {item.saved_card && <details className="gtin-control__details">
+      {!changed && item.saved_card?.archived && <span className="badge badge--muted">Архив</span>}
+      {!changed && item.saved_card && <details className="gtin-control__details">
         <summary>GTIN сохранённой карточки</summary>
         <p>{item.saved_card.gtins.join(', ') || 'GTIN отсутствуют'}</p>
       </details>}
     </td>}
     <td>
-      {item.candidates.slice(0, 2).map(card => <Product key={card.id} card={card} gtin={item.gtin} />)}
+      {item.candidates.slice(0, 2).map(product)}
       {item.candidates.length > 2 && <details className="gtin-control__details">
         <summary>Ещё карточек: {item.candidates.length - 2}</summary>
-        {item.candidates.slice(2).map(card => <Product key={card.id} card={card} gtin={item.gtin} />)}
+        {item.candidates.slice(2).map(product)}
       </details>}
       {!item.candidates.length && <span className="gtin-control__muted">Карточки с этим GTIN не найдены</span>}
     </td>
@@ -106,6 +150,8 @@ function Finding({ item, mapping, runId }: { item: GtinAuditFinding; mapping: bo
     </td>
   </tr>{checking && <tr><td colSpan={mapping ? 4 : 3} className="gtin-control__nk-cell">
     <NationalCatalogCheck runId={runId} gtin={item.gtin} onClose={() => setChecking(false)} />
+  </td></tr>}{syncTarget && <tr><td colSpan={mapping ? 4 : 3} className="gtin-control__nk-cell">
+    <MappingSync key={syncTarget} runId={runId} item={item} targetId={syncTarget} onClose={() => setSyncTarget(null)} />
   </td></tr>}</Fragment>
 }
 
@@ -153,7 +199,7 @@ export function GtinControlPage() {
         <Icon name="refresh" size={15} />{start.isPending ? 'Запускаем…' : running && !staleJob ? 'Проверка идёт…' : report ? 'Обновить проверку' : 'Проверить каталог МС'}
       </button>
     </header>
-    <p className="gtin-control__scope">Каталог общий для всех юрлиц аккаунта МС. Проверка учитывает GTIN товаров и упаковок; карточки и привязки не изменяются.</p>
+    <p className="gtin-control__scope">Каталог общий для всех юрлиц аккаунта МС. Проверка учитывает GTIN товаров и упаковок. Внутренние привязки обновляются отдельно кнопкой синхронизации с выбранной карточкой МС.</p>
     {visibleError && <div className="alert alert--error" role="alert">{errorText(visibleError)} <button type="button" className="button button--sm" onClick={() => void state.refetch()}>Повторить загрузку</button></div>}
     {running && <div className="gtin-control__progress" role="status" aria-live="polite">
       <Icon name="refresh" size={16} /><span>{phases[job!.phase] || 'Проверка выполняется'}.

@@ -48,6 +48,10 @@
 .gtin-control__nk-data { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 20px; margin: 18px 0; }
 .gtin-control__nk-data dt { font-size: 12px; color: var(--ms-text-muted); margin-bottom: 5px; }
 .gtin-control__nk-data dd { margin: 0; }
+.gtin-control__sync-data { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 18px 0; }
+.gtin-control__sync-data dt { color: var(--ms-text-muted); margin-bottom: 6px; }
+.gtin-control__sync-data dd { margin: 0; }
+.gtin-control__sync-data small { display: block; margin-top: 5px; overflow-wrap: anywhere; color: var(--ms-text-muted); }
 .gtin-control__nk-footer { font-size: 12px; color: var(--ms-text-muted); }
 .gtin-control__empty { min-height: 220px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 36px 22px; text-align: center; }
 .gtin-control__empty > svg { color: var(--ms-text-muted); }
@@ -64,5 +68,6 @@
   .gtin-control__table { min-width: 850px; }
   .gtin-control__nk { width: calc(100vw - 26px); max-width: 100%; box-sizing: border-box; }
   .gtin-control__nk-data { grid-template-columns: 1fr; gap: 12px; }
+  .gtin-control__sync-data { grid-template-columns: 1fr; gap: 14px; }
   .gtin-control__pagination { align-items: flex-start; flex-direction: column; }
 }
