@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 import redis.asyncio as aioredis
 
@@ -339,6 +339,15 @@ class WriteoffPrepareRequest(BaseModel):
     reason: str
     basis_number: Optional[str] = None
     basis_date: Optional[str] = None  # YYYY-MM-DD
+    product_group: Optional[str] = None
+
+    @field_validator('product_group')
+    @classmethod
+    def supported_group(cls, value):
+        value = (value or '').strip().lower()
+        if value and value not in CZ_PRODUCT_GROUP_CODES:
+            raise ValueError('Неизвестная товарная группа ЧЗ')
+        return value or None
 
 
 class WriteoffPart(BaseModel):
@@ -501,14 +510,20 @@ async def cz_writeoff_prepare(
     # списать физически), не роняют весь документ — собираем их отдельным списком.
     groups: dict[str, list[str]] = {}
     unresolved: list[UnresolvedCode] = []
-    for cis in cises:
-        pg, cz_reason = await cz.resolve_product_group(cis)
-        if not pg:
-            unresolved.append(
-                UnresolvedCode(cis=cis, reason=cz_reason or "Марка не найдена в ЧЗ")
-            )
-            continue
-        groups.setdefault(pg, []).append(cis)
+    if body.product_group:
+        # An explicit document-level choice is authoritative for this writeoff.
+        # The marks have already passed the separate verification flow. Do not
+        # rediscover their group or teach a global GTIN rule from this choice.
+        groups[body.product_group] = cises
+    else:
+        for cis in cises:
+            pg, cz_reason = await cz.resolve_product_group(cis)
+            if not pg:
+                unresolved.append(
+                    UnresolvedCode(cis=cis, reason=cz_reason or "Марка не найдена в ЧЗ")
+                )
+                continue
+            groups.setdefault(pg, []).append(cis)
 
     action_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     parts: list[WriteoffPart] = []
@@ -563,6 +578,7 @@ async def cz_writeoff_prepare(
         document_id=str(doc.id),
         reason=body.reason,
         groups=list(groups.keys()),
+        group_source='manual' if body.product_group else 'auto',
         cises=len(cises),
         unresolved=len(unresolved),
     )

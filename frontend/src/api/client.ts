@@ -1261,6 +1261,7 @@ export const czApi = {
   writeoffPrepare: (body: {
     document_id: string
     reason: string
+    product_group?: string
     basis_number?: string
     basis_date?: string
   }) => api.post<WriteoffPrepareResult>('/integrations/cz/writeoff/prepare', body),

@@ -314,18 +314,10 @@ export function WriteoffPage({
     try {
       setPhase('signing')
 
-      // Если кладовщик вручную указал товарную группу — привязываем её ко всем GTIN
-      // документа (перекрывает неверное автоопределение из МС) и запоминаем на будущее.
-      if (groupOverride) {
-        const gtins = Array.from(
-          new Set(scans.map((s) => s.gtin).filter((g): g is string => !!g)),
-        )
-        await Promise.all(gtins.map((g) => czApi.setGtinGroup(g, groupOverride)))
-      }
-
       const { data: prep } = await czApi.writeoffPrepare({
         document_id: document.id,
         reason,
+        product_group: groupOverride || undefined,
         basis_number: basisNumber.trim() || undefined,
         basis_date: basisDate || undefined,
       })
@@ -499,7 +491,7 @@ export function WriteoffPage({
               className="ui-select ui-input--block"
               value={groupOverride}
               onChange={(e) => setGroupOverride(e.target.value)}
-              title="Укажите вручную, если группа определилась неверно (напр. кальянный табак как «Табачная продукция»)"
+              title="Выбранная группа применяется ко всем маркам этого списания без автоматического перебора"
             >
               <option value="">Определять автоматически</option>
               {groupOptions.map((g) => (
