@@ -36,6 +36,7 @@ class PlanItem(BaseModel):
 
 
 class DocumentResponse(BaseModel):
+    plan_sync: Optional[dict] = None
     can_resend_marks: bool = False
     display_name: Optional[str] = None
     collection_started: bool = False
@@ -84,6 +85,7 @@ def _doc_to_response(doc: Document, scan_count: int = 0) -> DocumentResponse:
     # либо использовать selectinload, либо знать что документ только что создан).
     from app.services.shipment_resend import available
     return DocumentResponse(
+        plan_sync=(doc.upd_meta or {}).get('plan_sync'),
         can_resend_marks=available(doc),
         collection_started=collection_started(doc),
         id=doc.id,
@@ -539,8 +541,12 @@ async def refresh_plan(
     if not doc.moysklad_id:
         raise HTTPException(400, "Документ не привязан к МойСклад")
     ms = await _get_ms_service(current_user, db)
-    doc.plan = await ms.build_plan(_plan_source_kind(doc.kind.value), doc.moysklad_id)
-    await db.commit()
+    if doc.kind == DocumentKind.demand:
+        from app.services.shipment_plan_refresh import refresh
+        doc = await refresh(db, doc.id, current_user.id, ms)
+    else:
+        doc.plan = await ms.build_plan(_plan_source_kind(doc.kind.value), doc.moysklad_id)
+        await db.commit()
     await db.refresh(doc)
     return _doc_to_response(doc, await _scan_count(db, doc.id))
 

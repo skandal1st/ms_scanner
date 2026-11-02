@@ -144,6 +144,7 @@ class TsdOrderShipments(BaseModel):
 
 
 class TsdDocumentDetail(BaseModel):
+    plan_sync: Optional[dict] = None
     can_resend_marks: bool = False
     error_message: Optional[str] = None
     collection_started: bool = False
@@ -760,6 +761,7 @@ async def select_tsd_document(
         )
     ).scalar_one()
     return TsdDocumentDetail(
+        plan_sync=(doc.upd_meta or {}).get('plan_sync'),
         can_resend_marks=resend_available(doc), error_message=getattr(doc, 'error_message', None),
         collection_started=collection_started(doc),
         id=doc.id,
@@ -807,6 +809,7 @@ async def get_tsd_document(
     ).scalar_one()
     await db.commit()
     return TsdDocumentDetail(
+        plan_sync=(doc.upd_meta or {}).get('plan_sync'),
         can_resend_marks=resend_available(doc), error_message=getattr(doc, 'error_message', None),
         collection_started=collection_started(doc),
         id=doc.id, name=doc.name, status=doc.status.value, plan=list(doc.plan or []),
@@ -815,6 +818,17 @@ async def get_tsd_document(
         customer_order_name=doc.customer_order_name,
         customer_order_id=doc.moysklad_customer_order_id,
     )
+
+
+@router.post('/documents/{document_id}/refresh-plan')
+async def refresh_tsd_plan(document_id: UUID, device: TsdDevice = Depends(get_shipping_device),
+                           db: AsyncSession = Depends(get_db)):
+    await _owned_tsd_document(db, device, document_id)
+    from app.services.shipment_plan_refresh import refresh
+    from app.api.documents import _doc_to_response, _scan_count
+    ms = await _ms_for_user(db, device.user_id)
+    doc = await refresh(db, document_id, device.user_id, ms)
+    return _doc_to_response(doc, await _scan_count(db, doc.id))
 
 
 @router.post("/documents/{document_id}/start-collection")

@@ -23,6 +23,7 @@ import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from
 import { PackagingRecheck } from '../components/PackagingRecheck'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
+import { ShipmentPlanRefresh } from '../components/ShipmentPlanRefresh'
 import { saveTsdTokens } from '../lib/tsdAuth'
 import { isTsdDocumentClosed, retryTsdDocument } from '../lib/tsdDocumentLifecycle'
 
@@ -470,7 +471,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       return
     }
     liveDuringFetch.current?.push(event)
-    if (event.type === 'scans_changed' || (event.type === 'scan_update' && !qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id])?.scans.some(item => item.id === event.scan_id))) {
+    if (['scans_changed', 'plan_changed'].includes(event.type) || (event.type === 'scan_update' && !qc.getQueryData<TsdDocumentDetail>(['tsd-document', initial.id])?.scans.some(item => item.id === event.scan_id))) {
       void refresh(); return
     }
     if (!['scan_upsert', 'scan_removed', 'scans_reset', 'scan_update'].includes(event.type)) return
@@ -643,6 +644,11 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
         <TsdConnection />
       </header>
       {doc.active_on_other_device ? <div className="tsd-alert tsd-alert--warn">Отгрузка также открыта на другом ТСД</div> : null}
+      {doc.status === 'draft' && <ShipmentPlanRefresh key={doc.id} documentId={doc.id} summary={doc.plan_sync} terminal
+        disabled={!online || complete.isPending || release.isPending} onUpdated={data => {
+          setPositionFilter('all')
+          if (targetProductId && !data.plan.some(row => row.product_id === targetProductId)) setTargetProductId(null)
+        }} />}
       {doc.can_resend_marks && <ResendShipmentMarks key={doc.id} documentId={doc.id} terminal disabled={!online}
         onStateChange={() => { void qc.invalidateQueries({ queryKey: ['tsd-document', doc.id] }) }} />}
       {doc.error_message && <div role="alert" className="tsd-alert tsd-alert--error">{doc.error_message}</div>}

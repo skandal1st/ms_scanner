@@ -150,6 +150,11 @@ api.interceptors.response.use(
 export default api
 
 export type DocumentKind = 'demand' | 'loss' | 'supply'
+export interface PlanSync {
+  checked_at: string
+  changes: { kind: 'added' | 'removed' | 'quantity' | 'details'; product_id: string | null;
+    product_name: string; before: number; after: number }[]
+}
 
 export interface MsDocument {
   state_name?: string | null
@@ -178,6 +183,7 @@ export interface PlanItem {
 }
 
 export interface Document {
+  plan_sync?: PlanSync | null
   can_resend_marks?: boolean
   display_name?: string | null
   collection_started?: boolean
@@ -1100,6 +1106,7 @@ export interface TsdDocumentItem {
 }
 
 export interface TsdDocumentDetail {
+  plan_sync?: PlanSync | null
   can_resend_marks?: boolean
   error_message?: string | null
   collection_started?: boolean
@@ -1169,6 +1176,7 @@ export const tsdApi = {
   release: (id: string) => tsdClient.post(`/tsd/documents/${id}/release`),
   packMode: (id: string, scanId: string, unpack: boolean) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/pack-mode`, { unpack }),
+  refreshPlan: (id: string) => tsdClient.post<Document>(`/tsd/documents/${id}/refresh-plan`),
   recheckPackaging: (id: string, scanId: string) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans/${scanId}/recheck-packaging`),
 }

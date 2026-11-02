@@ -23,6 +23,7 @@ import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
 import { ShipmentCorrections } from '../components/ShipmentCorrections'
 import { ResendShipmentMarks } from '../components/ResendShipmentMarks'
+import { ShipmentPlanRefresh } from '../components/ShipmentPlanRefresh'
 const UpdExportModal = lazy(() => import('../components/UpdExportModal').then(m => ({ default: m.UpdExportModal })))
 // Temporarily hide outgoing UPD export while the EDI workflow is on hold.
 const UPD_EXPORT_VISIBLE = false
@@ -344,6 +345,8 @@ export function ShipmentPage({
         </span>
       </header>
 
+      {document?.status === 'draft' && document.moysklad_id && <ShipmentPlanRefresh key={document.id}
+        documentId={document.id} summary={document.plan_sync} disabled={opening || sending || openingWriteoff} />}
       {czTokenExpired && (
         <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
           <span className="alert__spacer">

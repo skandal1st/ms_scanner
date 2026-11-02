@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { productsApi, scansApi } from '../api/client'
 import { useModal } from '../components/ModalProvider'
 import { useScanStore } from '../store/scanStore'
@@ -7,6 +8,7 @@ import { applyScanEvent } from '../lib/scanEvents'
 
 // No COM port, keyboard handlers or focus changes: safe for embedded TSD monitoring.
 export function useScanUpdates(documentId: string | null, onVerifyDone?: (failed: boolean) => void) {
+  const cache = useQueryClient()
   const modal = useModal()
   const confirmations = useRef(new Set<string>())
   const syncing = useRef(false)
@@ -32,6 +34,10 @@ export function useScanUpdates(documentId: string | null, onVerifyDone?: (failed
     finally { syncing.current = false }
   }
   useDocumentLive(documentId, false, (data) => {
+      if (data.type === 'plan_changed') {
+        void cache.invalidateQueries({ queryKey: ['document', documentId] })
+        return
+      }
       if (syncing.current) inflightEvents.current.push(data)
       if (['scan_upsert', 'scan_removed', 'scans_reset'].includes(data.type)) {
         const store = useScanStore.getState()
