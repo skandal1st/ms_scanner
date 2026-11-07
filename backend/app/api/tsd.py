@@ -46,6 +46,7 @@ from app.db.models import (
 from app.db.session import get_db
 from app.services.document_guard import lock_ms_document
 from app.services.collection_start import collection_started, require_collection_started
+from app.services.collection_time import CollectionStartRequest
 from app.services.scan_events import publish_scan, publish_removed, publish_event
 from app.services.chestnyznak import is_sscc, normalize_sscc
 from app.services.moysklad import (MoySkladService, customer_order_links, customer_order_empty_message,
@@ -834,12 +835,13 @@ async def refresh_tsd_plan(document_id: UUID, device: TsdDevice = Depends(get_sh
 @router.post("/documents/{document_id}/start-collection")
 async def start_tsd_collection(document_id: UUID,
                                device: TsdDevice = Depends(get_shipping_device),
-                               db: AsyncSession = Depends(get_db)):
+                               db: AsyncSession = Depends(get_db), body: CollectionStartRequest | None = None):
     doc = await _owned_tsd_document(db, device, document_id)
     # Require an active session on this device as well as workplace access.
     await get_tsd_document(document_id, device, db)
     from app.services.collection_start import start_collection
-    await start_collection(db, doc, await _ms_for_user(db, device.user_id))
+    await start_collection(db, doc, await _ms_for_user(db, device.user_id),
+                           client_timezone=body.timezone if body else None)
     return {'status': 'started', 'collection_started': True}
 
 

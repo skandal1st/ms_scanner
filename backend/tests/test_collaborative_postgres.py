@@ -27,7 +27,7 @@ async def context(monkeypatch):
         user = User(id=uuid4(), email=f"{uuid4()}@example.test", password_hash="")
         db.add(user)
         await db.flush()
-        profile = OrganizationProfile(user_id=user.id, moysklad_organization_id="org", name="Audit")
+        profile = OrganizationProfile(user_id=user.id, moysklad_organization_id="org", name="Audit", shipment_timezone='Europe/Moscow')
         db.add(profile)
         await db.flush()
         workplace = Workplace(user_id=user.id, organization_profile_id=profile.id, name="Audit", store_ids=[])
@@ -37,7 +37,7 @@ async def context(monkeypatch):
         db.add_all(devices)
         await db.commit()
     ms_id = str(uuid4())
-    ms = NS(get_document=AsyncMock(return_value={"name": "Audit", "organization": {"id": "org"}, "store": {"id": "store"}}),
+    ms = NS(change_collection_state=AsyncMock(), get_document=AsyncMock(return_value={"name": "Audit", "organization": {"id": "org"}, "store": {"id": "store"}}),
             build_plan=AsyncMock(return_value=[{"product_id": "p", "gtin": "04620543080527", "product_name": "Audit",
                                                "marked": False, "expected_qty": 100, "pack_quantities": {}}]))
     monkeypatch.setattr(tsd, "_ms_for_user", AsyncMock(return_value=ms))
@@ -104,7 +104,9 @@ async def test_repeated_terminal_open_with_statuses_reuses_session(monkeypatch):
             async with factory() as db:
                 return await tsd.start_tsd_collection(results[0].id, devices[0], db)
         await asyncio.wait_for(asyncio.gather(begin(), begin()), timeout=10)
-        ms.change_collection_state.assert_awaited_once_with('demand', ms_id, str(state))
+        ms.change_collection_state.assert_awaited_once()
+        assert ms.change_collection_state.call_args.args == ('demand', ms_id, str(state))
+        assert ms.change_collection_state.call_args.kwargs['moment']
         reopened = await open_terminal(factory, devices[0], ms_id)
         assert reopened.collection_started
         ms.change_collection_state.assert_awaited_once()

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.api import documents, scans, tsd
 from app.db.models import DocumentKind, DocumentStatus
 from app.services import collection_start
+from app.services.collection_time import CollectionStartRequest
 
 
 def shipment(marker=None):
@@ -89,7 +90,7 @@ async def test_tsd_start_checks_device_session_and_calls_shared_start(monkeypatc
     start = AsyncMock()
     monkeypatch.setattr(collection_start, 'start_collection', start)
     db = NS()
-    result = await tsd.start_tsd_collection(doc.id, device, db)
+    result = await tsd.start_tsd_collection(doc.id, device, db, CollectionStartRequest(timezone='Asia/Omsk'))
     assert result['collection_started']
     session.assert_awaited_once_with(doc.id, device, db)
-    start.assert_awaited_once_with(db, doc, ms)
+    start.assert_awaited_once_with(db, doc, ms, client_timezone='Asia/Omsk')

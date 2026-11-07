@@ -846,15 +846,26 @@ class MoySkladService:
             raise ValueError('Не удалось найти заказ покупателя по связанному счёту. Откройте отгрузку из заказа покупателя.')
         return next(iter(matches))
 
-    async def change_collection_state(self, kind: str, doc_id: str, state_id: str):
+    async def change_collection_state(self, kind: str, doc_id: str, state_id: Optional[str], *, moment: Optional[str] = None):
         if kind not in ('demand', 'customerorder'):
             raise ValueError('Смена статуса начала сборки доступна только для отгрузки и заказа')
+        payload = {}
+        if state_id:
+            payload['state'] = {'meta': {'href': f'{self.base_url}/entity/{kind}/metadata/states/{state_id}',
+                                         'type': 'state', 'mediaType': 'application/json'}}
+        if moment is not None:
+            if kind != 'demand':
+                raise ValueError('При начале сборки можно менять дату только у отгрузки')
+            payload['moment'] = moment
+        if not payload:
+            return
         async with httpx.AsyncClient(timeout=httpx.Timeout(30, connect=10)) as client:
             response = await self._request_with_retry(client, 'PUT', f'{self.base_url}/entity/{kind}/{doc_id}',
-                json={'state': {'meta': {'href': f'{self.base_url}/entity/{kind}/metadata/states/{state_id}',
-                                        'type': 'state', 'mediaType': 'application/json'}}})
+                json=payload)
             response.raise_for_status()
-        logger.info('moysklad.collection_state.changed', kind=kind, doc_id=doc_id, state_id=state_id)
+            if moment is not None and str(response.json().get('moment', ''))[:16] != moment[:16]:
+                raise ValueError('МойСклад не подтвердил новую дату отгрузки. Повторите начало сборки.')
+        logger.info('moysklad.collection_state.changed', kind=kind, doc_id=doc_id, state_id=state_id, moment=moment)
 
     async def update_document(
         self, kind: str, doc_id: str, scans: List[Dict],

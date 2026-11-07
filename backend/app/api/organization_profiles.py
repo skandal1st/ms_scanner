@@ -2,7 +2,7 @@ from typing import Optional, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from app.core.security import decrypt_token
 from app.db.models import Integration, OrganizationProfile, User, Workplace
 from app.db.session import get_db
 from app.services.moysklad import MoySkladService
+from app.services.collection_time import validate_timezone
 
 router = APIRouter(prefix="/organization-profiles", tags=["organization-profiles"])
 
@@ -103,6 +104,12 @@ async def get_order_filters(profile: OrganizationProfile = Depends(get_active_or
 class ShipmentStateRequest(BaseModel):
     state_id: UUID | None = None
     order_state_id: UUID | None = None
+    shipment_timezone: str | None = Field(default=None, max_length=100)
+
+    @field_validator('shipment_timezone')
+    @classmethod
+    def valid_timezone(cls, value):
+        return validate_timezone(value)
 
 
 @router.get('/shipment-status-settings')
@@ -117,7 +124,8 @@ async def shipment_status_settings(current_user: User = Depends(get_current_user
     except Exception as exc:
         raise HTTPException(502, 'Не удалось загрузить статусы отгрузок из МойСклада. Повторите попытку.') from exc
     return {'state_id': profile.shipment_start_state_id, 'states': states,
-            'order_state_id': profile.customer_order_start_state_id, 'order_states': order_states}
+            'order_state_id': profile.customer_order_start_state_id, 'order_states': order_states,
+            'shipment_timezone': profile.shipment_timezone}
 
 
 @router.put('/shipment-status-settings')
@@ -133,8 +141,11 @@ async def save_shipment_status(body: ShipmentStateRequest, current_user: User = 
     profile.shipment_start_state_id = body.state_id
     if 'order_state_id' in body.model_fields_set:
         profile.customer_order_start_state_id = body.order_state_id
+    if 'shipment_timezone' in body.model_fields_set:
+        profile.shipment_timezone = body.shipment_timezone
     await db.commit()
-    return {'state_id': body.state_id, 'order_state_id': getattr(profile, 'customer_order_start_state_id', None)}
+    return {'state_id': body.state_id, 'order_state_id': getattr(profile, 'customer_order_start_state_id', None),
+            'shipment_timezone': getattr(profile, 'shipment_timezone', None)}
 
 
 @router.put("/order-filters", response_model=list[CustomerOrderFilter])

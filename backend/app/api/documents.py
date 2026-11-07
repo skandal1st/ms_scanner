@@ -15,6 +15,7 @@ from app.services.moysklad import (MoySkladService, SUPPORTED_KINDS, customer_or
 from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
 from app.services.collection_start import collection_started, require_collection_started
+from app.services.collection_time import CollectionStartRequest
 from app.services.shipment_labels import update_shipment_metadata, shipment_display_name
 from app.services.shipment_sessions import shipment_session_query, visible_documents
 from app.schemas.upd_export import UpdExportOptions
@@ -1043,7 +1044,7 @@ async def accept_document_alias(
 
 @router.post('/{document_id}/start-collection')
 async def begin_collection(document_id: UUID, current_user: User = Depends(get_current_user),
-                           db: AsyncSession = Depends(get_db)):
+                           db: AsyncSession = Depends(get_db), body: CollectionStartRequest | None = None):
     doc = (await db.execute(select(Document).where(
         Document.id == document_id, Document.user_id == current_user.id,
     ))).scalar_one_or_none()
@@ -1052,5 +1053,6 @@ async def begin_collection(document_id: UUID, current_user: User = Depends(get_c
     if doc.kind != DocumentKind.demand or not doc.moysklad_id:
         return {'status': 'started'}
     from app.services.collection_start import start_collection
-    await start_collection(db, doc, await _get_ms_service(current_user, db))
+    await start_collection(db, doc, await _get_ms_service(current_user, db),
+                           client_timezone=body.timezone if body else None)
     return {'status': 'started', 'collection_started': True}
