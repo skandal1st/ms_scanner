@@ -334,6 +334,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
 
         <ChestnyZnakSection integration={integration} />
         <AcceptanceSettings integration={integration} />
+        <ShipmentStatusSettings />
         <WorkplaceScannerSettings />
         <ScannerSection embedded={embedded} />
         </div>
@@ -347,7 +348,6 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         <div role="tabpanel" id="settings-panel-filters" aria-labelledby="settings-tab-filters" hidden={activeTab !== 'filters'} tabIndex={0}>
           {visitedTabs.includes('filters') && <>
             <CustomerOrderFiltersSettings />
-            <ShipmentStatusSettings />
           </>}
         </div>
         <div role="tabpanel" id="settings-panel-inventory" aria-labelledby="settings-tab-inventory" hidden={activeTab !== 'inventory'} tabIndex={0}>

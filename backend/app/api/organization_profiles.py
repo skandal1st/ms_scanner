@@ -105,6 +105,7 @@ class ShipmentStateRequest(BaseModel):
     state_id: UUID | None = None
     order_state_id: UUID | None = None
     shipment_timezone: str | None = Field(default=None, max_length=100)
+    shipment_date_on_collection_start: bool = False
 
     @field_validator('shipment_timezone')
     @classmethod
@@ -125,7 +126,8 @@ async def shipment_status_settings(current_user: User = Depends(get_current_user
         raise HTTPException(502, 'Не удалось загрузить статусы отгрузок из МойСклада. Повторите попытку.') from exc
     return {'state_id': profile.shipment_start_state_id, 'states': states,
             'order_state_id': profile.customer_order_start_state_id, 'order_states': order_states,
-            'shipment_timezone': profile.shipment_timezone}
+            'shipment_timezone': profile.shipment_timezone,
+            'shipment_date_on_collection_start': bool(getattr(profile, 'shipment_date_on_collection_start', False))}
 
 
 @router.put('/shipment-status-settings')
@@ -143,9 +145,12 @@ async def save_shipment_status(body: ShipmentStateRequest, current_user: User = 
         profile.customer_order_start_state_id = body.order_state_id
     if 'shipment_timezone' in body.model_fields_set:
         profile.shipment_timezone = body.shipment_timezone
+    if 'shipment_date_on_collection_start' in body.model_fields_set:
+        profile.shipment_date_on_collection_start = body.shipment_date_on_collection_start
     await db.commit()
     return {'state_id': body.state_id, 'order_state_id': getattr(profile, 'customer_order_start_state_id', None),
-            'shipment_timezone': getattr(profile, 'shipment_timezone', None)}
+            'shipment_timezone': getattr(profile, 'shipment_timezone', None),
+            'shipment_date_on_collection_start': bool(getattr(profile, 'shipment_date_on_collection_start', False))}
 
 
 @router.put("/order-filters", response_model=list[CustomerOrderFilter])

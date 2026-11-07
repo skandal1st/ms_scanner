@@ -86,3 +86,17 @@ async def test_order_date_cannot_be_changed_and_ignored_shipment_date_is_not_suc
     ms._request_with_retry.return_value = httpx.Response(200, json={'moment': '2026-11-07 10:00:00'}, request=httpx.Request('PUT', 'https://ms'))
     with pytest.raises(ValueError, match='не подтвердил'):
         await ms.change_collection_state('demand', 'shipment', None, moment='2026-11-08 08:30:00')
+
+
+async def test_date_opt_in_is_explicit_preserves_old_clients_and_other_profiles():
+    profile = NS(shipment_start_state_id=None, shipment_timezone=None,
+                 shipment_date_on_collection_start=False)
+    other = NS(shipment_date_on_collection_start=False)
+    db = NS(commit=AsyncMock())
+    result = await save_shipment_status(ShipmentStateRequest(shipment_date_on_collection_start=True), NS(), profile, db)
+    assert result['shipment_date_on_collection_start'] is True
+    await save_shipment_status(ShipmentStateRequest(), NS(), profile, db)
+    assert profile.shipment_date_on_collection_start is True
+    await save_shipment_status(ShipmentStateRequest(shipment_date_on_collection_start=False), NS(), profile, db)
+    assert profile.shipment_date_on_collection_start is False
+    assert other.shipment_date_on_collection_start is False

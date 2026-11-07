@@ -44,32 +44,32 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
                 await db.commit()
             return
         owner = next((d for d in siblings if (d.upd_meta or {}).get('collection_start')), doc)
+        profile = (await db.execute(select(OrganizationProfile).where(
+            OrganizationProfile.id == doc.organization_profile_id,
+            OrganizationProfile.user_id == doc.user_id,
+        ))).scalar_one_or_none()
+        date_enabled = bool(profile and profile.shipment_date_on_collection_start)
         marker = (owner.upd_meta or {}).get('collection_start')
         if marker:
             marker = dict(marker)
-            # An old collection may already have changed the shipment status
-            # before a failure on the order. Do not retrofit a date on reopening.
-            if marker.get('shipment_done') and not marker.get('shipment_moment'):
+            # Disabling the setting cancels any pending date write. Never add a
+            # date to a collection that already began without one.
+            if not date_enabled or not marker.get('shipment_moment'):
                 marker['moment_done'] = True
-        if not marker or (not marker.get('shipment_moment') and not marker.get('moment_done')):
-            profile = (await db.execute(select(OrganizationProfile).where(
-                OrganizationProfile.id == doc.organization_profile_id,
-                OrganizationProfile.user_id == doc.user_id,
-            ))).scalar_one_or_none()
-            timezone_name = getattr(profile, 'shipment_timezone', None) or client_timezone
-            try:
-                zone = resolve_collection_timezone(timezone_name, client_utc_offset_minutes)
-            except ValueError as exc:
-                raise HTTPException(400, str(exc)) from exc
-            if not marker:
-                marker = {'started_at': datetime.now(timezone.utc).isoformat(),
-                          'shipment_state': str(profile.shipment_start_state_id) if profile and profile.shipment_start_state_id else None,
-                          'order_state': str(profile.customer_order_start_state_id) if profile and profile.customer_order_start_state_id else None}
-            else:
-                marker = dict(marker)
-            started_at = datetime.fromisoformat(marker['started_at'])
-            marker['shipment_timezone'] = str(zone)
-            marker['shipment_moment'] = shipment_moment(started_at, zone)
+        else:
+            started_at = datetime.now(timezone.utc)
+            marker = {'started_at': started_at.isoformat(),
+                      'shipment_state': str(profile.shipment_start_state_id) if profile and profile.shipment_start_state_id else None,
+                      'order_state': str(profile.customer_order_start_state_id) if profile and profile.customer_order_start_state_id else None,
+                      'moment_done': not date_enabled}
+            if date_enabled:
+                timezone_name = profile.shipment_timezone or client_timezone
+                try:
+                    zone = resolve_collection_timezone(timezone_name, client_utc_offset_minutes)
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                marker['shipment_timezone'] = str(zone)
+                marker['shipment_moment'] = shipment_moment(started_at, zone)
 
         async def save():
             owner.upd_meta = {**(owner.upd_meta or {}), 'collection_start': dict(marker)}
@@ -91,8 +91,8 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
             # the persisted date even after midnight or from a different terminal.
             if not marker.get('moment_done') or (marker['shipment_state'] and not marker.get('shipment_done')):
                 target = marker['shipment_state'] if not marker.get('shipment_done') else None
-                await ms.change_collection_state('demand', doc.moysklad_id, target,
-                    moment=marker['shipment_moment'] if not marker.get('moment_done') else None)
+                date_fields = {'moment': marker['shipment_moment']} if not marker.get('moment_done') else {}
+                await ms.change_collection_state('demand', doc.moysklad_id, target, **date_fields)
                 marker['shipment_done'] = True
                 marker['moment_done'] = True
                 await save()

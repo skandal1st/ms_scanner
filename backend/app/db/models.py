@@ -157,6 +157,7 @@ class OrganizationProfile(Base):
     shipment_start_state_id = Column(UUID(as_uuid=True), nullable=True)
     customer_order_start_state_id = Column(UUID(as_uuid=True), nullable=True)
     shipment_timezone = Column(String(100), nullable=True)
+    shipment_date_on_collection_start = Column(Boolean, nullable=False, default=False, server_default="false")
     shipment_sent_state_id = Column(UUID(as_uuid=True), nullable=True)
     customer_order_sent_state_id = Column(UUID(as_uuid=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

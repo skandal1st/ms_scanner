@@ -22,14 +22,14 @@ from app.services.collection_start import start_collection
 pytestmark = pytest.mark.skipif(os.getenv('AUDIT_POSTGRES') != '1', reason='requires isolated PostgreSQL')
 
 
-async def context(monkeypatch, enabled=True):
+async def context(monkeypatch, enabled=True, date_enabled=True):
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     monkeypatch.setattr(session, 'engine', engine)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as db:
         user = User(id=uuid4(), email=f'{uuid4()}@example.test', password_hash='')
         profile = OrganizationProfile(id=uuid4(), user_id=user.id, name='Документ',
-            shipment_timezone='Europe/Moscow',
+            shipment_timezone='Europe/Moscow', shipment_date_on_collection_start=date_enabled,
             shipment_start_state_id=uuid4() if enabled else None,
             customer_order_start_state_id=uuid4() if enabled else None)
         other = OrganizationProfile(id=uuid4(), user_id=user.id, name='Другое', is_default=True,
@@ -266,7 +266,7 @@ async def test_parallel_organizations_keep_independent_dates(monkeypatch):
         async with factory() as db:
             first = await db.get(OrganizationProfile, profile.id)
             first.shipment_timezone = 'Asia/Vladivostok'
-            second = OrganizationProfile(user_id=user.id, name='Другой город', shipment_timezone='America/New_York')
+            second = OrganizationProfile(user_id=user.id, name='Другой город', shipment_timezone='America/New_York', shipment_date_on_collection_start=True)
             db.add(second)
             await db.flush()
             second_doc = Document(user_id=user.id, name='Вторая сборка', kind=DocumentKind.demand,
@@ -319,5 +319,78 @@ async def test_missing_state_or_wrong_order_prevents_all_status_writes(monkeypat
             with pytest.raises(HTTPException):
                 await documents.begin_collection(doc.id, user, db)
         ms.change_collection_state.assert_not_awaited()
+    finally:
+        await engine.dispose()
+
+
+async def test_date_setting_defaults_off_for_existing_and_new_profiles(monkeypatch):
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, date_enabled=False)
+    try:
+        async with factory() as db:
+            profile = await db.get(OrganizationProfile, profile.id)
+            profile.shipment_timezone = None
+            other = OrganizationProfile(user_id=user.id, name='New profile')
+            db.add(other)
+            await db.commit()
+            assert other.shipment_date_on_collection_start is False
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db)
+            saved = await db.get(Document, doc.id)
+            assert 'shipment_moment' not in saved.upd_meta['collection_start']
+        assert ms.change_collection_state.await_count == 2
+        assert all(not call.kwargs for call in ms.change_collection_state.call_args_list)
+    finally:
+        await engine.dispose()
+
+
+async def test_date_and_statuses_disabled_make_no_external_writes(monkeypatch):
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, enabled=False, date_enabled=False)
+    try:
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db)
+            saved = await db.get(Document, doc.id)
+            assert saved.upd_meta['collection_start']['done']
+        ms.change_collection_state.assert_not_awaited()
+        ms.get_document.assert_not_awaited()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize('shipment_done', [False, True])
+async def test_disabling_setting_cancels_pending_date_from_previous_version(monkeypatch, shipment_done):
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, date_enabled=False)
+    try:
+        async with factory() as db:
+            saved = await db.get(Document, doc.id)
+            saved.upd_meta = {'collection_start': {
+                'started_at': '2026-11-07T10:00:00+00:00',
+                'shipment_state': str(profile.shipment_start_state_id),
+                'order_state': str(profile.customer_order_start_state_id),
+                'shipment_moment': '2026-11-07 13:00:00',
+                'shipment_done': shipment_done, 'moment_done': shipment_done}}
+            await db.commit()
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db)
+        assert ms.change_collection_state.await_count == (1 if shipment_done else 2)
+        assert all(not call.kwargs for call in ms.change_collection_state.call_args_list)
+    finally:
+        await engine.dispose()
+
+
+async def test_enabling_date_does_not_retrofit_started_collection(monkeypatch):
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, date_enabled=False)
+    ms.change_collection_state.side_effect = [None, httpx.ReadTimeout('order timeout'), None]
+    try:
+        async with factory() as db:
+            with pytest.raises(HTTPException):
+                await documents.begin_collection(doc.id, user, db)
+        async with factory() as db:
+            saved = await db.get(OrganizationProfile, profile.id)
+            saved.shipment_date_on_collection_start = True
+            await db.commit()
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db)
+        assert [call.args[0] for call in ms.change_collection_state.call_args_list] == ['demand', 'customerorder', 'customerorder']
+        assert all(not call.kwargs for call in ms.change_collection_state.call_args_list)
     finally:
         await engine.dispose()
