@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { installTsdAuth } from '../lib/tsdAuth'
-import { getClientTimezone } from '../lib/clientTimezone'
+import { getClientTimezoneContext } from '../lib/clientTimezone'
 import { canonicalGtin, confirmGtinConflicts, type GtinConflict } from '../lib/gtinConfirmation'
 
 const api = axios.create({
@@ -561,7 +561,7 @@ export const documentsApi = {
   resolve: (moysklad_id: string, kind: DocumentKind, customer_order_id?: string) =>
     api.post<Document>('/documents/resolve', { moysklad_id, kind, customer_order_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
-  startCollection: (id: string) => api.post(`/documents/${id}/start-collection`, { timezone: getClientTimezone() }),
+  startCollection: (id: string) => api.post(`/documents/${id}/start-collection`, getClientTimezoneContext()),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   importShipmentCodes: (id: string) =>
     api.post<{ imported: number; skipped: number; source_name: string }>(`/documents/${id}/import-shipment-codes`),
@@ -1165,7 +1165,7 @@ export const tsdApi = {
   selectDocument: (moysklad_id: string, customer_order_id?: string) =>
     tsdClient.post<TsdDocumentDetail>('/tsd/documents/select', { moysklad_id, customer_order_id }),
   getDocument: (id: string) => tsdClient.get<TsdDocumentDetail>(`/tsd/documents/${id}`),
-  startCollection: (id: string) => tsdClient.post(`/tsd/documents/${id}/start-collection`, { timezone: getClientTimezone() }),
+  startCollection: (id: string) => tsdClient.post(`/tsd/documents/${id}/start-collection`, getClientTimezoneContext()),
   verify: (id: string) => tsdClient.post(`/tsd/documents/${id}/verify`, undefined, { params: { recheck_all: true } }),
   scan: (id: string, code: string, moysklad_product_id?: string) =>
     tsdClient.post<Scan>(`/tsd/documents/${id}/scans`, { code, moysklad_product_id }),

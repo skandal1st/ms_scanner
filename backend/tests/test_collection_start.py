@@ -215,6 +215,28 @@ async def test_missing_timezone_prevents_external_writes(monkeypatch):
         await engine.dispose()
 
 
+async def test_tsd_offset_fallback_is_saved_and_reused_when_device_offset_changes(monkeypatch):
+    from app.services import collection_start
+    monkeypatch.setattr(collection_start, 'datetime', FrozenDatetime)
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, enabled=False)
+    try:
+        async with factory() as db:
+            profile = await db.get(OrganizationProfile, profile.id)
+            profile.shipment_timezone = None
+            await db.commit()
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db, CollectionStartRequest(utc_offset_minutes=345))
+            saved = await db.get(Document, doc.id)
+            assert saved.upd_meta['collection_start']['shipment_timezone'] == 'UTC+05:45'
+            assert saved.upd_meta['collection_start']['shipment_moment'] == '2026-11-08 04:15:00'
+        async with factory() as db:
+            await documents.begin_collection(doc.id, user, db, CollectionStartRequest(utc_offset_minutes=-300))
+        ms.change_collection_state.assert_awaited_once()
+        assert ms.change_collection_state.call_args.kwargs['moment'] == '2026-11-08 04:15:00'
+    finally:
+        await engine.dispose()
+
+
 async def test_orderless_shipment_only_updates_shipment(monkeypatch):
     engine, factory, user, profile, doc, ms = await context(monkeypatch)
     ms.resolve_shipment_order.return_value = None

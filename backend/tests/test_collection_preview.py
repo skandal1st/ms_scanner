@@ -90,7 +90,7 @@ async def test_tsd_start_checks_device_session_and_calls_shared_start(monkeypatc
     start = AsyncMock()
     monkeypatch.setattr(collection_start, 'start_collection', start)
     db = NS()
-    result = await tsd.start_tsd_collection(doc.id, device, db, CollectionStartRequest(timezone='Asia/Omsk'))
+    result = await tsd.start_tsd_collection(doc.id, device, db, CollectionStartRequest(timezone='Asia/Omsk', utc_offset_minutes=360))
     assert result['collection_started']
     session.assert_awaited_once_with(doc.id, device, db)
-    start.assert_awaited_once_with(db, doc, ms, client_timezone='Asia/Omsk')
+    start.assert_awaited_once_with(db, doc, ms, client_timezone='Asia/Omsk', client_utc_offset_minutes=360)

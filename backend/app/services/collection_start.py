@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app.db.models import Document, DocumentKind, DocumentStatus, OrganizationProfile
 from app.services.document_guard import processing_lock
 from app.services.shipment_guard import ensure_active_shipment
-from app.services.collection_time import shipment_moment, validate_timezone
+from app.services.collection_time import shipment_moment, resolve_collection_timezone
 
 
 def collection_started(doc):
@@ -21,7 +21,7 @@ def require_collection_started(doc):
         raise HTTPException(409, 'Сначала нажмите «Начать сборку».')
 
 
-async def start_collection(db, doc, ms, *, client_timezone=None):
+async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offset_minutes=None):
     if doc.kind != DocumentKind.demand or not doc.moysklad_id:
         return
     async with processing_lock(f'ms:{doc.user_id}:demand:{doc.moysklad_id}', wait=True) as acquired:
@@ -57,10 +57,8 @@ async def start_collection(db, doc, ms, *, client_timezone=None):
                 OrganizationProfile.user_id == doc.user_id,
             ))).scalar_one_or_none()
             timezone_name = getattr(profile, 'shipment_timezone', None) or client_timezone
-            if not timezone_name:
-                raise HTTPException(400, 'Не удалось определить часовой пояс устройства. Выберите часовой пояс юрлица в настройках.')
             try:
-                timezone_name = validate_timezone(timezone_name)
+                zone = resolve_collection_timezone(timezone_name, client_utc_offset_minutes)
             except ValueError as exc:
                 raise HTTPException(400, str(exc)) from exc
             if not marker:
@@ -70,8 +68,8 @@ async def start_collection(db, doc, ms, *, client_timezone=None):
             else:
                 marker = dict(marker)
             started_at = datetime.fromisoformat(marker['started_at'])
-            marker['shipment_timezone'] = timezone_name
-            marker['shipment_moment'] = shipment_moment(started_at, timezone_name)
+            marker['shipment_timezone'] = str(zone)
+            marker['shipment_moment'] = shipment_moment(started_at, zone)
 
         async def save():
             owner.upd_meta = {**(owner.upd_meta or {}), 'collection_start': dict(marker)}

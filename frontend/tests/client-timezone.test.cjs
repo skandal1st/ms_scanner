@@ -25,3 +25,16 @@ test('old devices can use a configured zone when auto detection is unavailable',
   assert.equal(options.filter(zone => zone === 'Asia/Omsk').length, 1)
   assert.ok(options.includes('America/New_York'))
 })
+
+test('Android without Intl timezone data sends its UTC offset, including fractional hours', () => {
+  let offset = -345
+  class DeviceDate extends Date { getTimezoneOffset() { return offset } }
+  const result = {}
+  vm.runInNewContext(code, { exports: result, Date: DeviceDate, Intl: { DateTimeFormat: () => { throw new Error('unsupported') } } })
+  assert.equal(result.getClientTimezoneContext().timezone, null)
+  assert.equal(result.getClientTimezoneContext().utc_offset_minutes, 345)
+  offset = 300
+  assert.equal(result.getClientTimezoneContext().utc_offset_minutes, -300)
+  offset = NaN
+  assert.equal(result.getClientTimezoneContext().utc_offset_minutes, null)
+})

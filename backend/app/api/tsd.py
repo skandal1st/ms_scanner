@@ -841,7 +841,8 @@ async def start_tsd_collection(document_id: UUID,
     await get_tsd_document(document_id, device, db)
     from app.services.collection_start import start_collection
     await start_collection(db, doc, await _ms_for_user(db, device.user_id),
-                           client_timezone=body.timezone if body else None)
+                           client_timezone=body.timezone if body else None,
+                           client_utc_offset_minutes=body.utc_offset_minutes if body else None)
     return {'status': 'started', 'collection_started': True}
 
 

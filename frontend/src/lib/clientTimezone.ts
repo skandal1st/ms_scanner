@@ -7,6 +7,16 @@ export function getClientTimezone(): string | null {
   }
 }
 
+export function getClientTimezoneContext(): { timezone: string | null; utc_offset_minutes: number | null } {
+  let offset: number | null = null
+  try {
+    // Date is also available on older Android WebViews without Intl timezone data.
+    const detected = -new Date().getTimezoneOffset()
+    if (Number.isInteger(detected) && detected >= -720 && detected <= 840) offset = detected
+  } catch { /* The server will request an explicit organization timezone. */ }
+  return { timezone: getClientTimezone(), utc_offset_minutes: offset }
+}
+
 export const RUSSIAN_TIMEZONES = [
   ['Europe/Kaliningrad', 'Калининград'],
   ['Europe/Moscow', 'Москва'],

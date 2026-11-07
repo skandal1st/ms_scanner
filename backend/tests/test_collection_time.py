@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.api.organization_profiles import ShipmentStateRequest, save_shipment_status
-from app.services.collection_time import CollectionStartRequest, shipment_moment
+from app.services.collection_time import CollectionStartRequest, shipment_moment, resolve_collection_timezone
 from app.services.moysklad import MoySkladService
 
 
@@ -25,6 +25,29 @@ def test_local_day_and_dst_are_calculated_from_server_instant():
     assert shipment_moment(at, 'America/New_York') == '2026-11-07 17:30:00'
     summer = datetime(2026, 7, 7, 22, 30, tzinfo=timezone.utc)
     assert shipment_moment(summer, 'America/New_York') == '2026-07-07 18:30:00'
+
+
+@pytest.mark.parametrize('offset,expected', [
+    (180, '2026-11-08 01:30:00'), (345, '2026-11-08 04:15:00'),
+    (-300, '2026-11-07 17:30:00'), (0, '2026-11-07 22:30:00'),
+])
+def test_offset_fallback_without_intl_uses_server_clock(offset, expected):
+    request = CollectionStartRequest(utc_offset_minutes=offset)
+    zone = resolve_collection_timezone(request.timezone, request.utc_offset_minutes)
+    assert shipment_moment(datetime(2026, 11, 7, 22, 30, tzinfo=timezone.utc), zone) == expected
+
+
+def test_named_zone_overrides_device_offset_and_missing_context_is_not_moscow():
+    zone = resolve_collection_timezone('Asia/Vladivostok', -300)
+    assert str(zone) == 'Asia/Vladivostok'
+    with pytest.raises(ValueError, match='Обновите страницу ТСД'):
+        resolve_collection_timezone(None)
+
+
+@pytest.mark.parametrize('offset', [-721, 841, True, '180', 1.5])
+def test_invalid_device_offset_is_rejected(offset):
+    with pytest.raises(ValidationError):
+        CollectionStartRequest(utc_offset_minutes=offset)
 
 
 async def test_profile_timezone_can_be_set_and_cleared_without_changing_other_profile():
