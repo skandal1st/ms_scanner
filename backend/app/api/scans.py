@@ -196,7 +196,7 @@ class CreateBoxRequest(BaseModel):
 
 
 # Кап на размер одной массовой загрузки списка марок (защита от гигантских payload).
-_BULK_MAX_CODES = 5000
+_BULK_MAX_CODES = 15000
 
 
 class BulkScanRequest(BaseModel):

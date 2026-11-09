@@ -73,7 +73,7 @@ async def test_inconsistent_cached_quantity_does_not_hide_missing_units():
 
 def test_empty_and_oversized_lists_are_rejected():
     from fastapi import HTTPException
-    for codes in [[], [' '], [A] * 5001, ['x' * 2049]]:
+    for codes in [[], [' '], [A] * 15001, ['x' * 2049]]:
         with pytest.raises(HTTPException):
             normalize_codes(codes)
 
@@ -165,3 +165,26 @@ async def test_boxes_only_requires_sscc_instead_of_mislabeling_gs1_aggregate():
     cz = NS(get_code_info=AsyncMock(return_value=NS(children=[A, B], package_type='BOX')))
     result = await resolve_import([BLOCK], [], cz, 'boxes')
     assert any('Для короба нужен SSCC' in c['message'] for c in result[3])
+
+
+async def test_boxes_only_does_not_require_earlier_unrelated_units_to_have_a_box():
+    loose = '010464027597309621LOOSE001'
+    cz = NS(unpack_box=AsyncMock(return_value=[A, B]))
+    result = await resolve_import([SSCC], [scan(loose)], cz, 'boxes')
+    assert not result[3]
+    assert set(result[1].values()) == {A, B, loose}
+    assert [box['code'] for box in result[6].values()] == [SSCC]
+
+
+async def test_boxes_only_rejects_partial_replacement_of_existing_aggregate():
+    loose = '010464027597309621LOOSE001'
+    cz = NS(unpack_box=AsyncMock(return_value=[A, B]))
+    result = await resolve_import([SSCC], [scan(BLOCK, [A, loose], 'GROUP')], cz, 'boxes')
+    assert any('лишь частично' in c['message'] for c in result[3])
+
+
+def test_import_accepts_fifteen_thousand_codes_including_classic_limit():
+    from app.api.scans import _BULK_MAX_CODES
+    codes = [f'010464027597309621UNIT{i:05d}' for i in range(15000)]
+    assert normalize_codes(codes) == codes
+    assert _BULK_MAX_CODES == 15000

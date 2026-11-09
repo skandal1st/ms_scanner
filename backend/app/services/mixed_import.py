@@ -31,8 +31,8 @@ def public_job(job):
 
 
 def normalize_codes(codes):
-    if not codes or len(codes) > 5000:
-        raise HTTPException(400, 'Загрузите от 1 до 5000 кодов за раз.')
+    if not codes or len(codes) > 15000:
+        raise HTTPException(400, 'Загрузите от 1 до 15000 кодов за раз.')
     result = []
     for raw in codes:
         if len(raw) > 2048:
@@ -244,8 +244,16 @@ async def resolve_import(codes, scans, cz, target='units'):
                     conflicts.append({'code': block['code'], 'message': 'Два разных короба содержат одну и ту же пачку. Нельзя выбрать короб автоматически.' if boxes else 'Два разных блока содержат одну и ту же пачку. Нельзя выбрать блок автоматически.'})
                     break
                 coverage[child_key] = block_key
+        if boxes:
+            # An unrelated earlier batch stays intact. A partially covered earlier
+            # aggregate cannot be removed or retained without losing/duplicating marks.
+            for parent in parents:
+                keys = {mark_key(c) for c in parent_units.get(str(parent.id), [])}
+                if keys & coverage.keys() and not keys.issubset(coverage):
+                    conflicts.append({'code': parent.code, 'message': 'Ранее загруженная упаковка лишь частично входит в выбранные короба. Проверьте состав упаковок; документ не изменён.'})
         if target in {'blocks', 'boxes'}:
-            for key, code in all_units.items():
+            required = {key: code for key, code in all_units.items() if not boxes or key in incoming_keys}
+            for key, code in required.items():
                 if key not in coverage:
                     conflicts.append({'code': code, 'message': 'Для марки нет подтверждённого короба в списке или документе. Добавьте SSCC короба либо выберите пачки.' if boxes else 'Для пачки нет подтверждённого блока в списке или документе. Добавьте код блока либо выберите пачки.'})
         return parents, all_units, occurrences, conflicts, len(incoming_keys - existing), parent_units, blocks
@@ -343,7 +351,12 @@ async def apply_blocks(db, doc, scans, blocks, parent_units, keep_units=None, *,
     from app.services.gtin_product_store import get_gtin_product
     existing, removed, added = {}, [], []
     retained_units = set()
-    keep_units = keep_units or set()
+    keep_units = set(keep_units or ())
+    if boxes:
+        covered = {mark_key(c) for box in blocks.values() for c in box['children']}
+        keep_units.update(mark_key(scan.code) for scan in scans
+                          if mark_key(scan.code) not in blocks
+                          and not covered.intersection(mark_key(c) for c in parent_units.get(str(scan.id), [scan.code])))
     for scan in scans:
         if scan.is_barcode:
             continue
@@ -502,7 +515,9 @@ async def run_import(document_id, user_id, job_id):
                        blocks=len(blocks) if blocks is not None and job.get('target') != 'boxes' else 0,
                        boxes=len(blocks) if blocks is not None and job.get('target') == 'boxes' else 0,
                        loose_units=loose_count,
-                       duplicates=max(0, occurrences - new_units), units=len(units))
+                       duplicates=max(0, occurrences - new_units),
+                       units=(len({mark_key(c) for box in blocks.values() for c in box['children']})
+                              if job.get('target') == 'boxes' else len(units)))
             job.pop('codes', None)
             store_job(doc, job)
             await db.commit()

@@ -74,7 +74,7 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title, a
         <div className="popup__title">{title ?? 'Загрузить список марок'}</div>
         <div className="popup__content">
           <p className="hint" style={{ marginTop: 0 }}>
-            Вставьте коды (по одному в строке) или выберите файл .txt / .csv.
+            Вставьте до 15 000 кодов (по одному в строке) или выберите файл .txt / .csv.
           </p>
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
             <input type="checkbox" checked={mixed} disabled={busy}
@@ -93,7 +93,7 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title, a
               </select>
             </label>
             <p className="hint">{target === 'boxes'
-              ? 'Останутся целые SSCC-короба для передачи в МойСклад. Вложенные блоки и пачки отдельными строками не добавляются. Каждая марка должна входить в подтверждённый короб.'
+              ? 'Останутся целые SSCC-короба для передачи в МойСклад. Вложенные блоки и пачки отдельными строками не добавляются. Каждая марка из нового списка должна входить в подтверждённый короб. Ранее загруженные марки вне этих коробов сохранятся.'
               : <>Коды коробов исключаются из результата. {target === 'blocks'
               ? 'Останутся коды блоков, а входящие в них пачки будут исключены. Для каждой пачки должен быть подтверждённый блок в списке или документе.'
               : target === 'blocks_loose'

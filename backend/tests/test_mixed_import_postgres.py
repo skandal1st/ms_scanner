@@ -416,7 +416,7 @@ async def test_boxes_conflict_keeps_original_scans_and_disallows_non_shipment(mo
     cz.unpack_box = AsyncMock(return_value=[B])
     try:
         async with factory() as db:
-            job = await mixed.start(db, doc, user, [SSCC], 'boxes')
+            job = await mixed.start(db, doc, user, [SSCC, A], 'boxes')
         await mixed.run_import(doc, user, job['id'])
         async with factory() as db:
             assert (await mixed.status(db, doc, user))['status'] == 'conflict'
@@ -428,5 +428,46 @@ async def test_boxes_conflict_keeps_original_scans_and_disallows_non_shipment(mo
             with pytest.raises(HTTPException) as exc:
                 await mixed.start(db, doc, user, [SSCC], 'boxes')
             assert exc.value.status_code == 400
+    finally:
+        await engine.dispose()
+
+
+async def test_sequential_box_batches_preserve_unrelated_earlier_units_and_groups(monkeypatch):
+    from tests.test_mixed_import import SSCC
+    loose = '010464027597309621LOOSE001'
+    grouped = '010464027597309621GROUPED001'
+    old_block = '010464027597309621OLDBLOCK001'
+    second_box = '00046402759700392565'
+    c = '010464027597309621UNIT003'
+    engine, factory, user, doc, cz = await context(monkeypatch, [(loose, None), (old_block, [grouped])])
+    async def contents(code):
+        return [A, B] if code == SSCC else [c]
+    cz.unpack_box = AsyncMock(side_effect=contents)
+    try:
+        async with factory() as db:
+            originals = (await db.execute(select(Scan).where(Scan.document_id == doc))).scalars().all()
+            original_ids = {s.id for s in originals}
+            job = await mixed.start(db, doc, user, [SSCC], 'boxes')
+        await mixed.run_import(doc, user, job['id'])
+        async with factory() as db:
+            rows = (await db.execute(select(Scan).where(Scan.document_id == doc))).scalars().all()
+            assert {s.code for s in rows} == {loose, old_block, SSCC}
+            assert original_ids.issubset({s.id for s in rows})
+            assert (await mixed.status(db, doc, user))['units'] == 2
+            first_box_id = next(s.id for s in rows if s.code == SSCC)
+            job = await mixed.start(db, doc, user, [second_box, c], 'boxes')
+        await mixed.run_import(doc, user, job['id'])
+        async with factory() as db:
+            rows = (await db.execute(select(Scan).where(Scan.document_id == doc))).scalars().all()
+            assert {s.code for s in rows} == {loose, old_block, SSCC, second_box}
+            assert (original_ids | {first_box_id}).issubset({s.id for s in rows})
+            assert next(s for s in rows if s.code == loose).status == ScanStatus.valid
+            result = await mixed.status(db, doc, user)
+            assert result['status'] == 'completed' and result['boxes'] == 2 and result['units'] == 3
+            job = await mixed.start(db, doc, user, [second_box], 'boxes')
+        await mixed.run_import(doc, user, job['id'])
+        async with factory() as db:
+            result = await mixed.status(db, doc, user)
+            assert result['added'] == 0 and result['removed'] == 0
     finally:
         await engine.dispose()
