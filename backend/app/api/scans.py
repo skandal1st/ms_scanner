@@ -804,7 +804,7 @@ async def refresh_packaging_composition(document_id: UUID, body: CompositionRefr
 class MixedImportRequest(BaseModel):
     document_id: UUID
     codes: List[str]
-    target: Literal['units', 'blocks'] = 'units'
+    target: Literal['units', 'blocks', 'blocks_loose', 'boxes'] = 'units'
 
 
 @router.post('/mixed-import', status_code=202)

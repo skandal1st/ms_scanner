@@ -103,6 +103,8 @@ export function ShipmentPage({
         const result = await scansApi.mixedBulk(documentId, codes, target)
         const { data: fresh } = await scansApi.list(documentId)
         if (useScanStore.getState().document?.id === documentId) useScanStore.getState().setScans(fresh)
+        if (result.target === 'boxes') return `Оставлено коробов: ${result.boxes ?? 0} (единиц с маркировкой: ${result.units ?? 0}). Вложенные блоки и пачки исключены из отдельных строк. Перед отправкой выполните проверку ЧЗ.`
+        if (result.target === 'blocks_loose') return `Оставлено блоков: ${result.blocks ?? 0}, пачек россыпью: ${result.loose_units ?? 0}. Всего единиц с маркировкой: ${result.units ?? 0}. Вложенные пачки и повторы исключены. Перед отправкой выполните проверку ЧЗ.`
         if (result.target === 'blocks') return `Оставлено блоков: ${result.blocks ?? 0} (пачек: ${result.units ?? 0}). Коды коробов и вложенные марки пачек исключены. Перед отправкой выполните проверку ЧЗ.`
         return `Добавлено новых марок: ${result.added ?? 0}. Повторов пропущено: ${result.duplicates ?? 0}. Блоки раскрыты до отдельных марок; перед отправкой выполните проверку ЧЗ.`
       }
@@ -585,6 +587,7 @@ export function ShipmentPage({
         onClose={() => setBulkOpen(false)}
         onSubmit={handleBulkMarks}
         busy={bulkBusy}
+        allowBoxes={document?.kind === 'demand'}
       />
 
       {UPD_EXPORT_VISIBLE && updOpen && document && <Suspense fallback={null}><UpdExportModal key={document.id} documentId={document.id}

@@ -745,11 +745,13 @@ export interface PackagingCompositionData {
   job: { id?: string; status?: string; error?: string | null }
 }
 
-export type MixedImportTarget = 'units' | 'blocks'
+export type MixedImportTarget = 'units' | 'blocks' | 'blocks_loose' | 'boxes'
 
 export interface MixedImportJob {
   target?: MixedImportTarget
   blocks?: number
+  boxes?: number
+  loose_units?: number
   id?: string
   status?: 'queued' | 'running' | 'completed' | 'conflict' | 'failed'
   added?: number

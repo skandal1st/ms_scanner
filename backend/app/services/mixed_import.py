@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, or_
 
 from app.core.logging import logger
-from app.db.models import Document, DocumentStatus, Scan, ScanStatus
+from app.db.models import Document, DocumentKind, DocumentStatus, Scan, ScanStatus
 from app.services.chestnyznak import (
     ChestnyZnakService, extract_gtin, is_sscc, normalize_sscc, verify_code_local_gs1,
 )
@@ -61,10 +61,12 @@ async def owned_document(db, document_id, user_id):
 async def start(db, document_id, user_id, codes, target='units'):
     from app.services.collection_start import require_collection_started
     from app.services.document_guard import editable_document
-    if target not in {'units', 'blocks'}:
-        raise HTTPException(400, 'Выберите уровень блоков или пачек.')
+    if target not in {'units', 'blocks', 'blocks_loose', 'boxes'}:
+        raise HTTPException(400, 'Выберите пачки, блоки, блоки с россыпью или короба.')
     codes = normalize_codes(codes)
     doc = await owned_document(db, document_id, user_id)
+    if target == 'boxes' and doc.kind != DocumentKind.demand:
+        raise HTTPException(400, 'Передача коробов целиком доступна только для отгрузки.')
     previous = (doc.upd_meta or {}).get('mixed_import') or {}
     if active_import(doc):
         if previous.get('codes') == codes and previous.get('target', 'units') == target:
@@ -206,20 +208,22 @@ async def resolve_import(codes, scans, cz, target='units'):
     if len(units) > MAX_UNITS:
         conflicts.append({'code': '', 'message': 'После раскрытия больше 20 000 марок. Разбейте файл на части.'})
     parent_units = {str(p.id): resolved.get(mark_key(p.code), []) for p in parents}
-    if target == 'blocks':
+    if target in {'blocks', 'blocks_loose', 'boxes'}:
         blocks = {}
+        boxes = target == 'boxes'
+        label = 'короба' if boxes else 'блока'
         for code in list({mark_key(c): c for c in [*(s.code for s in parents), *codes]}.values()):
             key = mark_key(code)
             kind = resolver.kinds.get(key, 'UNIT' if key in existing else None)
-            if kind == 'GROUP':
+            if kind == ('BOX' if boxes else 'GROUP'):
                 children = resolved.get(key, [])
-                if not verify_code_local_gs1(code).valid or not children:
-                    conflicts.append({'code': code, 'message': 'Не подтверждён код блока или его полный состав.'})
+                if not (is_sscc(code) if boxes else verify_code_local_gs1(code).valid) or not children:
+                    conflicts.append({'code': code, 'message': f'Не подтверждён код {label} или его полный состав. Для короба нужен SSCC.' if boxes else 'Не подтверждён код блока или его полный состав.'})
                 elif len({extract_gtin(c) for c in children}) != 1:
-                    conflicts.append({'code': code, 'message': 'Блок содержит разные товары; выберите уровень пачек.'})
+                    conflicts.append({'code': code, 'message': 'Короб содержит разные товары; выберите уровень пачек.' if boxes else 'Блок содержит разные товары; выберите уровень пачек.'})
                 else:
                     blocks[key] = {'code': code, 'children': children}
-            elif kind not in {'UNIT', 'BOX'}:
+            elif kind not in ({'UNIT', 'GROUP'} if boxes else {'UNIT', 'BOX'}):
                 conflicts.append({'code': code, 'message': 'Не удалось отличить блок от короба. Выберите пачки или повторите получение состава.'})
         all_units = dict(units)
         for scan in scans:
@@ -229,23 +233,26 @@ async def resolve_import(codes, scans, cz, target='units'):
         for block_key, block in blocks.items():
             children_keys = {mark_key(c) for c in block['children']}
             assignments = {s.moysklad_product_id for s in scans
-                           if mark_key(s.code) in children_keys and getattr(s, 'moysklad_product_id', None)}
+                           if getattr(s, 'moysklad_product_id', None) and (mark_key(s.code) in children_keys
+                           or (boxes and s.gtin == extract_gtin(block['children'][0])
+                               and any(mark_key(c) in children_keys for c in parent_units.get(str(s.id), []))))}
             if len(assignments) > 1:
-                conflicts.append({'code': block['code'], 'message': 'Пачки блока привязаны к разным товарам. Исправьте привязки или выберите пачки.'})
+                conflicts.append({'code': block['code'], 'message': 'Пачки короба привязаны к разным товарам. Исправьте привязки или выберите пачки.' if boxes else 'Пачки блока привязаны к разным товарам. Исправьте привязки или выберите пачки.'})
             for child in block['children']:
                 child_key = mark_key(child)
                 if child_key in coverage and coverage[child_key] != block_key:
-                    conflicts.append({'code': block['code'], 'message': 'Два разных блока содержат одну и ту же пачку. Нельзя выбрать блок автоматически.'})
+                    conflicts.append({'code': block['code'], 'message': 'Два разных короба содержат одну и ту же пачку. Нельзя выбрать короб автоматически.' if boxes else 'Два разных блока содержат одну и ту же пачку. Нельзя выбрать блок автоматически.'})
                     break
                 coverage[child_key] = block_key
-        for key, code in all_units.items():
-            if key not in coverage:
-                conflicts.append({'code': code, 'message': 'Для пачки нет подтверждённого блока в списке или документе. Добавьте код блока либо выберите пачки.'})
+        if target in {'blocks', 'boxes'}:
+            for key, code in all_units.items():
+                if key not in coverage:
+                    conflicts.append({'code': code, 'message': 'Для марки нет подтверждённого короба в списке или документе. Добавьте SSCC короба либо выберите пачки.' if boxes else 'Для пачки нет подтверждённого блока в списке или документе. Добавьте код блока либо выберите пачки.'})
         return parents, all_units, occurrences, conflicts, len(incoming_keys - existing), parent_units, blocks
     return parents, units, occurrences, conflicts, len(incoming_keys - existing), parent_units
 
 
-async def conflicts_elsewhere(db, doc, wanted):
+async def conflicts_elsewhere(db, doc, wanted, *, include_children=False):
     from app.services.mark_search import candidate_condition, mark_prefixes
     statement = select(Scan.code, Document.name).join(Document).where(
         Document.user_id == doc.user_id, Document.id != doc.id, Document.kind == doc.kind,
@@ -260,6 +267,19 @@ async def conflicts_elsewhere(db, doc, wanted):
                           for code in wanted[offset:offset + 100]))
         for code, name in (await db.execute(statement.where(condition))).all():
             result[mark_key(code)] = name
+    if include_children and wanted:
+        # Whole boxes must also be checked against marks inside other aggregates.
+        from sqlalchemy import case, cast, func, true
+        from sqlalchemy.dialects.postgresql import JSONB
+        children = func.jsonb_array_elements_text(case(
+            (func.jsonb_typeof(Scan.child_codes) == 'array', Scan.child_codes),
+            else_=cast([], JSONB))).table_valued('value').lateral()
+        nested = statement.with_only_columns(children.c.value, Document.name).join(children, true())
+        for offset in range(0, len(wanted), 100):
+            condition = or_(*(candidate_condition(children.c.value, mark_prefixes(code))
+                              for code in wanted[offset:offset + 100]))
+            for code, name in (await db.execute(nested.where(condition))).all():
+                result[mark_key(code)] = name
     return result
 
 
@@ -318,20 +338,24 @@ async def apply_units(db, doc, scans, parents, units, parent_units):
     return added, removed
 
 
-async def apply_blocks(db, doc, scans, blocks, parent_units):
+async def apply_blocks(db, doc, scans, blocks, parent_units, keep_units=None, *, boxes=False):
     from app.services.plan_matching import unique_plan_product
     from app.services.gtin_product_store import get_gtin_product
     existing, removed, added = {}, [], []
+    retained_units = set()
+    keep_units = keep_units or set()
     for scan in scans:
         if scan.is_barcode:
             continue
         key = mark_key(scan.code)
         if key in blocks and key not in existing:
             existing[key] = scan
+        elif key in keep_units and key not in retained_units:
+            retained_units.add(key)
         else:
             removed.append(scan)
     elsewhere = await conflicts_elsewhere(db, doc, [
-        c for block in blocks.values() for c in [block['code'], *block['children']]])
+        c for block in blocks.values() for c in [block['code'], *block['children']]], include_children=boxes)
     blocked_units = {}
     for scan in scans:
         if scan.status == ScanStatus.used_in_other_doc:
@@ -346,7 +370,9 @@ async def apply_blocks(db, doc, scans, blocks, parent_units):
             known = None if planned else await get_gtin_product(db, doc.user_id, gtin)
             pid, name = (planned['product_id'], planned.get('product_name')) if planned else (known or (None, None))
             child_keys = {mark_key(c) for c in children}
-            assigned = next((s for s in scans if s.moysklad_product_id and mark_key(s.code) in child_keys), None)
+            assigned = next((s for s in scans if s.moysklad_product_id and (mark_key(s.code) in child_keys
+                             or (boxes and s.gtin == gtin
+                                 and any(mark_key(c) in child_keys for c in parent_units.get(str(s.id), []))))), None)
             if assigned:
                 pid, name = assigned.moysklad_product_id, assigned.product_name
             scan = Scan(document_id=doc.id, code=block['code'], gtin=gtin,
@@ -355,10 +381,11 @@ async def apply_blocks(db, doc, scans, blocks, parent_units):
                         verification={'source': 'mixed_import_composition', 'checked_at': None})
             db.add(scan)
             added.append(scan)
-        changed = (scan.keep_aggregate is not True or scan.box_quantity != len(children)
+        changed = (scan.is_box != boxes or scan.box_expanded is True
+                   or scan.keep_aggregate is not True or scan.box_quantity != len(children)
                    or {mark_key(c) for c in (scan.child_codes or [])} != {mark_key(c) for c in children})
-        scan.is_box, scan.box_expanded = False, False
-        scan.package_type, scan.keep_aggregate = 'GROUP', True
+        scan.is_box, scan.box_expanded = boxes, False
+        scan.package_type, scan.keep_aggregate = ('BOX' if boxes else 'GROUP'), True
         scan.child_codes, scan.box_quantity, scan.gtin = list(children), len(children), gtin
         conflict = next((elsewhere[k] for k in [key, *(mark_key(c) for c in children)] if k in elsewhere), None)
         blocked = next((blocked_units[mark_key(c)] for c in children if mark_key(c) in blocked_units), None)
@@ -372,6 +399,23 @@ async def apply_blocks(db, doc, scans, blocks, parent_units):
     for scan in removed:
         await db.delete(scan)
     return added, removed
+
+
+async def apply_blocks_and_loose(db, doc, scans, parents, units, blocks, parent_units):
+    covered = {mark_key(code) for block in blocks.values() for code in block['children']}
+    loose = {key: code for key, code in units.items() if key not in covered}
+    added, removed = await apply_blocks(db, doc, scans, blocks, parent_units, keep_units=set(loose))
+    # Only pass surviving loose rows to the unit writer. Parent metadata still
+    # supplies manual assignments and cross-document restrictions to new units.
+    retained = []
+    seen = set()
+    for scan in scans:
+        key = mark_key(scan.code)
+        if not scan.is_barcode and key in loose and key not in seen:
+            retained.append(scan)
+            seen.add(key)
+    unit_added, unit_removed = await apply_units(db, doc, retained, parents, loose, parent_units)
+    return added + unit_added, removed + unit_removed, len(loose)
 
 
 def scan_signature(scans):
@@ -446,12 +490,18 @@ async def run_import(document_id, user_id, job_id):
                 return
             from app.services.packaging_composition import capture
             await capture(db, document_id, cz)
-            if blocks is not None:
-                added, removed = await apply_blocks(db, doc, fresh, blocks, parent_units)
+            loose_count = 0
+            if job.get('target') == 'blocks_loose':
+                added, removed, loose_count = await apply_blocks_and_loose(
+                    db, doc, fresh, parents, units, blocks, parent_units)
+            elif blocks is not None:
+                added, removed = await apply_blocks(db, doc, fresh, blocks, parent_units, boxes=job.get('target') == 'boxes')
             else:
                 added, removed = await apply_units(db, doc, fresh, parents, units, parent_units)
             job.update(status='completed', conflicts=[], added=len(added) if blocks is not None else new_units, removed=len(removed),
-                       blocks=len(blocks) if blocks is not None else 0,
+                       blocks=len(blocks) if blocks is not None and job.get('target') != 'boxes' else 0,
+                       boxes=len(blocks) if blocks is not None and job.get('target') == 'boxes' else 0,
+                       loose_units=loose_count,
                        duplicates=max(0, occurrences - new_units), units=len(units))
             job.pop('codes', None)
             store_job(doc, job)

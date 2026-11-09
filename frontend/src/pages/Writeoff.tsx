@@ -102,6 +102,7 @@ export function WriteoffPage({
         const result = await scansApi.mixedBulk(documentId, codes, target)
         const { data: fresh } = await scansApi.list(documentId)
         if (useScanStore.getState().document?.id === documentId) useScanStore.getState().setScans(fresh)
+        if (result.target === 'blocks_loose') return `Оставлено блоков: ${result.blocks ?? 0}, пачек россыпью: ${result.loose_units ?? 0}. Всего единиц с маркировкой: ${result.units ?? 0}. Вложенные пачки и повторы исключены. Перед отправкой выполните проверку ЧЗ.`
         if (result.target === 'blocks') return `Оставлено блоков: ${result.blocks ?? 0} (пачек: ${result.units ?? 0}). Коды коробов и вложенные марки пачек исключены. Перед отправкой выполните проверку ЧЗ.`
         return `Добавлено новых марок: ${result.added ?? 0}. Повторов пропущено: ${result.duplicates ?? 0}. Блоки раскрыты до отдельных марок; перед отправкой выполните проверку ЧЗ.`
       }

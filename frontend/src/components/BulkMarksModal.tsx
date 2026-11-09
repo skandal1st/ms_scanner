@@ -9,6 +9,7 @@ interface Props {
   onSubmit: (codes: string[], mixed: boolean, target: MixedImportTarget) => Promise<string | void>
   busy?: boolean
   title?: string
+  allowBoxes?: boolean
 }
 
 /**
@@ -16,7 +17,7 @@ interface Props {
  * выбрать .txt/.csv файл. Общий компонент для отгрузки, приёмки и списания — родитель
  * решает, куда отправлять коды (onSubmit).
  */
-export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }: Props) {
+export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title, allowBoxes = false }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [mixed, setMixed] = useState(true)
@@ -85,13 +86,19 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }:
               <select className="ui-select" value={target} disabled={busy} onChange={e => {
                 setTarget(e.target.value as MixedImportTarget); setError(null); setConflicts([]); setResult(null)
               }}>
+                {allowBoxes && <option value="boxes">Только короба</option>}
                 <option value="units">Только пачки</option>
                 <option value="blocks">Только блоки</option>
+                <option value="blocks_loose">Блоки + россыпь</option>
               </select>
             </label>
-            <p className="hint">Коды коробов исключаются из результата. {target === 'blocks'
+            <p className="hint">{target === 'boxes'
+              ? 'Останутся целые SSCC-короба для передачи в МойСклад. Вложенные блоки и пачки отдельными строками не добавляются. Каждая марка должна входить в подтверждённый короб.'
+              : <>Коды коробов исключаются из результата. {target === 'blocks'
               ? 'Останутся коды блоков, а входящие в них пачки будут исключены. Для каждой пачки должен быть подтверждённый блок в списке или документе.'
-              : 'Останутся отдельные марки пачек; коды блоков будут исключены.'} Повторы учитываются один раз. При неизвестном составе документ не меняется. Для получения состава нужен вход в ЧЗ.</p>
+              : target === 'blocks_loose'
+                ? 'Останутся блоки из списка или документа и пачки, которые в них не входят. Вложенные пачки отдельными строками не добавляются.'
+                : 'Останутся отдельные марки пачек; коды блоков будут исключены.'}</>} Повторы в списке и с уже загруженными марками учитываются один раз. При неизвестном составе документ не меняется. Для получения состава нужен вход в ЧЗ.</p>
           </>}
           {busy && mixed && <p role="status">Получаем состав упаковок в ЧЗ… Можно подождать здесь или вернуться к документу после перезагрузки страницы.</p>}
           {result && <p role="status" className="alert alert--success">{result}</p>}

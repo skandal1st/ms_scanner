@@ -108,3 +108,60 @@ async def test_blocks_mode_rejects_overlapping_blocks():
     cz = NS(get_code_info=AsyncMock(return_value=NS(children=[A, B], package_type='GROUP')))
     result = await resolve_import([BLOCK, block2], [], cz, 'blocks')
     assert any('Два разных блока' in c['message'] for c in result[3])
+
+
+@pytest.mark.parametrize('with_block', [False, True])
+async def test_blocks_and_loose_keep_uncovered_units_without_conflict(with_block):
+    loose = '010464027597309621LOOSE001'
+    async def info(code):
+        return NS(children=[A, B] if code == BLOCK else [], package_type='GROUP' if code == BLOCK else 'UNIT')
+    cz = NS(get_code_info=AsyncMock(side_effect=info))
+    codes = [BLOCK, A, B, loose, loose] if with_block else [A, loose]
+    result = await resolve_import(codes, [], cz, 'blocks_loose')
+    assert not result[3]
+    assert set(result[1].values()) == ({A, B, loose} if with_block else {A, loose})
+    covered = {mark_key(code) for block in result[6].values() for code in block['children']}
+    assert {code for key, code in result[1].items() if key not in covered} == ({loose} if with_block else {A, loose})
+
+
+async def test_hybrid_unknown_or_overlapping_block_is_still_a_conflict():
+    cz = NS(get_code_info=AsyncMock(return_value=NS(children=[], package_type='GROUP')))
+    result = await resolve_import([BLOCK], [], cz, 'blocks_loose')
+    assert result[3]
+    cz.get_code_info.return_value = NS(children=[A, B], package_type='GROUP')
+    result = await resolve_import([BLOCK, BLOCK + '2'], [], cz, 'blocks_loose')
+    assert any('Два разных блока' in c['message'] for c in result[3])
+
+
+@pytest.mark.parametrize('target', ['boxes'])
+async def test_boxes_only_deduplicates_manufacturer_list_and_existing_marks(target):
+    cz = NS(unpack_box=AsyncMock(return_value=[A, B]),
+            get_code_info=AsyncMock(return_value=NS(children=[A, B], package_type='GROUP')))
+    result = await resolve_import([SSCC, BLOCK, A, B, SSCC], [scan(A)], cz, target)
+    assert not result[3]
+    assert set(result[1].values()) == {A, B}
+    assert [b['code'] for b in result[6].values()] == [SSCC]
+
+
+@pytest.mark.parametrize('contents, extra, message', [
+    ([A, B], ['010464027597309621LOOSE001'], 'нет подтверждённого короба'),
+    ([], [], 'Состав упаковки неизвестен'),
+    ([A, '010466032120585821UNIT003'], [], 'разные товары'),
+])
+async def test_boxes_only_never_silently_drops_uncovered_or_unknown_marks(contents, extra, message):
+    cz = NS(unpack_box=AsyncMock(return_value=contents),
+            get_code_info=AsyncMock(return_value=NS(children=[], package_type='UNIT')))
+    result = await resolve_import([SSCC, *extra], [], cz, 'boxes')
+    assert any(message in c['message'] for c in result[3])
+
+
+async def test_boxes_only_rejects_two_boxes_with_overlapping_contents():
+    cz = NS(unpack_box=AsyncMock(return_value=[A, B]))
+    result = await resolve_import([SSCC, '00046402759700392565'], [], cz, 'boxes')
+    assert any('Два разных короба' in c['message'] for c in result[3])
+
+
+async def test_boxes_only_requires_sscc_instead_of_mislabeling_gs1_aggregate():
+    cz = NS(get_code_info=AsyncMock(return_value=NS(children=[A, B], package_type='BOX')))
+    result = await resolve_import([BLOCK], [], cz, 'boxes')
+    assert any('Для короба нужен SSCC' in c['message'] for c in result[3])
