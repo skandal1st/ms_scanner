@@ -730,6 +730,20 @@ export const markHistoryApi = {
   get: (code: string) => api.get<MarkHistoryResponse>('/marks/history', { params: { code } }),
 }
 
+export type MixedImportTarget = 'units' | 'blocks'
+
+export interface MixedImportJob {
+  target?: MixedImportTarget
+  blocks?: number
+  id?: string
+  status?: 'queued' | 'running' | 'completed' | 'conflict' | 'failed'
+  added?: number
+  duplicates?: number
+  units?: number
+  error?: string
+  conflicts?: { code: string; message: string }[]
+}
+
 export const scansApi = {
   create: (document_id: string, code: string, moysklad_product_id?: string | null) =>
     api.post<Scan>('/scans/', {
@@ -743,6 +757,23 @@ export const scansApi = {
   /** Массовая загрузка списка марок (отгрузка): проходят обычный конвейер проверки. */
   bulk: (document_id: string, codes: string[], unpack_boxes = false) =>
     api.post<Scan[]>('/scans/bulk', { document_id, codes, unpack_boxes }),
+  mixedBulk: async (document_id: string, codes: string[], target: MixedImportTarget = 'units') => {
+    let { data: job } = await api.post<MixedImportJob>('/scans/mixed-import', { document_id, codes, target })
+    const id = job.id
+    const deadline = Date.now() + 11 * 60_000
+    while (job.status === 'queued' || job.status === 'running') {
+      if (Date.now() > deadline) throw new Error('Загрузка ещё выполняется. Откройте документ заново, чтобы проверить результат.')
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      job = (await api.get<MixedImportJob>(`/scans/mixed-import/${document_id}`)).data
+      if (job.id !== id) throw new Error('Началась другая загрузка. Обновите документ.')
+    }
+    if (job.status !== 'completed') {
+      const error = new Error(job.error || 'Конфликт состава упаковок. Список не добавлен, документ не изменён.')
+      Object.assign(error, { conflicts: job.conflicts || [] })
+      throw error
+    }
+    return job
+  },
   patchProduct: (scan_id: string, moysklad_product_id: string | null) =>
     api.patch<Scan>(`/scans/item/${scan_id}`, { moysklad_product_id }),
   packMode: (scan_id: string, unpack: boolean) => api.post<Scan>(`/scans/item/${scan_id}/pack-mode`, { unpack }),

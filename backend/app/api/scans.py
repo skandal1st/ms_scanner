@@ -4,7 +4,7 @@ from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, field_serializer
 from app.services.cz_status import localize_cz_error, localize_cz_verification
-from typing import List, Optional
+from typing import List, Optional, Literal
 from uuid import UUID
 from datetime import datetime, timezone
 
@@ -781,6 +781,26 @@ async def create_box_scans(
     return await _create_box_scans_core(
         db, doc.id, _plan_gtins(doc.plan), sscc, body.unpack, current_user.id, cz
     )
+
+
+class MixedImportRequest(BaseModel):
+    document_id: UUID
+    codes: List[str]
+    target: Literal['units', 'blocks'] = 'units'
+
+
+@router.post('/mixed-import', status_code=202)
+async def mixed_import(body: MixedImportRequest, current_user: User = Depends(get_current_user),
+                       db: AsyncSession = Depends(get_db)):
+    from app.services.mixed_import import start
+    return await start(db, body.document_id, current_user.id, body.codes, body.target)
+
+
+@router.get('/mixed-import/{document_id}')
+async def mixed_import_status(document_id: UUID, current_user: User = Depends(get_current_user),
+                              db: AsyncSession = Depends(get_db)):
+    from app.services.mixed_import import status
+    return await status(db, document_id, current_user.id)
 
 
 @router.post("/bulk", response_model=List[ScanResponse], status_code=201)

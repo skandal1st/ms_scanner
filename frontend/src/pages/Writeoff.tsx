@@ -1,3 +1,4 @@
+import type { MixedImportTarget } from '../api/client'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -91,11 +92,18 @@ export function WriteoffPage({
   const marksLocked = !document || document.status !== 'draft' || Boolean(document.cz_doc_ids?.length)
     || verifying || bulkBusy || importCodes.isPending || ['signing', 'submitting', 'processing', 'done'].includes(phase)
 
-  const handleBulkMarks = async (codes: string[]) => {
+  const handleBulkMarks = async (codes: string[], mixed: boolean, target: MixedImportTarget) => {
     if (!document || marksLocked) return
     const documentId = document.id
     setBulkBusy(true)
     try {
+      if (mixed) {
+        const result = await scansApi.mixedBulk(documentId, codes, target)
+        const { data: fresh } = await scansApi.list(documentId)
+        if (useScanStore.getState().document?.id === documentId) useScanStore.getState().setScans(fresh)
+        if (result.target === 'blocks') return `Оставлено блоков: ${result.blocks ?? 0} (пачек: ${result.units ?? 0}). Коды коробов и вложенные марки пачек исключены. Перед отправкой выполните проверку ЧЗ.`
+        return `Добавлено новых марок: ${result.added ?? 0}. Повторов пропущено: ${result.duplicates ?? 0}. Блоки раскрыты до отдельных марок; перед отправкой выполните проверку ЧЗ.`
+      }
       const { data: created } = await scansApi.bulk(documentId, codes, unpackBox)
       if (useScanStore.getState().document?.id === documentId) {
         for (const scan of created) addScan(scan)

@@ -1,11 +1,12 @@
 import { useMemo, useRef, useState } from 'react'
+import type { MixedImportTarget } from '../api/client'
 import { parseCodeList } from '../lib/parseCodeList'
 
 interface Props {
   open: boolean
   onClose: () => void
   /** Загрузить распознанный список кодов. Бросает — модалка покажет ошибку. */
-  onSubmit: (codes: string[]) => Promise<void>
+  onSubmit: (codes: string[], mixed: boolean, target: MixedImportTarget) => Promise<string | void>
   busy?: boolean
   title?: string
 }
@@ -18,6 +19,10 @@ interface Props {
 export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }: Props) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [mixed, setMixed] = useState(true)
+  const [target, setTarget] = useState<MixedImportTarget>('units')
+  const [result, setResult] = useState<string | null>(null)
+  const [conflicts, setConflicts] = useState<{ code: string; message: string }[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const codes = useMemo(() => parseCodeList(text), [text])
@@ -27,6 +32,7 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }:
   const handleFile = async (file: File | null) => {
     if (!file) return
     try {
+      setResult(null)
       const content = await file.text()
       // Дописываем к уже введённому — можно склеить несколько файлов/вставок.
       setText((prev) => (prev ? `${prev}\n${content}` : content))
@@ -39,13 +45,17 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }:
   const submit = async () => {
     if (!codes.length || busy) return
     setError(null)
+    setConflicts([])
+    setResult(null)
     try {
-      await onSubmit(codes)
+      const message = await onSubmit(codes, mixed, target)
       setText('')
-      onClose()
+      if (message) setResult(message)
+      else onClose()
     } catch (e) {
-      const ax = e as { response?: { data?: { detail?: string } } }
-      setError(ax?.response?.data?.detail ?? 'Не удалось загрузить список марок')
+      const ax = e as { message?: string; conflicts?: { code: string; message: string }[]; response?: { data?: { detail?: string } } }
+      setError(ax?.response?.data?.detail ?? (/[А-Яа-яЁё]/.test(ax.message ?? '') ? ax.message! : 'Не удалось загрузить список марок'))
+      setConflicts(ax.conflicts ?? [])
     }
   }
 
@@ -65,9 +75,29 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }:
           <p className="hint" style={{ marginTop: 0 }}>
             Вставьте коды (по одному в строке) или выберите файл .txt / .csv.
           </p>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 8 }}>
+            <input type="checkbox" checked={mixed} disabled={busy}
+              onChange={e => { setMixed(e.target.checked); setError(null); setConflicts([]); setResult(null) }} />
+            <span>Смешанный список: короб, блоки и пачки</span>
+          </label>
+          {mixed && <>
+            <label className="field-label">Оставить в документе
+              <select className="ui-select" value={target} disabled={busy} onChange={e => {
+                setTarget(e.target.value as MixedImportTarget); setError(null); setConflicts([]); setResult(null)
+              }}>
+                <option value="units">Только пачки</option>
+                <option value="blocks">Только блоки</option>
+              </select>
+            </label>
+            <p className="hint">Коды коробов исключаются из результата. {target === 'blocks'
+              ? 'Останутся коды блоков, а входящие в них пачки будут исключены. Для каждой пачки должен быть подтверждённый блок в списке или документе.'
+              : 'Останутся отдельные марки пачек; коды блоков будут исключены.'} Повторы учитываются один раз. При неизвестном составе документ не меняется. Для получения состава нужен вход в ЧЗ.</p>
+          </>}
+          {busy && mixed && <p role="status">Получаем состав упаковок в ЧЗ… Можно подождать здесь или вернуться к документу после перезагрузки страницы.</p>}
+          {result && <p role="status" className="alert alert--success">{result}</p>}
           <textarea
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => { setText(e.target.value); setResult(null) }}
             placeholder="0104603312830412215abcd…&#10;0104603312830412215efgh…"
             disabled={busy}
             rows={10}
@@ -94,14 +124,19 @@ export function BulkMarksModal({ open, onClose, onSubmit, busy = false, title }:
             </span>
           </div>
           {error && (
-            <div className="alert alert--error" style={{ marginTop: 10 }}>
+            <div role="alert" className="alert alert--error" style={{ marginTop: 10 }}>
               {error}
+              {conflicts.length > 0 && <ul style={{ maxHeight: 200, overflowY: 'auto' }}>
+                {conflicts.map((conflict, i) => <li key={i}>
+                  {conflict.code && <code style={{ overflowWrap: 'anywhere' }}>{conflict.code}: </code>}{conflict.message}
+                </li>)}
+              </ul>}
             </div>
           )}
         </div>
         <div className="buttons" style={{ justifyContent: 'flex-end', marginTop: 16 }}>
           <button type="button" className="button" onClick={onClose} disabled={busy}>
-            Отмена
+            {result ? 'Готово' : 'Отмена'}
           </button>
           <button
             type="button"

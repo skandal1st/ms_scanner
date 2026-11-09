@@ -488,6 +488,20 @@ def verify_code_task(self, scan_id: str, _code: str, user_id: str):
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=3, name='mixed_import')
+def mixed_import_task(self, document_id: str, user_id: str, job_id: str):
+    from app.services.mixed_import import run_import
+    try:
+        _run(run_import(document_id, user_id, job_id))
+    except Exception as exc:
+        logger.warning('mixed_import.retry', document_id=document_id, error_type=type(exc).__name__)
+        if self.request.retries >= self.max_retries:
+            from app.services.mixed_import import fail_import
+            _run(fail_import(document_id, user_id, job_id))
+            return
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
 @celery_app.task(bind=True, max_retries=3, name="unpack_scan")
 def unpack_scan_task(self, scan_id: str, user_id: str, old_status: str):
     try:

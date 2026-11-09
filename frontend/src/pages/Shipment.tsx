@@ -1,3 +1,4 @@
+import type { MixedImportTarget } from '../api/client'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { ScanInput } from '../components/ScanInput'
@@ -92,12 +93,20 @@ export function ShipmentPage({
     autoCloseTab: false,
   })
 
-  const handleBulkMarks = async (codes: string[]) => {
+  const handleBulkMarks = async (codes: string[], mixed: boolean, target: MixedImportTarget) => {
     if (!document || !collectionReady) return
+    const documentId = document.id
     setBulkBusy(true)
     try {
-      const { data: created } = await scansApi.bulk(document.id, codes, unpackBox)
-      for (const s of created) addScan(s)
+      if (mixed) {
+        const result = await scansApi.mixedBulk(documentId, codes, target)
+        const { data: fresh } = await scansApi.list(documentId)
+        if (useScanStore.getState().document?.id === documentId) useScanStore.getState().setScans(fresh)
+        if (result.target === 'blocks') return `Оставлено блоков: ${result.blocks ?? 0} (пачек: ${result.units ?? 0}). Коды коробов и вложенные марки пачек исключены. Перед отправкой выполните проверку ЧЗ.`
+        return `Добавлено новых марок: ${result.added ?? 0}. Повторов пропущено: ${result.duplicates ?? 0}. Блоки раскрыты до отдельных марок; перед отправкой выполните проверку ЧЗ.`
+      }
+      const { data: created } = await scansApi.bulk(documentId, codes, unpackBox)
+      if (useScanStore.getState().document?.id === documentId) for (const s of created) addScan(s)
     } finally {
       setBulkBusy(false)
     }
@@ -569,7 +578,7 @@ export function ShipmentPage({
         </button>
       </footer>
 
-      <BulkMarksModal
+      <BulkMarksModal key={document?.id ?? 'no-document'}
         open={bulkOpen}
         onClose={() => setBulkOpen(false)}
         onSubmit={handleBulkMarks}

@@ -106,7 +106,8 @@ async def test_repeated_terminal_open_with_statuses_reuses_session(monkeypatch):
         await asyncio.wait_for(asyncio.gather(begin(), begin()), timeout=10)
         ms.change_collection_state.assert_awaited_once()
         assert ms.change_collection_state.call_args.args == ('demand', ms_id, str(state))
-        assert ms.change_collection_state.call_args.kwargs['moment']
+        # Date updates are opt-in; a profile with only statuses keeps its date.
+        assert not ms.change_collection_state.call_args.kwargs
         reopened = await open_terminal(factory, devices[0], ms_id)
         assert reopened.collection_started
         ms.change_collection_state.assert_awaited_once()
