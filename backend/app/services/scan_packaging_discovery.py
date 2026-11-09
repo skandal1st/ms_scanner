@@ -38,12 +38,14 @@ async def discover_scan_packaging(scan_id, user_id):
             return
         document_id = doc.id
         metadata, product, error = {}, None, None
+        cz = None
         try:
             token = await _get_cz_token(db, user_id, document_id)
             if not token:
                 raise ValueError('Войдите в ЧЗ для определения состава блока, затем нажмите «Проверить марки».')
             groups = await _get_cz_product_groups(db, user_id, document_id)
-            info = await ChestnyZnakService(token=token, mock=False, product_groups=groups).get_code_info(scan.code)
+            cz = ChestnyZnakService(token=token, mock=False, product_groups=groups)
+            info = await cz.get_code_info(scan.code)
             metadata = packaging_metadata(info, scan.gtin)
             product = unique_plan_product(doc.plan, metadata['gtin'])
             if product is None:
@@ -75,6 +77,8 @@ async def discover_scan_packaging(scan_id, user_id):
         scan.status = ScanStatus.scanned
         scan.verification = None
         scan.error_message = error
+        from app.services.packaging_composition import capture
+        await capture(db, document_id, cz)
         await db.commit()
         await publish_scan(user_id, scan)
         logger.info('scan.packaging_resolved', scan_id=scan_id, package_type=scan.package_type,

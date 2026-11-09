@@ -344,6 +344,18 @@ class Document(Base):
     scans = relationship("Scan", back_populates="document", cascade="all, delete-orphan")
 
 
+class DocumentPackaging(Base):
+    __tablename__ = 'document_packaging'
+    __table_args__ = (UniqueConstraint('document_id', 'root_key', name='uq_document_packaging_root'),)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(UUID(as_uuid=True), ForeignKey('documents.id', ondelete='CASCADE'), nullable=False, index=True)
+    root_key = Column(Text, nullable=False)
+    code = Column(Text, nullable=False)
+    tree = Column(JSONB, nullable=True)
+    fetched_at = Column(DateTime(timezone=True), nullable=True)
+    error = Column(Text, nullable=True)
+
+
 class Scan(Base):
     __tablename__ = "scans"
     __table_args__ = (

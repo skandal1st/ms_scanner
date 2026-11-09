@@ -1,3 +1,4 @@
+import { PackagingComposition } from '../components/PackagingComposition'
 import type { MixedImportTarget } from '../api/client'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -552,6 +553,7 @@ export function WriteoffPage({
 
         <div className="acc-right">
           <FlowWorkspaceTabs
+            composition={<PackagingComposition key={document?.id ?? 'empty'} documentId={document?.id ?? null} active={workspaceTab === 'composition'} />}
             summaryLabel="Состав списания"
             summaryCount={summaryCount}
             marksCount={scans.length}

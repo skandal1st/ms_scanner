@@ -730,6 +730,21 @@ export const markHistoryApi = {
   get: (code: string) => api.get<MarkHistoryResponse>('/marks/history', { params: { code } }),
 }
 
+export interface PackagingNode {
+  code: string
+  kind: 'BOX' | 'GROUP' | 'UNIT' | 'UNKNOWN'
+  children: PackagingNode[]
+  incomplete?: boolean
+  expected_units?: number
+  unit_count?: number
+  fetched_at?: string | null
+  error?: string | null
+}
+export interface PackagingCompositionData {
+  roots: PackagingNode[]
+  job: { id?: string; status?: string; error?: string | null }
+}
+
 export type MixedImportTarget = 'units' | 'blocks'
 
 export interface MixedImportJob {
@@ -745,6 +760,8 @@ export interface MixedImportJob {
 }
 
 export const scansApi = {
+  composition: (document_id: string) => api.get<PackagingCompositionData>(`/scans/composition/${document_id}`),
+  refreshComposition: (document_id: string, code?: string) => api.post(`/scans/composition/${document_id}`, { code }),
   create: (document_id: string, code: string, moysklad_product_id?: string | null) =>
     api.post<Scan>('/scans/', {
       document_id,

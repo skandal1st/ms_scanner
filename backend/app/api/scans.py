@@ -783,6 +783,24 @@ async def create_box_scans(
     )
 
 
+class CompositionRefreshRequest(BaseModel):
+    code: Optional[str] = None
+
+
+@router.get('/composition/{document_id}')
+async def packaging_composition(document_id: UUID, current_user: User = Depends(get_current_user),
+                                db: AsyncSession = Depends(get_db)):
+    from app.services.packaging_composition import view
+    return await view(db, document_id, current_user.id)
+
+
+@router.post('/composition/{document_id}', status_code=202)
+async def refresh_packaging_composition(document_id: UUID, body: CompositionRefreshRequest,
+                                        current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    from app.services.packaging_composition import refresh
+    return await refresh(db, document_id, current_user.id, body.code)
+
+
 class MixedImportRequest(BaseModel):
     document_id: UUID
     codes: List[str]

@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useScanStore } from '../store/scanStore'
 
-export type FlowWorkspaceTab = 'summary' | 'marks'
+export type FlowWorkspaceTab = 'summary' | 'marks' | 'composition'
 const MarksPanelVisible = createContext(true)
 export const useMarksPanelVisible = () => useContext(MarksPanelVisible)
 
@@ -15,13 +15,14 @@ interface FlowWorkspaceTabsProps {
   onChange: (tab: FlowWorkspaceTab) => void
   summary: ReactNode
   marks: ReactNode
+  composition?: ReactNode
 }
 
 export function useFlowWorkspaceTab(storageKey: string) {
   const repeatId = useScanStore(state => state.flashScanId)
   const repeatVersion = useScanStore(state => state.flashScanVersion)
   const [active, setActive] = useState<FlowWorkspaceTab>(() =>
-    sessionStorage.getItem(storageKey) === 'marks' ? 'marks' : 'summary',
+    ['marks', 'composition'].includes(sessionStorage.getItem(storageKey) ?? '') ? sessionStorage.getItem(storageKey) as FlowWorkspaceTab : 'summary',
   )
 
   useEffect(() => {
@@ -44,20 +45,23 @@ export function FlowWorkspaceTabs({
   onChange,
   summary,
   marks,
+  composition,
 }: FlowWorkspaceTabsProps) {
   const baseId = useId()
-  const tabs: FlowWorkspaceTab[] = ['summary', 'marks']
+  const tabs: FlowWorkspaceTab[] = composition ? ['summary', 'marks', 'composition'] : ['summary', 'marks']
 
   const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>, current: FlowWorkspaceTab) => {
-    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
     event.preventDefault()
-    const next = current === 'summary' ? 'marks' : 'summary'
+    const index = tabs.indexOf(current)
+    const next = event.key === 'Home' ? tabs[0] : event.key === 'End' ? tabs[tabs.length - 1]
+      : tabs[(index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]
     onChange(next)
     document.getElementById(`${baseId}-${next}-tab`)?.focus()
   }
 
   return (
-    <section className="flow-tabs">
+    <section className={`flow-tabs${composition ? ' flow-tabs--with-composition' : ''}`}>
       <div className="flow-tabs__list" role="tablist" aria-label="Рабочая область документа">
         {tabs.map((tab) => {
           const selected = active === tab
@@ -75,16 +79,16 @@ export function FlowWorkspaceTabs({
               onClick={() => onChange(tab)}
               onKeyDown={(event) => handleKeyDown(event, tab)}
             >
-              <span>{isSummary ? summaryLabel : 'Марки'}</span>
-              <span className="flow-tabs__count">
+              <span>{isSummary ? summaryLabel : tab === 'marks' ? 'Марки' : 'Состав блоков'}</span>
+              {tab !== 'composition' && <span className="flow-tabs__count">
                 {isSummary ? summaryCount ?? 0 : marksCount}
-              </span>
-              {!isSummary && pendingCount > 0 && (
+              </span>}
+              {tab === 'marks' && pendingCount > 0 && (
                 <span className="flow-tabs__badge flow-tabs__badge--pending" title="Ожидают проверки">
                   {pendingCount}
                 </span>
               )}
-              {!isSummary && issueCount > 0 && (
+              {tab === 'marks' && issueCount > 0 && (
                 <span className="flow-tabs__badge flow-tabs__badge--issue" title="Требуют внимания">
                   {issueCount}
                 </span>
@@ -112,6 +116,10 @@ export function FlowWorkspaceTabs({
       >
         <MarksPanelVisible.Provider value={active === 'marks'}>{marks}</MarksPanelVisible.Provider>
       </div>
+      {composition && <div id={`${baseId}-composition-panel`} role="tabpanel"
+        aria-labelledby={`${baseId}-composition-tab`} className="flow-tabs__panel" hidden={active !== 'composition'}>
+        {composition}
+      </div>}
     </section>
   )
 }

@@ -488,6 +488,16 @@ def verify_code_task(self, scan_id: str, _code: str, user_id: str):
         raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
 
 
+@celery_app.task(bind=True, max_retries=3, name='packaging_composition')
+def packaging_composition_task(self, document_id: str, user_id: str, request_id: str):
+    from app.services.packaging_composition import run_refresh
+    try:
+        _run(run_refresh(document_id, user_id, request_id))
+    except Exception as exc:
+        logger.warning('packaging_composition.retry', document_id=document_id, error_type=type(exc).__name__)
+        raise self.retry(exc=exc, countdown=5 * (2 ** self.request.retries))
+
+
 @celery_app.task(bind=True, max_retries=3, name='mixed_import')
 def mixed_import_task(self, document_id: str, user_id: str, job_id: str):
     from app.services.mixed_import import run_import

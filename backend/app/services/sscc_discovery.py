@@ -36,6 +36,7 @@ async def discover_sscc(scan_id, user_id):
         # Release the database transaction before waiting for the external API.
         await db.rollback()
         error, children, gtin, quantity = None, None, None, None
+        cz = None
         try:
             token = await _get_cz_token(db, user_id, document_id)
             if not token and not settings.CZ_MOCK_MODE:
@@ -94,6 +95,8 @@ async def discover_sscc(scan_id, user_id):
                 scan.product_name = planned.get('product_name')
             # Unpacked marks still need the normal explicit batch CZ check.
             scan.status = ScanStatus.scanned if unpack else ScanStatus.pending
+        from app.services.packaging_composition import capture
+        await capture(db, document_id, cz)
         await db.commit()
         await publish_scan(user_id, scan)
     if not error and not unpack:

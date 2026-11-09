@@ -444,6 +444,8 @@ async def run_import(document_id, user_id, job_id):
                 store_job(doc, job)
                 await db.commit()
                 return
+            from app.services.packaging_composition import capture
+            await capture(db, document_id, cz)
             if blocks is not None:
                 added, removed = await apply_blocks(db, doc, fresh, blocks, parent_units)
             else:

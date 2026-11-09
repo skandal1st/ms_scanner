@@ -643,6 +643,9 @@ class ChestnyZnakService:
         product_groups: Optional[list[str]] = None,
     ):
         self.token = token
+        # Read-only observations for the document packaging viewer.
+        self.aggregate_trees: dict = {}
+        self.aggregate_kinds: dict = {}
         self.mock = mock if mock is not None else settings.CZ_MOCK_MODE
         self.base_url = settings.CZ_API_BASE_URL
         # Товарные группы этого клиента (pg) для перебора в True API. Пусто → глобальный
@@ -839,6 +842,8 @@ class ChestnyZnakService:
                 continue
             children = _flatten_aggregate_leaves(body.get(sscc)) if body.get(sscc) else []
             if children:
+                self.aggregate_trees[sscc] = {"code": sscc, "kind": "BOX", "raw": body[sscc]}
+                self.aggregate_kinds[sscc] = "BOX"
                 logger.info(
                     "cz.unpack_box.real", sscc=sscc, pg=pg, count=len(children)
                 )
@@ -1006,6 +1011,7 @@ class ChestnyZnakService:
                         )
                     if isinstance(abody, dict) and abody.get(cis):
                         children = _flatten_aggregate_leaves(abody[cis])
+                        self.aggregate_trees[code] = {"code": code, "kind": ci.get("generalPackageType") or ci.get("packageType"), "raw": abody[cis]}
                 except (httpx.TimeoutException, httpx.HTTPError) as exc:
                     logger.warning("cz.aggregated_list.http_error", pg=pg, error=str(exc))
                     capture_request('chestnyznak', 'POST', f'{agg_url}?pg={pg}', [cis],
@@ -1026,6 +1032,7 @@ class ChestnyZnakService:
                 mark_withdraw=bool(ci.get("markWithdraw")),
                 withdraw_reason=(ci.get("withdrawReason") or None),
             )
+            self.aggregate_kinds[code] = info.package_type
             await set_cached_pg(gtin_key, pg)
             from app.services.packaging_catalog import record_observations
             await record_observations([(gtin_key, info.gtin, info.package_type,

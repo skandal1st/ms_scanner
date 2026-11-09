@@ -1,3 +1,4 @@
+import { PackagingComposition } from '../components/PackagingComposition'
 import type { MixedImportTarget } from '../api/client'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
@@ -448,6 +449,7 @@ export function ShipmentPage({
         <div className="acc-right">
           <UnknownProductsPicker />
           <FlowWorkspaceTabs
+            composition={<PackagingComposition key={document?.id ?? 'empty'} documentId={document?.id ?? null} active={workspaceTab === 'composition'} />}
             summaryLabel="Сборка"
             summaryCount={summaryCount}
             marksCount={scans.length}
