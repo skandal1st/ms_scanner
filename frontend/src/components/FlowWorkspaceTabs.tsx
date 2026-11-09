@@ -117,7 +117,8 @@ export function FlowWorkspaceTabs({
         <MarksPanelVisible.Provider value={active === 'marks'}>{marks}</MarksPanelVisible.Provider>
       </div>
       {composition && <div id={`${baseId}-composition-panel`} role="tabpanel"
-        aria-labelledby={`${baseId}-composition-tab`} className="flow-tabs__panel" hidden={active !== 'composition'}>
+        aria-labelledby={`${baseId}-composition-tab`} className="flow-tabs__panel flow-tabs__panel--composition"
+        tabIndex={0} hidden={active !== 'composition'}>
         {composition}
       </div>}
     </section>

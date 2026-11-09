@@ -349,6 +349,12 @@ html, body, #root { height: 100%; }
   overflow: hidden;
 }
 .flow-tabs__panel[hidden] { display: none; }
+.flow-tabs__panel--composition {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
 .flow-tabs__empty {
   display: grid;
   min-height: 180px;
