@@ -233,7 +233,7 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   })
 
   return (
-    <div className={`settings-page${embedded ? ' settings-page--embedded' : ''}`}>
+    <div className={`settings-page${embedded ? ' settings-page--embedded' : integration?.edition === 'full' ? ' settings-page--wide' : ''}`}>
       <div className="settings-card">
         <h1>Настройки</h1>
 

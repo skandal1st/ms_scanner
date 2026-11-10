@@ -437,7 +437,7 @@ export function ShipmentPage({
       </div>}
       <div className="acc-body">
         {!terminalMode && <>
-        <div className={document ? "acc-left" : "acc-left shipment-selection"} style={document ? { width: leftWidth } : undefined}>
+        <div className={document ? 'acc-left' : `acc-left shipment-selection${!embedded && integration?.edition === 'full' ? ' shipment-selection--wide' : ''}`} style={document ? { width: leftWidth } : undefined}>
           {!embedded && !document && (
             <>
               <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || openingWriteoff || sending || bulkBusy} />
