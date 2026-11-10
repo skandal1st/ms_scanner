@@ -76,7 +76,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
   }
 
   return (
-    <div>
+    <div className="document-selector">
       <div className="section__head">
         <span className="field-label" style={{ margin: 0 }}>Документ</span>
         <ul className="tabs__buttons" style={{ margin: 0 }}>
@@ -128,7 +128,7 @@ export function DocumentSelector({ kind, onSelect, selected, msKind }: Props) {
         }
 
         return (
-          <div>
+          <div className="document-selector__search">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
