@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { acceptanceApi } from '../api/client'
-import type { ProductGroup, MsDocument } from '../api/client'
+import type { AcceptanceDoc, ProductGroup, MsDocument } from '../api/client'
 import { useMsDocuments } from '../hooks/useDocuments'
 import { BulkMarksModal } from './BulkMarksModal'
 import { EdoImportModal } from './EdoImportModal'
-import { Icon } from './Icon'
 import { useEdition } from '../hooks/useEdition'
 
 interface UpdImportBarProps {
   busy: boolean
+  imported: AcceptanceDoc | null
+  onNew: () => void
   onSubmit: (file: File, productGroup: string, moyskladId: string) => void
   /** Загрузить список марок вручную (альтернатива УПД) с выбранной группой/поступлением. */
   onSubmitMarks: (codes: string[], productGroup: string, moyskladId: string) => Promise<void>
@@ -29,18 +30,19 @@ function msSupplyLabel(m: MsDocument): string {
  * куда писать КМ) + XML-файл + кнопка «Загрузить». Сам импорт выполняет родитель
  * через onSubmit.
  */
-export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, presetMoyskladId }: UpdImportBarProps) {
+export function UpdImportBar({ busy, imported, onNew, onSubmit, onSubmitMarks, onSubmitEdo, presetMoyskladId }: UpdImportBarProps) {
+  const [source, setSource] = useState('xml')
   const [groups, setGroups] = useState<ProductGroup[]>([])
   const [group, setGroup] = useState('')
-  const [moyskladId, setMoyskladId] = useState(presetMoyskladId ?? '')
+  const [supply, setSupply] = useState<MsDocument | null>(null)
+  const moyskladId = presetMoyskladId || supply?.id || ''
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [marksOpen, setMarksOpen] = useState(false)
   const [edoOpen, setEdoOpen] = useState(false)
-  const fileRef = useRef<HTMLInputElement>(null)
   // ЭДО (Saby) — только полная версия; в ms_lite приёмка идёт ручным импортом УПД-XML.
-  const { isFull } = useEdition()
+  const { isFull, isLoading: editionLoading } = useEdition()
 
   useEffect(() => {
     acceptanceApi
@@ -68,7 +70,34 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
     onSubmit(file, group, moyskladId)
   }
 
-  return (
+  const options = supplies ?? []
+  const visibleSupplies = supply && !options.some(item => item.id === supply.id) ? [supply, ...options] : options
+  if (imported) return (
+    <div className="upd-import-result">
+      <div>
+        <strong>{imported.name}</strong>
+        <div>{imported.moysklad_id
+          ? `Поступление МойСклад · ${supply ? msSupplyLabel(supply) : 'Текущее поступление'}`
+          : 'Поступление МойСклад не выбрано'}</div>
+        {!imported.moysklad_id && <p className="hint">Можно сопоставить товары. Эта приёмка не будет отправлена в МойСклад.</p>}
+      </div>
+      <div className="flex-row gap-8">
+        {imported.status === 'draft' && <button className="button button--sm" disabled={busy}
+          onClick={() => setMarksOpen(true)}>Добавить марки</button>}
+        <button className="button button--sm" disabled={busy} onClick={onNew}>Новая приёмка</button>
+      </div>
+      <BulkMarksModal open={marksOpen} onClose={() => setMarksOpen(false)} busy={busy}
+        onSubmit={codes => onSubmitMarks(codes, imported.product_group || group, imported.moysklad_id || '')} />
+    </div>
+  )
+
+  return (<>
+    <fieldset className="upd-source" disabled={busy}>
+      <legend className="field-label">Источник приёмки</legend>
+      {[['xml', 'Файл УПД'], ['marks', 'Список марок'], ...(isFull && !editionLoading ? [['edo', 'Из ЭДО']] : [])].map(([value, label]) =>
+        <label key={value}><input type="radio" name="acceptance-source" checked={source === value}
+          onChange={() => { setSource(value); setFile(null) }} /> {label}</label>)}
+    </fieldset>
     <div className="upd-bar">
       <div className="upd-bar__field">
         <label className="field-label" htmlFor="upd-group">
@@ -108,6 +137,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Поиск по номеру или поставщику…"
+            aria-label="Найти поступление по номеру или поставщику"
             disabled={busy}
             style={{ marginBottom: 6 }}
           />
@@ -115,30 +145,31 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
             id="upd-supply"
             className="ui-select"
             value={moyskladId}
-            onChange={(e) => setMoyskladId(e.target.value)}
+            onChange={(e) => setSupply(visibleSupplies.find(item => item.id === e.target.value) ?? null)}
+            aria-describedby={!moyskladId ? 'upd-supply-hint' : undefined}
             disabled={busy}
           >
             <option value="">
               {suppliesLoading
                 ? 'Загружаю поступления…'
-                : '— без записи в МС —'}
+                : 'Без записи в МойСклад'}
             </option>
-            {(supplies ?? []).map((m) => (
+            {visibleSupplies.map((m) => (
               <option key={m.id} value={m.id}>
                 {msSupplyLabel(m)}
               </option>
             ))}
           </select>
+          {!moyskladId && <p id="upd-supply-hint" className="hint">Можно загрузить и сопоставить товары. Для отправки выберите поступление до загрузки.</p>}
         </div>
       )}
 
-      <div className="upd-bar__field">
+      {source === 'xml' && <><div className="upd-bar__field">
         <label className="field-label" htmlFor="upd-file">
           Файл УПД (XML 5.03)
         </label>
         <input
           id="upd-file"
-          ref={fileRef}
           type="file"
           accept=".xml,text/xml,application/xml"
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
@@ -152,10 +183,10 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
         onClick={submit}
         disabled={!group || !file || busy}
       >
-        {busy ? 'Загрузка…' : 'Загрузить'}
-      </button>
+        {busy ? 'Загрузка…' : 'Загрузить УПД'}
+      </button></>}
 
-      <button
+      {source === 'marks' && <button
         type="button"
         className="button"
         onClick={() => setMarksOpen(true)}
@@ -166,10 +197,10 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
             : 'Сначала выберите товарную группу'
         }
       >
-        <Icon name="upload" size={15} /> Список марок
-      </button>
+        Ввести список марок
+      </button>}
 
-      {isFull && (
+      {source === 'edo' && isFull && (
         <button
           type="button"
           className="button"
@@ -181,7 +212,7 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
               : 'Сначала выберите товарную группу'
           }
         >
-          <Icon name="acceptance" size={15} /> Из ЭДО
+          Выбрать входящий УПД
         </button>
       )}
 
@@ -202,5 +233,5 @@ export function UpdImportBar({ busy, onSubmit, onSubmitMarks, onSubmitEdo, prese
         />
       )}
     </div>
-  )
+  </>)
 }

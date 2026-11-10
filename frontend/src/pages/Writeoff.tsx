@@ -272,6 +272,7 @@ export function WriteoffPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, embedded])
 
+  const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
   const canSubmit =
     !!document &&
     !bulkBusy &&
@@ -622,30 +623,25 @@ export function WriteoffPage({
             Документы ЧЗ: {document.cz_doc_ids.filter((item) => item.doc_id).map((item) => `${item.pg}: ${item.doc_id}`).join('; ')}
           </span>
         )}
-        {stats.scanned > 0 && (
+        {stats.scanned > 0 || waitingForCheck ? (
           <button
             type="button"
-            className="button"
-            disabled={!document || verifying || bulkBusy || importCodes.isPending}
+            className="button button--success"
+            disabled={!document || document.status !== 'draft' || waitingForCheck || bulkBusy || importCodes.isPending}
             onClick={handleVerify}
             style={{ marginRight: 8 }}
           >
-            {verifying ? 'Проверяю марки…' : `Проверить марки (${stats.scanned})`}
+            {waitingForCheck ? 'Проверяем…' : `Проверить марки (${stats.scanned})`}
           </button>
-        )}
-        <button
+        ) : <button
           type="button"
           className="button button--success"
           disabled={!canSubmit || document?.status === "processing" || document?.status === "accepted"}
-          title={
-            stats.scanned > 0
-              ? `Сначала проверьте марки (${stats.scanned} не проверено)`
-              : reasonLabel
-          }
+          title={reasonLabel}
           onClick={handleWriteoff}
         >
-          {stats.scanned > 0 ? `Проверьте марки (${stats.scanned})` : phaseText[phase]}
-        </button>
+          {phaseText[phase]}
+        </button>}
       </footer>
       <BulkMarksModal key={document?.id ?? 'no-document'}
         open={bulkOpen && Boolean(document) && document?.status === 'draft'}

@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { czApi, integrationsApi } from '../api/client'
 import type { Integration } from '../api/client'
@@ -10,7 +11,7 @@ import { CustomerOrderFiltersSettings } from '../components/CustomerOrderFilters
 import { ShipmentStatusSettings } from '../components/ShipmentStatusSettings'
 import { InventorySettings } from '../components/InventorySettings'
 import { WorkplaceScannerSettings } from '../components/WorkplaceScannerSettings'
-import { PhysicalCounts } from '../components/PhysicalCounts'
+import { getOrganizationProfileId } from '../lib/organizationProfile'
 
 const TsdPairingSection = lazy(() =>
   import('../components/TsdPairingSection').then((module) => ({ default: module.TsdPairingSection })),
@@ -194,6 +195,26 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
   }
   const modal = useModal()
   const [msToken, setMsToken] = useState('')
+  const openInventory = async () => {
+    const tab = window.open('', '_blank')
+    if (!tab) {
+      void modal.alert('Разрешите открытие новой вкладки для пересчёта.', { variant: 'warn' })
+      return
+    }
+    try {
+      const response = await fetch('/api/auth/relaunch', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${localStorage.getItem('access_token') || ''}` },
+      })
+      const { launch_token } = await response.json()
+      if (!response.ok || !launch_token) throw new Error()
+      const params = new URLSearchParams({ t: launch_token, mode: 'inventory', profile: getOrganizationProfileId() || '' })
+      tab.location.replace(`/launch?${params}`)
+    } catch {
+      tab.close()
+      void modal.alert('Не удалось открыть пересчёт. Повторите попытку.', { variant: 'error' })
+    }
+  }
   const qc = useQueryClient()
 
   const { data: integration } = useQuery({
@@ -353,8 +374,9 @@ export function SettingsPage({ embedded = false }: SettingsPageProps) {
         <div role="tabpanel" id="settings-panel-inventory" aria-labelledby="settings-tab-inventory" hidden={activeTab !== 'inventory'} tabIndex={0}>
           {visitedTabs.includes('inventory') && <>
             <InventorySettings />
-            <p className="hint mt-12">Подготовьте сверку ниже, затем откройте её в режиме «Инвентаризация» на ТСД. Разрешите этот режим устройству во вкладке «ТСД». Результат сверки можно скачать здесь в XLSX.</p>
-            <PhysicalCounts mode="inventory" defaultCountMethod="scan" active={activeTab === 'inventory'} />
+            {embedded
+              ? <button className="button" onClick={() => void openInventory()}>Открыть физический пересчёт</button>
+              : <Link className="button" to="/inventory/count">Открыть физический пересчёт</Link>}
           </>}
         </div>
       </div>

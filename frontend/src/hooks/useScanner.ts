@@ -1,7 +1,6 @@
 import { useCallback } from 'react'
 import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
-import { useModal } from '../components/ModalProvider'
 import { useScanUpdates } from './useScanUpdates'
 import { createConflictSound } from '../lib/tsdSound'
 
@@ -43,13 +42,19 @@ function playBeep(type: 'ok' | 'error' | 'unknown' | 'used_in_other_doc') {
   }
 }
 
+export interface ScanOutcome {
+  documentId: string
+  scan?: Scan
+  message?: string
+  undoIds?: string[]
+}
+
 export function useScanner(documentId: string | null) {
-  const modal = useModal()
   const { addScan, flashScan } = useScanStore()
   useScanUpdates(documentId, failed => playBeep(failed ? 'error' : 'ok'))
 
   const submitCode = useCallback(
-    async (code: string) => {
+    async (code: string): Promise<ScanOutcome | undefined> => {
       if (!documentId || !code.trim()) return
       if (audioCtx.state === 'suspended') void audioCtx.resume().catch(() => {})
       void conflictSound.prepare(audioCtx).catch(() => {})
@@ -63,18 +68,18 @@ export function useScanner(documentId: string | null) {
         )
         if (!existing) {
           playBeep('error')
-          void modal.alert('Код не найден в этом документе', { variant: 'warn' })
-          return
+          return { documentId, message: 'Код не найден в этом документе' }
         }
         try {
           await scansApi.delete(existing.id)
           state.removeScan(existing.id)
           playBeep('ok')
+          return { documentId, message: 'Скан удалён' }
         } catch (err) {
           playBeep('error')
           console.error('Delete scan error:', err)
+          return { documentId, message: 'Не удалось удалить скан. Повторите попытку.' }
         }
-        return
       }
 
       try {
@@ -85,6 +90,7 @@ export function useScanner(documentId: string | null) {
             trimmed,
             state.unpackBox,
           )
+          if (useScanStore.getState().document?.id !== documentId) return
           let hadError = false
           let hadConflict = false
           let repeatedId: string | null = null
@@ -102,7 +108,14 @@ export function useScanner(documentId: string | null) {
           if (hadConflict) playBeep('used_in_other_doc')
           else if (hadError) playBeep('error')
           else playBeep('ok')
-          return
+          if (boxScans.length === 1) {
+            const scan = boxScans[0]
+            return { documentId, scan, undoIds: scan.duplicate ? undefined : [scan.id] }
+          }
+          const duplicates = boxScans.filter(s => s.duplicate).length
+          const conflicts = boxScans.filter(s => s.status === 'used_in_other_doc').length
+          const undoIds = boxScans.filter(s => !s.duplicate).map(s => s.id)
+          return { documentId, undoIds, message: `Обработано кодов короба: ${boxScans.length} · повторов: ${duplicates}${conflicts ? ` · в другом документе: ${conflicts}` : ''}` }
         }
 
         const targetPid = state.targetProductId
@@ -111,12 +124,13 @@ export function useScanner(documentId: string | null) {
           trimmed,
           targetPid || undefined
         )
+        if (useScanStore.getState().document?.id !== documentId) return
         if (scan.duplicate) {
           // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
           addScan(scan)
           flashScan(scan.id)
           playBeep(scan.status === 'used_in_other_doc' ? 'used_in_other_doc' : 'error')
-          return
+          return { documentId, scan }
         }
         addScan(scan)
         // Основной флоу: КМ проверяется локально при скане, статус приходит сразу в
@@ -125,15 +139,17 @@ export function useScanner(documentId: string | null) {
         if (scan.status === 'used_in_other_doc') playBeep('used_in_other_doc')
         else if (scan.status === 'invalid') playBeep('error')
         else playBeep('ok')
+        return { documentId, scan, undoIds: scan.is_barcode ? undefined : [scan.id] }
       } catch (err: unknown) {
         playBeep('error')
         const ax = err as { response?: { data?: { detail?: unknown } } }
         const d = ax?.response?.data?.detail
-        if (typeof d === 'string' && d) void modal.alert(d, { variant: 'error' })
+
         console.error('Scan error:', err)
+        return { documentId, message: typeof d === 'string' && d ? d : 'Не удалось записать скан. Повторите попытку.' }
       }
     },
-    [documentId, addScan, flashScan, modal]
+    [documentId, addScan, flashScan]
   )
 
   return { submitCode }

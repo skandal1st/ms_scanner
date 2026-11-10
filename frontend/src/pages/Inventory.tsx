@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '../components/Icon'
-import { PhysicalCounts } from '../components/PhysicalCounts'
+import { Link } from 'react-router-dom'
 import { InventoryMatchPanel } from '../components/InventoryMatchPanel'
 import { InventoryResolvePanel } from '../components/InventoryResolvePanel'
 import { InventoryArchivePanel } from '../components/InventoryArchivePanel'
@@ -26,7 +26,7 @@ const fmtEta = (s?: number) => {
 }
 
 const DIFF_TABS: { value: ReconcileDiff; label: string }[] = [
-  { value: 'to_search', label: 'Искать (ЧЗ−УПД−МС)' },
+  { value: 'to_search', label: 'Искать' },
   { value: 'cz_gt_ms', label: 'ЧЗ > МС (сырое)' },
   { value: 'ms_gt_cz', label: 'МС > ЧЗ' },
   { value: 'mismatch', label: 'Все расхождения' },
@@ -241,15 +241,10 @@ export function InventoryPage() {
 
   return (
     <div className="mc">
+      <Link to="/inventory">‹ Инвентаризация</Link>
       <header className="mc-head">
         <div>
-          <h1 className="mc-head__title">Инвентаризация</h1>
-          <p className="mc-head__sub">
-            Сверка остатка марок в Честном Знаке с учётным остатком МойСклада по номенклатуре.
-            «Искать» = ЧЗ&nbsp;−&nbsp;УПД&nbsp;−&nbsp;МС: из числящегося за нами в ЧЗ вычитаем и полку
-            (МС), и уже отгруженное по УПД, но не принятое покупателем (в пути) — остаётся то, что
-            реально надо искать. Инвентаризацию удобно вести по одному бренду (группе товаров).
-          </p>
+          <h1 className="mc-head__title">Сверка остатков ЧЗ и МойСклада</h1>
         </div>
         {hasMs && (
           <div className="mc-head__actions">
@@ -264,7 +259,6 @@ export function InventoryPage() {
           </div>
         )}
       </header>
-      <details className="section"><summary>Физическая инвентаризация с ТСД</summary><PhysicalCounts mode="inventory" /></details>
 
       {err && (
         <div className="alert alert--error" style={{ marginTop: 16 }}>
@@ -392,6 +386,11 @@ export function InventoryPage() {
                   {nf(recon.search_total)}
                 </div>
                 <div className="mc-stat__label">нужно искать</div>
+                <details className="hint">
+                  <summary>Как считается?</summary>
+                  Из остатка ЧЗ вычитаются товары в пути по УПД и учётный остаток МойСклада.
+                  Искать нужно положительную разницу по каждой позиции.
+                </details>
               </div>
               <div className="mc-stat">
                 <div className="mc-stat__num">{nf(recon.unmatched_positions)}</div>

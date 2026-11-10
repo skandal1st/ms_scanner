@@ -49,6 +49,7 @@ export function ShipmentPage({
   presetDocument = null,
   onSent,
 }: ShipmentPageProps = {}) {
+  const matchPanel = useRef<HTMLDivElement>(null)
   const modal = useModal()
   const navigate = useNavigate()
   const location = useLocation()
@@ -57,8 +58,9 @@ export function ShipmentPage({
   useScanUpdates(terminalMode ? document?.id ?? null : null)
   const [workspaceTab, setWorkspaceTab] = useFlowWorkspaceTab('shipment_workspace_tab')
   const summaryCount = progress.hasPlan
-    ? `${progress.total.scanned}/${progress.total.expected}`
+    ? `${progress.total.addedTotal}/${progress.total.expected}`
     : progress.total.addedTotal
+  const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
   // вкладку и порт открытыми всю смену, как это делает 1С.
@@ -327,7 +329,7 @@ export function ShipmentPage({
       <header className="acc-header">
         <div className="flex-row gap-8" style={{ alignItems: 'center' }}>
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
-          {!embedded && <button type="button" className="button button--sm" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
+
           {document?.kind === 'demand' && document.moysklad_id && (document.can_resend_marks || document.status === 'accepted') &&
             <ResendShipmentMarks key={document.id} documentId={document.id} onStateChange={() => {
               const id = document.id
@@ -335,17 +337,45 @@ export function ShipmentPage({
                 if (useScanStore.getState().document?.id === id) setDocument(data)
               }).catch(() => {})
             }} />}
+          {(!embedded || document) && <details className="shipment-actions" key={document?.id ?? 'selection'}>
+            <summary className="button button--sm">Действия</summary>
+            <div className="shipment-actions__list" onClick={event => {
+              if ((event.target as Element).closest('button')) event.currentTarget.closest('details')?.removeAttribute('open')
+            }}>
+              {!embedded && <button className="button" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
+              {document && <>
+                {collectionReady && document.status === 'draft' && !terminalMode &&
+                  <button className="button" onClick={() => setBulkOpen(true)}>Загрузить список марок</button>}
+                {!embedded && document.moysklad_id && document.kind === 'demand' &&
+                  <button className="button" onClick={() => void handleOpenWriteoff()}
+                    disabled={document.status === 'processing' || opening || openingWriteoff || sending || bulkBusy || verifying}>
+                    {openingWriteoff ? 'Готовим вывод из оборота…' : 'Создать вывод из оборота'}
+                  </button>}
+                {scans.some(scan => !scan.is_barcode) && document.status === 'draft' &&
+                  <button className="button" disabled={sending || verifying || bulkBusy} onClick={() => void handleVerify(true)}>
+                    Перепроверить все марки в ЧЗ
+                  </button>}
+                {scans.length > 0 && <>
+                  <button className="button" disabled={exporting} onClick={handleExportXlsx}>Выгрузить в XLSX</button>
+                  {document.status === 'draft' && <button className="button" disabled={clearMutation.isPending || verifying || sending || bulkBusy}
+                    onClick={() => setShowClearConfirm(true)}>Очистить</button>}
+                </>}
+              </>}
+            </div>
+          </details>}
           {document && <span className={docStatusCls}>{docStatusText}</span>}
           {document && !embedded && (
             <button
               type="button"
               className="button button--sm"
               onClick={handleDetach}
-              title="Отвязаться и выбрать другую отгрузку (сканы остаются в документе)"
+              disabled={opening || sending || bulkBusy || openingWriteoff || verifying}
+              title="Сканы сохранятся в документе"
             >
-              <Icon name="close" size={14} /> Отвязаться
+              Сменить документ
             </button>
           )}
+          {document && !embedded && <span className="hint">Сканы сохранятся</span>}
           {document?.moysklad_id && (!embedded || terminalMode) ? (
             <Suspense fallback={null}>
               <TsdDocumentQr moyskladId={document.moysklad_id} name={document.name} />
@@ -401,55 +431,39 @@ export function ShipmentPage({
           </button>
         </div>
       )}
-      {terminalMode && <div style={{padding:'12px 18px'}}>
+      {terminalMode && document && <div style={{padding:'12px 18px'}}>
         <p className="hint">Режим ТСД: сканируйте марки на терминале. Изменения сборки отображаются здесь автоматически.</p>
         <StatsPanel />
       </div>}
       <div className="acc-body">
         {!terminalMode && <>
-        <div className="acc-left" style={{ width: leftWidth }}>
-          {!embedded && (
+        <div className={document ? "acc-left" : "acc-left shipment-selection"} style={document ? { width: leftWidth } : undefined}>
+          {!embedded && !document && (
             <>
-              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || openingWriteoff || sending || bulkBusy || document?.status === 'processing'} />
+              <CustomerOrderPicker onSelect={handleSelectDoc} disabled={opening || openingWriteoff || sending || bulkBusy} />
               <fieldset disabled={opening || openingWriteoff} style={{border: 0, padding: 0, margin: 0, minWidth: 0}}>
                 <DocumentSelector kind="demand" onSelect={handleSelectDoc} selected={document} />
               </fieldset>
               {opening && <p role="status" className="hint">Подождите…</p>}
             </>
           )}
-          <ManualProductTargetBar />
-          <ScanInput documentId={collectionReady ? document?.id ?? null : null}
-            inactiveHint={document ? 'Нажмите «Начать сборку», чтобы сканировать марки' : undefined} />
-          <button
-            type="button"
-            className="button"
-            style={{ marginTop: 8, width: '100%', justifyContent: 'center' }}
-            disabled={!collectionReady}
-            onClick={() => setBulkOpen(true)}
-          >
-            <Icon name="upload" size={16} /> Загрузить список марок
-          </button>
-          <StatsPanel />
-          {!embedded && <button type="button" className="button"
-            style={{ width: '100%', justifyContent: 'center', flexShrink: 0 }}
-            disabled={!document?.moysklad_id || document.kind !== 'demand' || document.status === 'processing' || opening || openingWriteoff || sending || bulkBusy || verifying}
-            onClick={() => void handleOpenWriteoff()}>
-            <Icon name="writeoff" size={16} />
-            {openingWriteoff ? 'Готовим вывод из оборота…' : 'Создать вывод из оборота'}
-          </button>}
+          {collectionReady && document?.status === 'draft' && <ManualProductTargetBar />}
+          <ScanInput documentId={collectionReady && document?.status === 'draft' ? document.id : null}
+            inactiveHint="" />
+          {collectionReady && scans.length > 0 && <StatsPanel />}
         </div>
 
-        <div
+        {document && <div
           className="acc-split"
           onMouseDown={startResize}
           role="separator"
           aria-orientation="vertical"
           title="Потяните, чтобы изменить ширину панелей"
-        />
+        />}
         </>}
 
-        <div className="acc-right">
-          <UnknownProductsPicker />
+        {document && <div className="acc-right">
+          <div ref={matchPanel}><UnknownProductsPicker /></div>
           <FlowWorkspaceTabs
             composition={<PackagingComposition key={document?.id ?? 'empty'} documentId={document?.id ?? null} active={workspaceTab === 'composition'} />}
             summaryLabel="Сборка"
@@ -464,7 +478,7 @@ export function ShipmentPage({
                 <ProgressTable shipment signatureInn={signatureInn} tabbed sortByName showScanTarget={!terminalMode} onInspectMarks={() => setWorkspaceTab('marks')} />
               ) : (
                 <div className="flow-tabs__empty">
-                  Выберите отгрузку и начните сканирование — здесь появится состав сборки.
+                  После первого скана здесь появится состав сборки.
                 </div>
               )
             }
@@ -474,33 +488,10 @@ export function ShipmentPage({
               </div>
             }
           />
-        </div>
+        </div>}
       </div>
 
-      <footer className="acc-footer">
-        <button
-          type="button"
-          className="button"
-          disabled={!document || scans.length === 0 || clearMutation.isPending}
-          onClick={() => setShowClearConfirm(true)}
-        >
-          {clearMutation.isPending ? 'Очистка…' : 'Очистить'}
-        </button>
-        <button
-          type="button"
-          className="button"
-          disabled={!document || scans.length === 0 || exporting}
-          onClick={handleExportXlsx}
-          title="Выгрузить структуру заказа (наименование + марка) в XLSX"
-        >
-          {exporting ? (
-            'Выгрузка…'
-          ) : (
-            <>
-              <Icon name="upload" size={15} style={{ transform: 'rotate(180deg)' }} /> Выгрузить в XLSX
-            </>
-          )}
-        </button>
+      {document && collectionReady && scans.length > 0 && <footer className="acc-footer">
         <div className="acc-footer__spacer" />
         {UPD_EXPORT_VISIBLE && document?.moysklad_id && document.status === 'accepted' && <button type="button" className="button"
           onClick={() => setUpdOpen(true)}>XML УПД</button>}
@@ -523,55 +514,26 @@ export function ShipmentPage({
             {ownerWarnings.unknown > 0 && `${ownerWarnings.unknown} не проверено`}
           </span>
         )}
-        {stats.scanned > 0 && (
-          <button
-            type="button"
-            className="button"
-            disabled={!document || document.status !== 'draft' || sending || verifying}
-            onClick={() => void handleVerify()}
-            style={{ marginRight: 8 }}
-          >
-            {verifying
-              ? 'Проверяю марки…'
-              : `Проверить марки (${stats.scanned})`}
+        {waitingForCheck || stats.scanned > 0 ? (
+          <button type="button" className="button button--success"
+            disabled={document.status !== 'draft' || sending || bulkBusy || waitingForCheck}
+            onClick={() => void handleVerify()}>
+            {waitingForCheck ? 'Проверяем…' : `Проверить марки (${stats.scanned})`}
           </button>
-        )}
-        {scans.some(scan => !scan.is_barcode) && <button type="button" className="button"
-          disabled={!document || document.status !== 'draft' || sending || verifying}
-          onClick={() => void handleVerify(true)} style={{ marginRight: 8 }}>
-          {verifying ? 'Проверяю марки…' : 'Перепроверить все марки в ЧЗ'}
-        </button>}
-        <button
+        ) : stats.unknown_product > 0 && document.status === 'draft' ? (
+          <button type="button" className="button button--primary"
+            onClick={() => matchPanel.current?.querySelector('input')?.focus()}>
+            Сопоставить товары ({stats.unknown_product})
+          </button>
+        ) : <button
           type="button"
           className="button button--success"
-          disabled={
-            !document ||
-            !collectionReady ||
-            scans.length === 0 ||
-            sending ||
-            document?.status === "processing" ||
-            document?.status === "accepted" ||
-            verifying ||
-            stats.scanned > 0 ||
-            stats.pending > 0 ||
-            stats.unknown_product > 0
-          }
-          title={
-            stats.scanned > 0
-              ? `Сначала проверьте марки (${stats.scanned} не проверено)`
-              : stats.unknown_product > 0
-                ? `Сначала сопоставьте товары для ${stats.unknown_product} кодов`
-                : undefined
-          }
+          disabled={sending || bulkBusy || document.status !== 'draft' || progress.total.addedTotal === 0}
           onClick={() => setShowConfirm(true)}
         >
           {sending
             ? progressLabel
-            : stats.scanned > 0
-              ? `Проверьте марки (${stats.scanned})`
-              : stats.unknown_product > 0
-                ? `Сопоставьте товары (${stats.unknown_product})`
-                : terminalMode ? `Отправить в МС (${progress.hasPlan ? `${progress.total.scanned}/${progress.total.expected}` : progress.total.addedTotal})`
+            : terminalMode ? `Отправить в МС (${progress.hasPlan ? `${progress.total.scanned}/${progress.total.expected}` : progress.total.addedTotal})`
                 : progress.hasPlan
                 ? stats.overflow > 0
                   ? `Отгрузить ${progress.total.scanned}/${progress.total.expected} + ${stats.overflow} сверх`
@@ -579,8 +541,8 @@ export function ShipmentPage({
                 : progress.hasSummary && progress.total.addedTotal > 0
                   ? `Отгрузить (${progress.total.addedTotal})`
                   : 'Отгрузить товары'}
-        </button>
-      </footer>
+        </button>}
+      </footer>}
 
       <BulkMarksModal key={document?.id ?? 'no-document'}
         open={bulkOpen}

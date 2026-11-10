@@ -9,19 +9,21 @@ export function StatsPanel() {
     stats.pending +
     stats.scanned +
     stats.overflow +
-    stats.unknown_product
+    stats.unknown_product +
+    stats.used_in_other_doc
 
   return (
     <div className="stats">
       <Row label="Всего" value={total} />
-      {stats.scanned > 0 && <Row label="Не проверено" value={stats.scanned} variant="warn" />}
-      <Row label="Валидных" value={stats.valid} variant="ok" />
+      {stats.scanned > 0 && <Row label="Ждут проверки" value={stats.scanned} variant="warn" />}
+      {stats.valid > 0 && <Row label="Проверено" value={stats.valid} variant="ok" />}
       {stats.overflow > 0 && <Row label="Сверх плана" value={stats.overflow} variant="error" />}
       {stats.unknown_product > 0 && (
         <Row label="Без товара" value={stats.unknown_product} variant="warn" />
       )}
-      <Row label="Ошибок" value={stats.invalid} variant="error" />
-      <Row label="Дублей" value={stats.duplicate} variant="warn" />
+      {stats.invalid > 0 && <Row label="Ошибок" value={stats.invalid} variant="error" />}
+      {stats.used_in_other_doc > 0 && <Row label="В другом документе" value={stats.used_in_other_doc} variant="error" />}
+      {stats.duplicate > 0 && <Row label="Дублей" value={stats.duplicate} variant="warn" />}
       {stats.pending > 0 && <Row label="Проверяется" value={stats.pending} />}
     </div>
   )

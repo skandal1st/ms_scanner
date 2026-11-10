@@ -29,9 +29,9 @@ export function LaunchPage() {
         : mode === 'writeoff'
           ? '/scan/writeoff'
           : '/scan/shipment'
-    const target = docId ? `${base}?doc=${encodeURIComponent(docId)}` : base
+    const target = mode === 'inventory' ? '/inventory/count' : docId ? `${base}?doc=${encodeURIComponent(docId)}` : base
 
-    if (localStorage.getItem('access_token')) {
+    if (mode !== 'inventory' && localStorage.getItem('access_token')) {
       navigate(target, { replace: true })
       return
     }
@@ -57,7 +57,7 @@ export function LaunchPage() {
         navigate(target, { replace: true })
       })
       .catch((err) => {
-        if (localStorage.getItem('access_token')) {
+        if (mode !== 'inventory' && localStorage.getItem('access_token')) {
           navigate(target, { replace: true })
           return
         }
@@ -99,6 +99,7 @@ export function LaunchPage() {
         <div style={{ color: 'var(--ms-text-muted)' }}>
           {(() => {
             const m = new URLSearchParams(window.location.search).get('mode')
+            if (m === 'inventory') return 'Открываем физический пересчёт…'
             if (m === 'acceptance') return 'Открываем приёмку...'
             if (m === 'writeoff') return 'Открываем списание...'
             return 'Открываем отгрузку...'

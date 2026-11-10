@@ -42,6 +42,7 @@ export function AcceptancePage({
   const queryClient = useQueryClient()
   const [doc, setDoc] = useState<AcceptanceDoc | null>(null)
   const [result, setResult] = useState<ImportUpdResult | null>(null)
+  const [importSession, setImportSession] = useState(0)
   const [scans, setScans] = useState<Scan[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -78,8 +79,8 @@ export function AcceptancePage({
         group,
         moyskladId || undefined,
       )
-      setDoc(created)
       const { data: imp } = await acceptanceApi.importUpd(created.id, file)
+      setDoc(created)
       setResult(imp)
       const { data: sc } = await scansApi.list(created.id)
       setScans(sc)
@@ -111,9 +112,9 @@ export function AcceptancePage({
           moyskladId || undefined,
         )
         target = created
-        setDoc(created)
       }
       const { data: imp } = await acceptanceApi.importMarks(target.id, codes)
+      setDoc(target)
       setResult(imp)
       const { data: sc } = await scansApi.list(target.id)
       setScans(sc)
@@ -276,6 +277,7 @@ export function AcceptancePage({
   }
 
   const handleNextAcceptance = useCallback(() => {
+    setImportSession(session => session + 1)
     resetSend()
     setDoc(null)
     setResult(null)
@@ -420,7 +422,7 @@ export function AcceptancePage({
       <header className="acc-header">
         <h1 className="acc-header__title">Приёмка маркировки (УПД)</h1>
         <span className="acc-header__doc">
-          {result ? `Позиций: ${positions.length}` : 'Файл не загружен'}
+          {result && `Позиций: ${positions.length}`}
         </span>
       </header>
 
@@ -432,7 +434,10 @@ export function AcceptancePage({
       {docId && <details style={{ margin: '12px 16px' }}><summary>Сверка приёмки на ТСД</summary><PhysicalCounts key={docId} mode="acceptance" documentId={docId} /></details>}
       <div style={{ padding: '12px 16px 0' }}>
         <UpdImportBar
-          busy={busy}
+          key={importSession}
+          busy={busy || sending || confirmingAll || doc?.status === 'processing'}
+          imported={result ? doc : null}
+          onNew={handleNextAcceptance}
           onSubmit={handleSubmit}
           onSubmitMarks={handleSubmitMarks}
           onSubmitEdo={handleEdoImport}
@@ -464,11 +469,6 @@ export function AcceptancePage({
             )}
             {result.total_vat != null && (
               <> · в т.ч. НДС: <b>{rub(result.total_vat)} ₽</b></>
-            )}
-            {linkedToMs ? (
-              <> · привязано к поступлению МС</>
-            ) : (
-              <> · <span style={{ color: 'var(--st-warn-fg)' }}>без записи в МС</span></>
             )}
           </div>
         )}
@@ -542,7 +542,7 @@ export function AcceptancePage({
       )}
 
       <div style={{ padding: '12px 16px' }}>
-        {result ? (
+        {result && (
           <div className="acc-table-wrap" style={{ background: '#fff' }}>
             <ResizableTable
               columns={columns}
@@ -569,23 +569,12 @@ export function AcceptancePage({
               )}
             />
           </div>
-        ) : (
-          <p className="text-muted" style={{ fontSize: 13 }}>
-            Выберите товарную группу, поступление МойСклад (куда записать коды) и
-            загрузите файл УПД (XML формата ФНС 5.03) — система распознает позиции и
-            коды маркировки и сопоставит их с товарами поступления по GTIN.
-          </p>
         )}
       </div>
       </div>
 
-      {result && (
+      {result && linkedToMs && (
         <footer className="acc-footer">
-          {!linkedToMs && (
-            <span className="text-muted" style={{ fontSize: 12 }}>
-              Поступление МС не выбрано — отправка в МС недоступна.
-            </span>
-          )}
           {sendError && (
             <span style={{ fontSize: 12, color: 'var(--st-err-fg)' }}>{sendError}</span>
           )}
@@ -594,7 +583,7 @@ export function AcceptancePage({
             type="button"
             className="button button--success"
             disabled={
-              !linkedToMs ||
+              busy ||
               (scans.length === 0 && !positions.some(p => p.matched && (p.quantity ?? 0) > 0)) ||
               blockingUnmatched.length > 0 ||
               sending ||
@@ -602,9 +591,7 @@ export function AcceptancePage({
               alreadyAccepted
             }
             title={
-              !linkedToMs
-                ? 'Выберите поступление МойСклад при загрузке УПД'
-                : blockingUnmatched.length > 0
+              blockingUnmatched.length > 0
                   ? `Сначала сопоставьте товары (${blockingUnmatched.length})`
                   : undefined
             }

@@ -1,10 +1,15 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
+import { NavDropdown } from './NavDropdown'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { organizationProfilesApi } from '../api/client'
 import { getOrganizationProfileId, setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanStore } from '../store/scanStore'
 
-export function OrganizationProfileSwitcher({ compact = false }: { compact?: boolean }) {
+export function OrganizationProfileSwitcher({ compact = false, children, activePage }: {
+  compact?: boolean
+  children?: ReactNode
+  activePage?: boolean
+}) {
   const queryClient = useQueryClient()
   const profilesQuery = useQuery({
     queryKey: ['organization-profiles'],
@@ -44,14 +49,14 @@ export function OrganizationProfileSwitcher({ compact = false }: { compact?: boo
     window.location.reload()
   }
 
-  if (profilesQuery.isLoading) return compact ? null : <p className="hint">Загружаем юрлица…</p>
+  if (profilesQuery.isLoading && !compact) return <p className="hint">Загружаем юрлица…</p>
 
-  return (
+  const selector = (
     <div
       className="field-row"
       style={{ alignItems: 'center', gap: 8, flexWrap: compact ? 'nowrap' : 'wrap' }}
     >
-      {!compact && <label htmlFor={selectId}><b>Активное юрлицо</b></label>}
+      <label htmlFor={selectId}><b>Активное юрлицо</b></label>
       <select
         id={selectId}
         className="ui-input"
@@ -84,4 +89,9 @@ export function OrganizationProfileSwitcher({ compact = false }: { compact?: boo
       )}
     </div>
   )
+  if (!compact) return selector
+  return <NavDropdown label={active?.name || 'Аккаунт'} className="app-nav__account" active={activePage}>
+    {selector}
+    {children}
+  </NavDropdown>
 }

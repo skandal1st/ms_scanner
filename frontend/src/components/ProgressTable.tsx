@@ -128,8 +128,8 @@ export function ProgressTable({ shipment = false, signatureInn, tabbed = false, 
         </span>
         {progress.hasPlan ? (
           <span style={styles.totals}>
-            В плане: {progress.total.scanned} / {progress.total.expected}
-            {progress.total.addedTotal !== progress.total.scanned && (
+            {shipment ? 'Собрано по плану' : 'В плане'}: {shipment ? progress.total.addedTotal : progress.total.scanned} / {progress.total.expected}
+            {!shipment && progress.total.addedTotal !== progress.total.scanned && (
               <span style={{ marginLeft: 8, color: 'var(--ms-text-subtle)' }}>
                 · кодов: {progress.total.addedTotal}
               </span>
