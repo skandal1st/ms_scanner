@@ -194,6 +194,9 @@ async def sync_profiles(
                 "на просмотр юрлиц и переустановите его после обновления дескриптора."
             ),
         ) from exc
+    # Serialize profile creation with the lazy first-login initializer.
+    # Fetch MS data before taking the account lock.
+    await db.execute(select(User.id).where(User.id == current_user.id).with_for_update())
     existing = (
         await db.execute(
             select(OrganizationProfile).where(OrganizationProfile.user_id == current_user.id)

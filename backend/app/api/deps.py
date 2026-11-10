@@ -86,6 +86,13 @@ async def get_active_organization_profile(
     if x_organization_profile:
         raise HTTPException(status_code=403, detail="Профиль юрлица недоступен")
 
+    # Concurrent first-login requests must agree on one account profile.
+    # Lock a row that already exists: there is no profile row to lock yet.
+    await db.execute(select(User.id).where(User.id == current_user.id).with_for_update())
+    profile = (await db.execute(query)).scalars().first()
+    if profile:
+        return profile
+
     integration = (
         await db.execute(select(Integration).where(Integration.user_id == current_user.id))
     ).scalar_one_or_none()
