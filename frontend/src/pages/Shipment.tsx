@@ -351,10 +351,6 @@ export function ShipmentPage({
                     disabled={document.status === 'processing' || opening || openingWriteoff || sending || bulkBusy || verifying}>
                     {openingWriteoff ? 'Готовим вывод из оборота…' : 'Создать вывод из оборота'}
                   </button>}
-                {scans.some(scan => !scan.is_barcode) && document.status === 'draft' &&
-                  <button className="button" disabled={sending || verifying || bulkBusy} onClick={() => void handleVerify(true)}>
-                    Перепроверить все марки в ЧЗ
-                  </button>}
                 {scans.length > 0 && <>
                   <button className="button" disabled={exporting} onClick={handleExportXlsx}>Выгрузить в XLSX</button>
                   {document.status === 'draft' && <button className="button" disabled={clearMutation.isPending || verifying || sending || bulkBusy}
@@ -513,6 +509,15 @@ export function ShipmentPage({
             {ownerWarnings.mismatch > 0 && ownerWarnings.unknown > 0 && ' · '}
             {ownerWarnings.unknown > 0 && `${ownerWarnings.unknown} не проверено`}
           </span>
+        )}
+        {document.status === 'draft' && !waitingForCheck && scans.some(scan =>
+          !scan.is_barcode && (scan.status === 'valid' || scan.status === 'invalid' ||
+            scan.status === 'overflow' || scan.status === 'unknown_product' || scan.verified_at)
+        ) && (
+          <button type="button" className="button" disabled={sending || bulkBusy}
+            onClick={() => void handleVerify(true)}>
+            Повторно проверить все марки в ЧЗ
+          </button>
         )}
         {waitingForCheck || stats.scanned > 0 ? (
           <button type="button" className="button button--success"
