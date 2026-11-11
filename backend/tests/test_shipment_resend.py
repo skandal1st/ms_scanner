@@ -12,6 +12,11 @@ from app.services.moysklad import MoySkladService
 from tests.test_release_processing import Result
 
 
+@pytest.fixture(autouse=True)
+def no_recovery_wait(monkeypatch):
+    monkeypatch.setattr(service.asyncio, 'sleep', AsyncMock())
+
+
 def code(i):
     return f'010464019551637321S{i:06d}'
 
@@ -75,15 +80,155 @@ async def test_resends_only_missing_56_and_preserves_fields_then_noops_on_second
 
 
 @pytest.mark.parametrize('timeout', [False, True])
-async def test_unconfirmed_success_or_timeout_never_blindly_replays_post(monkeypatch, timeout):
+async def test_persistent_unconfirmed_write_is_bounded_and_next_attempt_is_not_permanently_blocked(monkeypatch, timeout):
     ms, desired, doc = fixture(monkeypatch, expected=3, existing=1, drop=True, timeout=timeout)
     job = {}
     with pytest.raises((ValueError, httpx.ReadTimeout)):
         await service.restore(ms, doc, desired, job, AsyncMock())
     assert job['in_flight'] and not job.get('confirmed')
-    assert ms._request_with_retry.await_count == 1
-    with pytest.raises(ValueError, match='предыдущей записи'):
+    assert ms._request_with_retry.await_count == 1 + len(service.RECOVERY_DELAYS)
+    # Each retry gets a fresh snapshot; a persisted uncertain marker is recoverable.
+    with pytest.raises((ValueError, httpx.ReadTimeout)):
         await service.restore(ms, doc, desired, job, AsyncMock())
+    assert ms._request_with_retry.await_count == 2 * (1 + len(service.RECOVERY_DELAYS))
+
+
+@pytest.mark.parametrize('saved', [0, 1, 2])
+@pytest.mark.parametrize('failure', ['timeout', 503])
+async def test_interrupted_post_reconciles_absent_partial_or_complete_batch(monkeypatch, saved, failure):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    original_post = ms._request_with_retry.side_effect
+    first = True
+    async def interrupted(client, method, url, **kwargs):
+        nonlocal first
+        if first:
+            first = False
+            for entry in kwargs['json'][:saved]:
+                ms.rows['position']['codes'].append({**entry, 'id': str(uuid4())})
+            if failure == 'timeout':
+                raise httpx.ReadError('connection lost')
+            return httpx.Response(failure, request=httpx.Request(method, url))
+        # Never repeat a mark already saved by the failed request.
+        present = {service.corrections.code_key(c) for c in ms.rows['position']['codes']}
+        assert not present & {service.corrections.code_key(c) for c in kwargs['json']}
+        return await original_post(client, method, url, **kwargs)
+    ms._request_with_retry.side_effect = interrupted
+    persisted = []
+    async def persist():
+        persisted.append(copy.deepcopy(job))
+    job = {}
+    await service.restore(ms, doc, desired, job, persist)
+    assert job['confirmed'] == 3 and job['already'] == 1 and job['added'] == 2
+    assert 'in_flight' not in job
+    assert len(ms.rows['position']['codes']) == 3
+    assert ms._request_with_retry.await_count == (1 if saved == 2 else 2)
+    assert any(state.get('in_flight') for state in persisted)
+
+
+async def test_legacy_uncertain_marker_resumes_missing_codes_without_manual_reset(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=68, existing=52)
+    job = {'in_flight': {'position_id': 'position', 'keys': [ms._cis_dedup_key(code(52))]}}
+    await service.restore(ms, doc, desired, job, AsyncMock())
+    assert job['confirmed'] == 68 and job['added'] == 16
+    assert 'in_flight' not in job
+
+
+async def test_repeat_after_503_with_five_of_eleven_already_saved(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=11, existing=5)
+    # The previous POST had no definitive response; two of its four codes are visible.
+    job = {'in_flight': {'position_id': 'position', 'keys': [ms._cis_dedup_key(code(i)) for i in range(3, 7)]}}
+    await service.restore(ms, doc, desired, job, AsyncMock())
+    assert [service.corrections.code_key(entry) for entry in ms._request_with_retry.await_args.kwargs['json']] == [
+        ms._cis_dedup_key(code(i)) for i in range(5, 11)]
+    ms._request_with_retry.assert_awaited_once()
+    assert job['already'] == 5 and job['added'] == 6 and job['confirmed'] == 11
+    ms._request_with_retry.reset_mock()
+    await service.restore(ms, doc, desired, {}, AsyncMock())
+    ms._request_with_retry.assert_not_awaited()
+
+
+async def test_failed_readback_after_successful_post_does_not_send_batch_twice(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    ms._load_tracking_codes.side_effect = httpx.ReadTimeout('readback unavailable')
+    job = {}
+    await service.restore(ms, doc, desired, job, AsyncMock())
+    assert job['confirmed'] == 3 and job['added'] == 2
+    assert 'in_flight' not in job
+    ms._request_with_retry.assert_awaited_once()
+
+
+async def test_delayed_success_readback_is_reconciled_without_second_post(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    # The first GET lags behind the POST, the subsequent full snapshot is current.
+    ms._load_tracking_codes.side_effect = lambda *args: row([code(0)])['codes']
+    job = {}
+    await service.restore(ms, doc, desired, job, AsyncMock())
+    assert job['confirmed'] == 3 and job['added'] == 2
+    ms._request_with_retry.assert_awaited_once()
+
+
+async def test_failed_initial_snapshot_can_recover_without_manual_action(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    current_snapshot = service.corrections.snapshot
+    calls = 0
+    async def snapshot(*args):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.HTTPStatusError('limit', request=httpx.Request('GET', 'https://ms.test'),
+                                        response=httpx.Response(429))
+        return await current_snapshot(*args)
+    monkeypatch.setattr(service.corrections, 'snapshot', snapshot)
+    job = {}
+    await service.restore(ms, doc, desired, job, AsyncMock())
+    assert calls == 3 and job['confirmed'] == 3
+    ms._request_with_retry.assert_awaited_once()
+
+
+async def test_failed_reconciliation_reads_never_clear_marker_or_send_codes(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    job = {'in_flight': {'position_id': 'position', 'keys': [ms._cis_dedup_key(code(1))]}}
+    original = copy.deepcopy(job)
+    monkeypatch.setattr(service.corrections, 'snapshot', AsyncMock(side_effect=httpx.ReadTimeout('read failed')))
+    persist = AsyncMock()
+    with pytest.raises(httpx.ReadTimeout):
+        await service.restore(ms, doc, desired, job, persist)
+    assert job == original
+    ms._request_with_retry.assert_not_awaited()
+    persist.assert_not_awaited()
+
+
+@pytest.mark.parametrize('status', [429, 412])
+async def test_explicit_rejection_clears_marker_and_only_rate_limit_retries(monkeypatch, status):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    original_post = ms._request_with_retry.side_effect
+    calls = 0
+    async def rejected(client, method, url, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(status, request=httpx.Request(method, url))
+        return await original_post(client, method, url, **kwargs)
+    ms._request_with_retry.side_effect = rejected
+    job = {}
+    if status == 412:
+        with pytest.raises(httpx.HTTPStatusError):
+            await service.restore(ms, doc, desired, job, AsyncMock())
+        assert calls == 1
+    else:
+        await service.restore(ms, doc, desired, job, AsyncMock())
+        assert calls == 2 and job['confirmed'] == 3
+    assert 'in_flight' not in job
+
+
+async def test_changed_financial_fields_abort_recovery_without_another_post(monkeypatch):
+    ms, desired, doc = fixture(monkeypatch, expected=3, existing=1)
+    async def interrupted(*args, **kwargs):
+        ms.rows['position']['fields']['price'] += 1
+        raise httpx.ReadTimeout('lost response')
+    ms._request_with_retry.side_effect = interrupted
+    with pytest.raises(ValueError, match='цены изменились'):
+        await service.restore(ms, doc, desired, {}, AsyncMock())
     assert ms._request_with_retry.await_count == 1
 
 

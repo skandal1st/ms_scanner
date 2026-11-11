@@ -83,10 +83,12 @@ class MoySkladService:
     # ВАЖНО: МС разворачивает `expand` (agent/customerOrder) только при limit ≤ 100 —
     # при 101+ имена контрагентов приходят пустыми. Поэтому строго 100.
     SEARCH_SCAN_LIMIT = 100
+    TRACKING_REQUEST_INTERVAL = 0.25
 
     def __init__(self, token: str):
         self.token = token
         self.base_url = settings.MOYSKLAD_API_BASE
+        self._next_tracking_request_at = 0.0
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -119,6 +121,13 @@ class MoySkladService:
         from app.core.diagnostics import capture_request, response_body, safe_url
         method = method.upper()
         for attempt in range(len(self._RATE_LIMIT_DELAYS) + 1):
+            if '/trackingCodes' in url:
+                # Smooth large sequential snapshots and writes instead of bursting
+                # into the account's shared MS request limit.
+                delay = self._next_tracking_request_at - time.monotonic()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._next_tracking_request_at = time.monotonic() + self.TRACKING_REQUEST_INTERVAL
             started = time.monotonic()
             try:
                 resp = await client.request(method, url, headers=self.headers, **kwargs)
@@ -491,9 +500,9 @@ class MoySkladService:
                 response = await self._request_with_retry(client, "GET", url + "/positions", params={
                     "expand": "assortment,assortment.uom", "fields": "declaration", "codetype": "gs1", "limit": 100, "offset": offset})
                 response.raise_for_status()
-                page = response.json().get("rows", [])
+                page, complete = self._shipment_page(response.json(), offset)
                 rows.extend(page)
-                if len(page) < 100:
+                if complete:
                     break
                 offset += len(page)
             for row in rows:
@@ -645,6 +654,19 @@ class MoySkladService:
                     return rows
                 offset += len(page)
 
+    @staticmethod
+    def _shipment_page(payload, offset):
+        page = payload if isinstance(payload, list) else payload.get("rows")
+        if not isinstance(page, list):
+            raise ValueError("МойСклад не вернул список позиций или марок. Повторите сверку.")
+        size = (payload.get("meta") or {}).get("size") if isinstance(payload, dict) else None
+        if size is None:
+            return page, len(page) < 100
+        end = offset + len(page)
+        if not isinstance(size, int) or end > size or (end < size and not page):
+            raise ValueError("МойСклад вернул неполный список позиций или марок. Повторите сверку.")
+        return page, end == size
+
     async def _load_tracking_codes(self, client, kind, doc_id, position_id):
         codes = []
         offset = 0
@@ -654,10 +676,9 @@ class MoySkladService:
                 params={"codetype": "gs1", "limit": 100, "offset": offset},
             )
             resp.raise_for_status()
-            payload = resp.json()
-            page = payload if isinstance(payload, list) else payload.get("rows", [])
+            page, complete = self._shipment_page(resp.json(), offset)
             codes.extend(page)
-            if len(page) < 100:
+            if complete:
                 return codes
             offset += len(page)
 

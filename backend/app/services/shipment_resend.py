@@ -1,4 +1,5 @@
 """Add only missing marks to existing shipment positions; never PUT financial fields."""
+import asyncio
 import copy
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -10,10 +11,18 @@ from sqlalchemy import select
 from app.db.models import Document, DocumentKind, DocumentStatus, Scan, ScanStatus
 from app.services import shipment_corrections as corrections
 from app.services.moysklad import MoySkladService
+from app.core.logging import logger
 
 MARKER = 'mark_resend'
 ACTIVE = {'queued', 'running'}
 PUBLIC_FIELDS = {'id', 'status', 'expected', 'already', 'added', 'confirmed', 'error', 'updated_at'}
+RECOVERY_DELAYS = (2.0, 5.0, 10.0)
+RECONCILE_DELAY = 2.0
+TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
+
+
+class UnconfirmedTrackingWrite(ValueError):
+    """A successful response was not yet reflected in the readback."""
 
 
 def public_state(doc):
@@ -188,14 +197,47 @@ async def refresh_correction(db, doc, scans, rows, source_scans):
 
 
 async def restore(ms, doc, desired, job, persist):
+    # Each retry starts with a complete successful read, never with a blind POST.
+    # Keep the original financial snapshot across retries of this operation.
+    baseline = {}
+    for attempt in range(len(RECOVERY_DELAYS) + 1):
+        try:
+            return await _restore_attempt(ms, doc, desired, job, persist, baseline)
+        except (httpx.TransportError, httpx.HTTPStatusError, UnconfirmedTrackingWrite) as exc:
+            if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code not in TRANSIENT_STATUSES:
+                raise
+            if attempt == len(RECOVERY_DELAYS):
+                raise
+            delay = RECOVERY_DELAYS[attempt]
+            logger.warning('shipment_resend.reconcile_retry', moysklad_id=doc.moysklad_id,
+                           attempt=attempt + 1, delay=delay, error_type=type(exc).__name__)
+            await asyncio.sleep(delay)
+
+
+async def _restore_attempt(ms, doc, desired, job, persist, baseline):
+    if job.get('in_flight'):
+        # Give the interrupted request time to settle before checking absence.
+        await asyncio.sleep(RECONCILE_DELAY)
     remote, before = await corrections.snapshot(ms, doc.moysklad_id)
     corrections.assert_scope(doc, remote)
+    if baseline:
+        _assert_same_fields(baseline['rows'], before)
+    else:
+        baseline['rows'] = copy.deepcopy(before)
     expected, actual, batches = missing_batches(ms, before, desired)
     in_flight = job.get('in_flight')
-    if in_flight and not set(in_flight['keys']) <= set(actual):
-        raise ValueError('Результат предыдущей записи не подтверждён МС. Повторная запись не выполнялась: требуется сверка этой позиции в МС.')
+    if in_flight:
+        keys = set(in_flight['keys'])
+        if in_flight['position_id'] not in before or not keys <= set(expected):
+            raise ValueError('Состав отгрузки изменился после прерванной записи. Проверьте позиции и марки в МС.')
+        # A complete read resolves all outcomes: saved, absent or partially saved.
+        # missing_batches has already checked products and remaining capacity.
+        logger.info('shipment_resend.reconciled', moysklad_id=doc.moysklad_id,
+                    confirmed=len(keys & set(actual)), missing=len(keys - set(actual)))
     job.pop('in_flight', None)
-    job.update(status='running', expected=len(expected), already=len(set(expected) & set(actual)), added=0, confirmed=0, error=None)
+    already = len(set(expected) & set(index_codes(baseline['rows'])))
+    job.update(status='running', expected=len(expected), already=already,
+               added=len(set(expected) & set(actual)) - already, confirmed=0, error=None)
     await persist()
     async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10)) as client:
         for pid, entries in batches.items():
@@ -206,7 +248,7 @@ async def restore(ms, doc, desired, job, persist):
                 await persist()
                 response = await ms._request_with_retry(client, 'POST',
                     f'{ms.base_url}/entity/demand/{doc.moysklad_id}/positions/{pid}/trackingCodes', json=batch)
-                if response.status_code == 412:
+                if 400 <= response.status_code < 500 and response.status_code != 408:
                     # MS explicitly rejected this batch; there is no unknown outcome.
                     job.pop('in_flight', None)
                     await persist()
@@ -214,21 +256,26 @@ async def restore(ms, doc, desired, job, persist):
                 codes = await ms._load_tracking_codes(client, 'demand', doc.moysklad_id, pid)
                 saved = index_codes({pid: {**before[pid], 'codes': codes}})
                 if not set(keys) <= set(saved):
-                    raise ValueError('МС не подтвердил сохранение отправленных марок. Повторная запись остановлена, выполните сверку.')
+                    raise UnconfirmedTrackingWrite('МС пока не подтвердил сохранение отправленных марок. Повторите сверку позже.')
                 job.pop('in_flight', None)
                 job['added'] += len(batch)
                 await persist()
     remote, after = await corrections.snapshot(ms, doc.moysklad_id)
     corrections.assert_scope(doc, remote)
-    if set(before) != set(after) or any(before[pid]['fields'] != after[pid]['fields'] for pid in before):
-        raise ValueError('Товары, количества или цены изменились в МС во время отправки. Проверьте отгрузку.')
+    _assert_same_fields(baseline['rows'], after)
     confirmed = index_codes(after)
-    if not set(actual) <= set(confirmed) or not set(expected) <= set(confirmed):
-        raise ValueError('МС не подтвердил полный набор марок. Повторите сверку, уже записанные марки не дублируются.')
+    if (not set(index_codes(baseline['rows'])) <= set(confirmed)
+            or not set(actual) <= set(confirmed) or not set(expected) <= set(confirmed)):
+        raise UnconfirmedTrackingWrite('МС не подтвердил полный набор марок. Повторите сверку, уже записанные марки не дублируются.')
     if any(after[confirmed[key][0]]['product_id'] != product for key, (product, _) in expected.items()):
         raise ValueError('МС вернул марку в другой позиции. Повторная отправка остановлена.')
     job['confirmed'] = len(expected)
     return after
+
+
+def _assert_same_fields(before, after):
+    if set(before) != set(after) or any(before[pid]['fields'] != after[pid]['fields'] for pid in before):
+        raise ValueError('Товары, количества или цены изменились в МС во время отправки. Проверьте отгрузку.')
 
 
 async def process(document_id, user_id, job_id):

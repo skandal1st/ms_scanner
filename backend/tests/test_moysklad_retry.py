@@ -13,7 +13,31 @@ from app.services.moysklad import MoySkladService
 def pauses(monkeypatch):
     sleep = AsyncMock()
     monkeypatch.setattr('app.services.moysklad.asyncio.sleep', sleep)
+    monkeypatch.setattr(MoySkladService, 'TRACKING_REQUEST_INTERVAL', 0)
     return sleep
+
+
+def test_short_shipment_page_requires_remaining_rows_before_reconciliation():
+    assert MoySkladService._shipment_page({'rows': [1], 'meta': {'size': 2}}, 0) == ([1], False)
+    assert MoySkladService._shipment_page({'rows': [2], 'meta': {'size': 2}}, 1) == ([2], True)
+    for incomplete in ({}, {'rows': [], 'meta': {'size': 2}}):
+        with pytest.raises(ValueError):
+            MoySkladService._shipment_page(incomplete, 1)
+
+
+async def test_tracking_requests_are_paced(monkeypatch):
+    clock = [10.0]
+    async def sleep(delay):
+        assert delay == pytest.approx(0.25)
+        clock[0] += delay
+    monkeypatch.setattr('app.services.moysklad.time.monotonic', lambda: clock[0])
+    pause = AsyncMock(side_effect=sleep)
+    monkeypatch.setattr('app.services.moysklad.asyncio.sleep', pause)
+    ms = MoySkladService('fake')
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda request: httpx.Response(200))) as client:
+        for _ in range(3):
+            await ms._request_with_retry(client, 'GET', 'https://x.test/positions/p/trackingCodes')
+    assert pause.await_count == 2
 
 
 @pytest.mark.parametrize('status', [502, 503, 504])

@@ -179,6 +179,7 @@ async def test_read_failure_does_not_write_or_replace_positions(monkeypatch):
 
 
 async def test_retry_sends_only_codes_missing_after_partial_failure(monkeypatch):
+    monkeypatch.setattr('app.services.shipment_resend.asyncio.sleep', AsyncMock())
     ms, calls = setup_ms(monkeypatch, [position(qty=1200)])
     saved = []
     ms._load_tracking_codes = AsyncMock(side_effect=lambda *a: list(saved))
@@ -196,11 +197,13 @@ async def test_retry_sends_only_codes_missing_after_partial_failure(monkeypatch)
         return await original(client, method, url, **kwargs)
 
     ms._request_with_retry = request
-    with pytest.raises(httpx.ReadTimeout):
-        await ms.update_document("demand", "doc", codes(1200))
-    assert len(saved) == 1000
-    await ms.update_document("demand", "doc", codes(1200))
+    # The interrupted batch is reconciled in the same operation, then only the
+    # remaining 200 marks are sent. No manual second attempt is needed.
+    result = await ms.update_document("demand", "doc", codes(1200))
+    assert result['confirmed_codes'] == 1200 and post_calls == 3
     assert len(saved) == 1200
+    await ms.update_document("demand", "doc", codes(1200))
+    assert len(saved) == 1200 and post_calls == 3
     assert len({tc["cis"] for tc in saved}) == 1200
 
 
@@ -444,7 +447,9 @@ async def test_large_shipment_only_appends_760_marks_and_preserves_534_positions
     assert not any(method != 'GET' for method, _, _ in calls)
 
 
-async def test_normal_transfer_does_not_report_success_or_replay_unconfirmed_batch(monkeypatch):
+async def test_normal_transfer_never_reports_unconfirmed_success_and_bounds_reconciled_retries(monkeypatch):
+    from app.services.shipment_resend import RECOVERY_DELAYS
+    monkeypatch.setattr('app.services.shipment_resend.asyncio.sleep', AsyncMock())
     ms, calls = setup_ms(monkeypatch, [position(qty=2)])
     original = ms._request_with_retry
     async def dropped(client, method, url, **kwargs):
@@ -458,4 +463,7 @@ async def test_normal_transfer_does_not_report_success_or_replay_unconfirmed_bat
         with pytest.raises(ValueError, match='не подтвердил|предыдущей записи'):
             await ms.update_document('demand', 'doc', codes(2), tracking_state=state)
         assert state['status'] == 'error' and state.get('in_flight') and state['confirmed'] == 0
-    assert len([c for c in calls if c[0] == 'POST']) == 1
+    posts = [i for i, c in enumerate(calls) if c[0] == 'POST']
+    assert len(posts) == 2 * (1 + len(RECOVERY_DELAYS))
+    assert all(any(c[0] == 'GET' for c in calls[start + 1:end])
+               for start, end in zip(posts, posts[1:]))
