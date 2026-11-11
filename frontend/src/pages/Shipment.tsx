@@ -331,7 +331,7 @@ export function ShipmentPage({
           <h1 className="acc-header__title">Отгрузка маркировки</h1>
 
           {document?.kind === 'demand' && document.moysklad_id && (document.can_resend_marks || document.status === 'accepted') &&
-            <ResendShipmentMarks key={document.id} documentId={document.id} onStateChange={() => {
+            <ResendShipmentMarks key={`resend-${document.id}`} documentId={document.id} onStateChange={() => {
               const id = document.id
               void documentsApi.get(id).then(({ data }) => {
                 if (useScanStore.getState().document?.id === id) setDocument(data)
@@ -387,7 +387,7 @@ export function ShipmentPage({
         </span>
       </header>
 
-      {document?.status === 'draft' && document.moysklad_id && <ShipmentPlanRefresh key={document.id}
+      {document?.status === 'draft' && document.moysklad_id && <ShipmentPlanRefresh key={`plan-refresh-${document.id}`}
         documentId={document.id} summary={document.plan_sync} disabled={opening || sending || openingWriteoff} />}
       {czTokenExpired && (
         <div role="alert" className="alert alert--error" style={{ margin: '12px 18px 0' }}>
