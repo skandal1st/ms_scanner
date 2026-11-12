@@ -19,6 +19,7 @@ import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
 import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
+import { Metrika } from './lib/metrika'
 import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwitcher'
 import { NavDropdown } from './components/NavDropdown'
 import { enforceComScannerMode } from './lib/scannerMode'
@@ -153,6 +154,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <ModalProvider>
       <BrowserRouter>
+        <Metrika />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/ms" element={<MsIframePage />} />
