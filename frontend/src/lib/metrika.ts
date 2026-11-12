@@ -33,11 +33,12 @@ export function Metrika() {
         document.head.append(script)
       }
       window.ym(counter, 'init', {
-        defer: true, ssr: true, clickmap: true, ecommerce: 'dataLayer',
+        ssr: true, clickmap: true, ecommerce: 'dataLayer',
         accurateTrackBounce: true, trackLinks: true, url: page, referrer: referrerOrigin(),
       })
+    } else {
+      window.ym?.(counter, 'hit', page, { referer: lastPage })
     }
-    window.ym?.(counter, 'hit', page, { referer: lastPage || referrerOrigin() })
     lastPage = page
   }, [pathname])
   return null
