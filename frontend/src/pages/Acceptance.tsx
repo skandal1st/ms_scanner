@@ -1,3 +1,4 @@
+import { reachGoal } from '../lib/metrika'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { acceptanceApi, scansApi, productsApi } from '../api/client'
@@ -82,6 +83,7 @@ export function AcceptancePage({
       const { data: imp } = await acceptanceApi.importUpd(created.id, file)
       setDoc(created)
       setResult(imp)
+      reachGoal('acceptance_started')
       const { data: sc } = await scansApi.list(created.id)
       setScans(sc)
     } catch (e) {
@@ -116,6 +118,7 @@ export function AcceptancePage({
       const { data: imp } = await acceptanceApi.importMarks(target.id, codes)
       setDoc(target)
       setResult(imp)
+      reachGoal('acceptance_started')
       const { data: sc } = await scansApi.list(target.id)
       setScans(sc)
     } catch (e) {
@@ -147,6 +150,7 @@ export function AcceptancePage({
       void queryClient.invalidateQueries({ queryKey: ['edo-incoming-count'] })
       setDoc(data.document)
       setResult(data.import_result)
+      reachGoal('acceptance_started')
       const { data: sc } = await scansApi.list(data.document.id)
       setScans(sc)
     } catch (e) {

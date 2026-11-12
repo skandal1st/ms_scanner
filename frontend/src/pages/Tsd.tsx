@@ -1,3 +1,4 @@
+import { reachGoal, recordMarkScan } from '../lib/metrika'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { orderSearchPage, useOrderSearch } from '../hooks/useOrderSearch'
 import axios from 'axios'
@@ -482,6 +483,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     networkMode: 'always',
     mutationFn: (value: { code: string; productId?: string }) => tsdApi.scan(doc.id, value.code, value.productId).then((r) => r.data),
     onSuccess: async (result) => {
+      recordMarkScan(result)
       // Ignore any older recovery snapshot without reverting live updates that
       // arrived while it was loading. The acknowledged scan is authoritative.
       await qc.cancelQueries({ queryKey: ['tsd-document', initial.id] }, { revert: false })
@@ -774,6 +776,7 @@ export function TsdPage() {
   const context = useQuery({ queryKey: ['tsd-mode-context'], queryFn: () => tsdApi.me().then(r => r.data), enabled: authorized, refetchInterval: 10000 })
   const allowed = context.data?.allowed_modes || ['shipment']
   useEffect(() => { if (context.data && mode && !allowed.includes(mode)) { setMode(null); setDocument(null); setActiveId(null); setRequestedId(null); localStorage.removeItem('tsd_document_id') } }, [context.data, mode])
+  useEffect(() => { if (authorized && context.isSuccess) reachGoal('solution_opened') }, [authorized, context.isSuccess])
   const requestedOnce = useRef<string | null>(null)
   const [activeId, setActiveId] = useState(() => localStorage.getItem('tsd_document_id'))
   const previousActiveId = useRef(activeId)
@@ -791,6 +794,7 @@ export function TsdPage() {
     retry: retryTsdDocument,
   })
   const open = (doc: TsdDocumentDetail) => {
+    reachGoal('shipment_selected')
     localStorage.setItem('tsd_document_id', doc.id)
     setActiveId(doc.id)
     setDocument(doc)

@@ -1,3 +1,4 @@
+import { reachGoal } from '../lib/metrika'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -51,7 +52,7 @@ export function PhysicalCounts({ mode, terminal = false, documentId, deviceId, o
   useEffect(() => { if (mode === 'acceptance') setBrand('Приёмка') }, [mode])
   useEffect(() => { if (!store && options.data?.stores.length === 1) setStore(options.data.stores[0].id) }, [options.data, store])
   useEffect(() => { if (!statesEdited && options.data) setStates(options.data.default_include_state_ids || []) }, [options.data, statesEdited])
-  const open = (id: string) => { setActiveId(id); setBrand(mode === 'acceptance' ? 'Приёмка' : ''); setSelected(undefined); setMessage(null) }
+  const open = (id: string) => { if (terminal && mode === 'acceptance') reachGoal('acceptance_started'); setActiveId(id); setBrand(mode === 'acceptance' ? 'Приёмка' : ''); setSelected(undefined); setMessage(null) }
   const fail = (error: unknown) => { setMessage({ text: errorText(error), error: true }); sound.play('error') }
   const create = useMutation({ mutationFn: (body: CountCreate) => api.create(body).then(r => r.data), onSuccess: v => { open(v.id); void qc.invalidateQueries({ queryKey: key }) }, onError: fail })
   const updated = (v: CountProgress) => { qc.setQueryData(progressKey, v); void qc.invalidateQueries({ queryKey: key, exact: true }) }

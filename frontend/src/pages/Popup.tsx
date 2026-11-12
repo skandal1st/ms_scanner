@@ -1,3 +1,4 @@
+import { reachGoal } from '../lib/metrika'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { AcceptancePage } from './Acceptance'
 import { ShipmentPage } from './Shipment'
@@ -133,6 +134,7 @@ export function PopupPage() {
       if (sessionIdRef.current !== sessionId) return
       setOrganizationProfileId(doc.organization_profile_id)
       setState({ kind: 'shipment', doc, workplaces, sessionId })
+      reachGoal('shipment_selected')
     } catch {
       if (sessionIdRef.current !== sessionId) return
       setState({ kind: 'error', message: 'Не удалось загрузить рабочие места. Закройте окно и повторите.', sessionId })
@@ -212,6 +214,7 @@ export function PopupPage() {
         localStorage.setItem('refresh_token', data.refresh_token)
         persistUserIdFromAccessToken(data.access_token)
         authedRef.current = true
+        reachGoal('solution_opened')
         void tryResolve()
       })
       .catch((err) => {

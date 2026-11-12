@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation } from 'react-router-dom'
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
@@ -19,7 +20,7 @@ import { MsIframePage } from './pages/MsIframe'
 import { LaunchPage } from './pages/Launch'
 import { PopupPage } from './pages/Popup'
 import { useEdition } from './hooks/useEdition'
-import { Metrika } from './lib/metrika'
+import { Metrika, reachGoal } from './lib/metrika'
 import { OrganizationProfileSwitcher } from './components/OrganizationProfileSwitcher'
 import { NavDropdown } from './components/NavDropdown'
 import { enforceComScannerMode } from './lib/scannerMode'
@@ -36,6 +37,7 @@ const queryClient = new QueryClient({
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const token = localStorage.getItem('access_token')
+  useEffect(() => { if (token) reachGoal('solution_opened') }, [token])
   if (!token) return <Navigate to="/login" replace />
   return children
 }

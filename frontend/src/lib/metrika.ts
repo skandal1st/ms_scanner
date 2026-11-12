@@ -10,6 +10,29 @@ declare global {
 
 let lastPage = ''
 
+type Goal = 'solution_opened' | 'shipment_selected' | 'first_mark_scanned' | 'acceptance_started'
+const reached = new Set<Goal>()
+const pending = new Set<Goal>()
+
+/** One milestone per tab. No business identifiers are stored or sent. */
+export function reachGoal(goal: Goal) {
+  if (window.location.hostname !== 'skandata.ru' || reached.has(goal)) return
+  if (!lastPage || !window.ym) { pending.add(goal); return }
+  const key = 'skandata.goal.' + goal
+  try {
+    if (sessionStorage.getItem(key)) return
+    sessionStorage.setItem(key, '1')
+  } catch { /* Embedded browsers may restrict storage. */ }
+  reached.add(goal)
+  try { window.ym(counter, 'reachGoal', goal) } catch { /* Keep warehouse operations independent of analytics. */ }
+}
+
+export function recordMarkScan(scan: { status: string; duplicate?: boolean | null; is_barcode?: boolean | null }) {
+  if (!scan.duplicate && !scan.is_barcode && ['scanned', 'valid', 'overflow'].includes(scan.status)) {
+    reachGoal('first_mark_scanned')
+  }
+}
+
 function referrerOrigin() {
   try { return new URL(document.referrer).origin } catch { return '' }
 }
@@ -40,6 +63,8 @@ export function Metrika() {
       window.ym?.(counter, 'hit', page, { referer: lastPage })
     }
     lastPage = page
+    pending.forEach(reachGoal)
+    pending.clear()
   }, [pathname])
   return null
 }

@@ -1,3 +1,4 @@
+import { reachGoal } from '../lib/metrika'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { SettingsPage } from './Settings'
 import { persistUserIdFromAccessToken } from '../lib/jwt'
@@ -70,6 +71,7 @@ export function MsIframePage() {
         localStorage.setItem('access_token', payload.access_token)
         localStorage.setItem('refresh_token', payload.refresh_token)
         persistUserIdFromAccessToken(payload.access_token)
+        reachGoal('solution_opened')
         setState({ kind: 'ready', payload })
       })
       .catch((err) => {

@@ -1,3 +1,4 @@
+import { recordMarkScan } from '../lib/metrika'
 import { useCallback } from 'react'
 import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
@@ -95,6 +96,7 @@ export function useScanner(documentId: string | null) {
           let hadConflict = false
           let repeatedId: string | null = null
           boxScans.forEach((s) => {
+            if (state.document?.kind === 'demand') recordMarkScan(s)
             addScan(s)
             if (s.status === 'used_in_other_doc') hadConflict = true
             if (s.duplicate) {
@@ -125,6 +127,7 @@ export function useScanner(documentId: string | null) {
           targetPid || undefined
         )
         if (useScanStore.getState().document?.id !== documentId) return
+        if (state.document?.kind === 'demand') recordMarkScan(scan)
         if (scan.duplicate) {
           // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
           addScan(scan)

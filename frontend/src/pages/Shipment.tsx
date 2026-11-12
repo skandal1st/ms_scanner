@@ -1,3 +1,4 @@
+import { reachGoal } from '../lib/metrika'
 import { PackagingComposition } from '../components/PackagingComposition'
 import type { MixedImportTarget } from '../api/client'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
@@ -241,6 +242,7 @@ export function ShipmentPage({
     try {
       setPendingDoc(doc)
       setDocument(doc)
+      if (doc.kind === 'demand') reachGoal('shipment_selected')
     } catch (error) {
       const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
       modal.alert(detail || 'Не удалось открыть отгрузку.', { variant: 'error' })
