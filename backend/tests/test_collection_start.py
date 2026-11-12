@@ -42,10 +42,10 @@ async def context(monkeypatch, enabled=True, date_enabled=True):
         await db.flush()
         db.add(doc)
         await db.commit()
-    ms = NS(get_document=AsyncMock(return_value={}),
+    ms = NS(get_document=AsyncMock(return_value={'customerOrder': {'id': 'order'}}),
         get_shipment_states=AsyncMock(return_value=[{'id': str(profile.shipment_start_state_id)}]),
         get_customer_order_states=AsyncMock(return_value=[{'id': str(profile.customer_order_start_state_id)}]),
-        resolve_shipment_order=AsyncMock(return_value='order'), change_collection_state=AsyncMock())
+        change_collection_state=AsyncMock())
     monkeypatch.setattr(documents, '_get_ms_service', AsyncMock(return_value=ms))
     return engine, factory, user, profile, doc, ms
 
@@ -239,9 +239,11 @@ async def test_tsd_offset_fallback_is_saved_and_reused_when_device_offset_change
 
 async def test_orderless_shipment_only_updates_shipment(monkeypatch):
     engine, factory, user, profile, doc, ms = await context(monkeypatch)
-    ms.resolve_shipment_order.return_value = None
+    ms.get_document.return_value = {}
     try:
         async with factory() as db:
+            (await db.get(Document, doc.id)).moysklad_customer_order_id = None
+            await db.commit()
             await documents.begin_collection(doc.id, user, db)
         assert ms.change_collection_state.await_count == 1
         assert ms.change_collection_state.call_args.args[0] == 'demand'
@@ -314,7 +316,7 @@ async def test_missing_state_or_wrong_order_prevents_all_status_writes(monkeypat
                 await documents.begin_collection(doc.id, user, db)
         ms.change_collection_state.assert_not_awaited()
         ms.get_customer_order_states.return_value = [{'id': str(profile.customer_order_start_state_id)}]
-        ms.resolve_shipment_order.side_effect = ValueError('Связь отгрузки с заказом изменилась')
+        ms.get_document.return_value = {'customerOrder': {'id': 'other'}}
         async with factory() as db:
             with pytest.raises(HTTPException):
                 await documents.begin_collection(doc.id, user, db)
@@ -351,7 +353,7 @@ async def test_date_and_statuses_disabled_make_no_external_writes(monkeypatch):
             saved = await db.get(Document, doc.id)
             assert saved.upd_meta['collection_start']['done']
         ms.change_collection_state.assert_not_awaited()
-        ms.get_document.assert_not_awaited()
+        ms.get_document.assert_awaited_once()
     finally:
         await engine.dispose()
 

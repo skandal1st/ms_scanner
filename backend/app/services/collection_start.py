@@ -76,16 +76,21 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
             await db.commit()
 
         try:
-            if not marker.get('moment_done') or marker['shipment_state'] or marker['order_state']:
+            expected_order = getattr(doc, 'moysklad_customer_order_id', None) or marker.get('order_id')
+            if expected_order or not marker.get('moment_done') or marker['shipment_state'] or marker['order_state']:
                 shipment = await ms.get_document('demand', doc.moysklad_id)
                 ensure_active_shipment(shipment)
+                if expected_order or marker['order_state']:
+                    from app.services.moysklad import shipment_order_id
+                    marker['order_id'] = await shipment_order_id(ms, shipment, expected_order,
+                                                               require_invoice_order=bool(marker['order_state']))
+                    doc.moysklad_customer_order_id = marker['order_id']
                 if marker['shipment_state'] and not marker.get('shipment_done'):
                     if marker['shipment_state'] not in {s['id'] for s in await ms.get_shipment_states()}:
                         raise ValueError('Статус начала сборки отгрузки больше недоступен. Проверьте настройки.')
                 if marker['order_state'] and not marker.get('order_done'):
                     if marker['order_state'] not in {s['id'] for s in await ms.get_customer_order_states()}:
                         raise ValueError('Статус начала сборки заказа больше недоступен. Проверьте настройки.')
-                    marker['order_id'] = await ms.resolve_shipment_order(shipment, doc.moysklad_customer_order_id)
             await save()
             # One PUT applies date and shipment status together. Retried calls use
             # the persisted date even after midnight or from a different terminal.

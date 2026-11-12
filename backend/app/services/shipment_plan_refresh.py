@@ -7,6 +7,7 @@ from app.db.models import Scan, ScanStatus
 from app.services.document_guard import editable_document
 from app.services.plan_matching import unique_plan_product, plan_gtin_keys
 from app.services.shipment_guard import ensure_active_shipment
+from app.services.moysklad import shipment_order_id
 from app.services.shipment_corrections import entity_id
 from app.services.shipment_labels import update_shipment_metadata
 from app.services.scan_events import publish_event
@@ -69,9 +70,7 @@ async def refresh(db, document_id, user_id, ms):
     try:
         shipment = await ms.get_document('demand', source_id)
         ensure_active_shipment(shipment)
-        order_id = entity_id(shipment.get('customerOrder'))
-        if saved_order and not order_id:
-            order_id = await ms.resolve_shipment_order(shipment, saved_order)
+        order_id = await shipment_order_id(ms, shipment, saved_order)
         fresh = await ms.build_plan('demand', source_id)
         if not fresh:
             raise ValueError('В отгрузке МС больше нет товарных позиций. Марки сохранены, прежний план не изменён. Проверьте отгрузку в МС.')
@@ -94,6 +93,7 @@ async def refresh(db, document_id, user_id, ms):
     scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id).with_for_update())).scalars().all()
     reclassify(fresh, scans)
     doc.plan = fresh
+    doc.moysklad_customer_order_id = order_id
     doc.upd_meta = {**(doc.upd_meta or {}), 'plan_sync': summary}
     update_shipment_metadata(doc, shipment)
     await db.commit()

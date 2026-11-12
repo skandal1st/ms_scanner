@@ -56,12 +56,13 @@ async def test_refresh_preserves_scans_releases_lock_before_io_and_rechecks_edit
         db.rollback.assert_awaited_once()
         if case=='ms_failure': raise TimeoutError()
         return {'name':'New name','deleted':case=='deleted','organization':{'id':'wrong' if case=='scope_changed' else 'org'},'store':{'id':'store'},
-                'customerOrder':{'id':'other'} if case=='different_order' else None}
+                'customerOrder':{'id':'other'} if case=='different_order' else None,
+                'invoicesOut':[{'id':'invoice'}] if case in ('invoice','wrong_invoice') else []}
     async def build_plan(*args):
         if case=='concurrent': doc.upd_meta={'plan_sync':{'checked_at':(datetime.now(timezone.utc)+timedelta(seconds=1)).isoformat()}}
         return [] if case=='empty' else [row('a',4)]
     ms=NS(get_document=AsyncMock(side_effect=get_document),build_plan=AsyncMock(side_effect=build_plan))
-    ms.resolve_shipment_order=AsyncMock(return_value='order',side_effect=ValueError('Заказ изменился') if case=='wrong_invoice' else None)
+    ms.get_customer_order=AsyncMock(return_value={'invoicesOut':[{'id':'other' if case=='wrong_invoice' else 'invoice'}]})
     monkeypatch.setattr(service,'publish_event',AsyncMock())
     if case in ('ok','invoice'):
         result=await service.refresh(db,did,uid,ms)
@@ -72,4 +73,4 @@ async def test_refresh_preserves_scans_releases_lock_before_io_and_rechecks_edit
         with pytest.raises(HTTPException): await service.refresh(db,did,uid,ms)
         assert doc.plan==[row('a',2)]
         db.commit.assert_not_awaited(); service.publish_event.assert_not_awaited()
-    assert ms.resolve_shipment_order.await_count == int(case in ('invoice','wrong_invoice'))
+    assert ms.get_customer_order.await_count == int(case in ('invoice','wrong_invoice'))

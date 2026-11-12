@@ -3,6 +3,22 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.db.models import Document, DocumentKind, DocumentStatus, Scan
+from app.services.moysklad import shipment_order_id
+
+
+async def opening_order_id(ms, shipment, doc=None, verified_order=None):
+    """Never rebind a saved collection on open, even if both orders share an invoice."""
+    saved = getattr(doc, 'moysklad_customer_order_id', None)
+    if verified_order:
+        if saved and saved != str(verified_order):
+            raise HTTPException(409, 'Связанный заказ изменился. Марки сохранены; откройте актуальную отгрузку из заказа.')
+        return str(verified_order)
+    try:
+        return await shipment_order_id(ms, shipment, saved)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
 
 
 def ensure_active_shipment(shipment: dict) -> None:

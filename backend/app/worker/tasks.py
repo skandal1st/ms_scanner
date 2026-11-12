@@ -1745,17 +1745,21 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 if not acquired:
                     raise ValueError("Этот документ МойСклад уже отправляется из другой сессии. Дождитесь завершения.")
                 shipment_options = {}
+                if kind == 'demand':
+                    shipment_options['shipment_scope'] = {
+                        'moysklad_organization_id': doc.moysklad_organization_id,
+                        'moysklad_store_id': doc.moysklad_store_id,
+                        'moysklad_customer_order_id': doc.moysklad_customer_order_id,
+                    }
                 if kind == 'demand' and not settings.CZ_MOCK_MODE:
                     import copy
                     from app.services.shipment_resend import MARKER, save as save_tracking_state
                     async def tracking_progress(state):
                         await save_tracking_state(db, doc, state)
-                    shipment_options = {
+                    shipment_options.update({
                         'tracking_state': copy.deepcopy((doc.upd_meta or {}).get(MARKER) or {}),
                         'on_tracking_state': tracking_progress,
-                        'shipment_scope': {'moysklad_organization_id': doc.moysklad_organization_id,
-                                           'moysklad_store_id': doc.moysklad_store_id},
-                    }
+                    })
                 result = await ms.update_document(
                     kind, doc.moysklad_id, scans_data,
                     position_quantities=product_qty, position_prices=product_price,

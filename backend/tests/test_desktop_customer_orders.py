@@ -69,10 +69,22 @@ async def test_desktop_reuses_shipment_linked_through_invoice(monkeypatch):
 async def test_changed_order_link_is_rejected_before_local_document_query(monkeypatch):
     body, user, profile, ms, db, _ = setup(monkeypatch)
     ms.get_document.return_value["customerOrder"]["id"] = str(uuid4())
+    ms.get_document.return_value["invoicesOut"] = ms.get_customer_order.return_value["invoicesOut"] = [{"id": "shared"}]
     with pytest.raises(HTTPException) as error:
         await documents.resolve_document(body, user, profile, db)
     assert error.value.status_code == 409
     db.execute.assert_not_awaited()
+
+
+async def test_reopen_cannot_reassign_a_saved_collection_through_shared_invoice(monkeypatch):
+    doc = Document(status=DocumentStatus.draft, moysklad_customer_order_id='original')
+    body, user, profile, ms, db, _ = setup(monkeypatch, doc)
+    ms.get_document.return_value.pop('customerOrder')
+    ms.get_document.return_value['invoicesOut'] = ms.get_customer_order.return_value['invoicesOut'] = [{'id': 'shared'}]
+    with pytest.raises(HTTPException) as exc:
+        await documents.resolve_document(body, user, profile, db)
+    assert exc.value.status_code == 409 and doc.moysklad_customer_order_id == 'original'
+    db.commit.assert_not_awaited()
 
 
 async def test_foreign_shipment_is_rejected_even_if_order_is_ours(monkeypatch):

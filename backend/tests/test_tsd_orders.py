@@ -76,7 +76,7 @@ async def test_legacy_started_shipment_is_matched_to_order_by_id(monkeypatch):
     device, _, _, ms, db = context(monkeypatch, ([doc], [], [doc.id]))
     ms.get_customer_orders.return_value = [dict(id=oid, name="42", demands=[{"id": "old-demand"}])]
     result = await tsd.list_tsd_orders(device=device, db=db)
-    assert result[0].in_work and doc.moysklad_customer_order_id == oid
+    assert result[0].in_work and doc.moysklad_customer_order_id is None
 
 
 async def test_order_status_color_is_preserved_for_tsd(monkeypatch):
@@ -169,6 +169,7 @@ async def test_invoice_link_search_pages_all_shipments_and_deduplicates():
     assert calls[2]["filter"].count("id=ship") == 1
     assert all("invoiceout/" not in str(p) for p in calls)
     assert shipment_matches_customer_order(shared, order, "order")
+    assert not shipment_matches_customer_order({**shared, "customerOrder": {"id": "other"}}, order, "order")
     assert not shipment_matches_customer_order({**shared, "invoicesOut": [{"id": "other"}]}, order, "order")
     assert customer_order_direct_shipment_count({"invoicesOut": [invoice]}) is None
 
@@ -178,7 +179,8 @@ async def test_order_demand_search_is_scoped_batched_and_read_only():
     calls = []
     async def request(client, method, url, **kwargs):
         calls.append((method, url, kwargs["params"]))
-        rows = [demand(str(i)) for i in range(100)] if len(calls) == 1 else [demand("last")]
+        rows = [{**demand(did), "customerOrder": {"id": "order"}}
+                for did in ids[(len(calls)-1)*100:len(calls)*100]]
         return httpx.Response(200, json={"rows": rows}, request=httpx.Request(method, url))
     ms._request_with_retry = request
     ids = [str(uuid4()) for _ in range(101)]
@@ -192,7 +194,7 @@ async def test_order_demand_search_is_scoped_batched_and_read_only():
 async def test_retail_sales_are_never_queried_as_demands():
     ms = MoySkladService("fake")
     ms._request_with_retry = AsyncMock(return_value=httpx.Response(
-        200, json={"rows": [demand("ordinary")]}, request=httpx.Request("GET", ms.base_url)))
+        200, json={"rows": [{**demand("ordinary"), "customerOrder": {"id":"order"}}]}, request=httpx.Request("GET", ms.base_url)))
     retail = {"id": "retail", "meta": {"type": "retaildemand", "href": f"{ms.base_url}/entity/retaildemand/retail"}}
     retail_href_only = {"meta": {"href": f"{ms.base_url}/entity/retaildemand/retail2"}}
     order = {"demands": [retail, retail_href_only, {"id": "ordinary", "meta": {"type": "demand"}}]}

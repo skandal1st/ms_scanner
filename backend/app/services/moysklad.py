@@ -67,8 +67,27 @@ def invoice_reference_ids(document: dict) -> set[str]:
 
 
 def shipment_matches_customer_order(shipment: dict, order: dict, order_id: str) -> bool:
-    return (entity_reference_id(shipment.get("customerOrder") or {}) == order_id
-            or bool(invoice_reference_ids(shipment) & invoice_reference_ids(order)))
+    direct = entity_reference_id(shipment.get("customerOrder") or {})
+    if direct:
+        return direct == order_id
+    return bool(invoice_reference_ids(shipment) & invoice_reference_ids(order))
+
+
+async def shipment_order_id(ms, shipment, expected=None, *, require_invoice_order=False):
+    """Use the demand's explicit parent first; resolve invoice links only when needed."""
+    direct = entity_reference_id(shipment.get("customerOrder") or {})
+    if expected:
+        order = (await ms.get_customer_order(str(expected))
+                 if not direct and invoice_reference_ids(shipment) else {})
+        if not shipment_matches_customer_order(shipment, order, str(expected)):
+            raise ValueError('Связь отгрузки с заказом покупателя изменилась. Откройте отгрузку из правильного заказа заново.')
+        return str(expected)
+    if direct or not invoice_reference_ids(shipment):
+        return direct or None
+    found = await ms._find_order_by_shipment_invoices(shipment)
+    if not found and require_invoice_order:
+        raise ValueError('Не удалось найти заказ покупателя по связанному счёту. Откройте отгрузку из заказа покупателя.')
+    return found
 
 
 def customer_order_direct_shipment_count(order: dict) -> Optional[int]:
@@ -444,7 +463,7 @@ class MoySkladService:
                     response.raise_for_status()
                     page = response.json().get("rows", [])
                     ids.extend(row["id"] for row in page if row.get("id")
-                               and invoice_ids & invoice_reference_ids(row))
+                               and shipment_matches_customer_order(row, order, order_id))
                     if len(page) < 1000:
                         break
                     offset += len(page)
@@ -458,7 +477,8 @@ class MoySkladService:
                     "limit": 100,
                 })
                 response.raise_for_status()
-                rows.extend(response.json().get("rows", []))
+                rows.extend(row for row in response.json().get("rows", [])
+                            if shipment_matches_customer_order(row, order, order_id))
         return sorted(rows, key=lambda row: row.get("moment") or "", reverse=True)
 
     async def get_document(self, kind: str, doc_id: str) -> Dict[str, Any]:
@@ -839,14 +859,9 @@ class MoySkladService:
             return [{'id': row['id'], 'name': row['name']} for row in response.json().get('states', [])]
 
     async def resolve_shipment_order(self, shipment: dict, order_id: Optional[str]) -> Optional[str]:
-        candidate = order_id or entity_reference_id(shipment.get('customerOrder') or {})
-        if candidate:
-            order = await self.get_customer_order(candidate)
-            if not shipment_matches_customer_order(shipment, order, candidate):
-                raise ValueError('Связь отгрузки с заказом покупателя изменилась. Откройте отгрузку из правильного заказа заново.')
-            return candidate
-        if not invoice_reference_ids(shipment):
-            return None
+        return await shipment_order_id(self, shipment, order_id, require_invoice_order=True)
+
+    async def _find_order_by_shipment_invoices(self, shipment: dict) -> Optional[str]:
         # Invoice chains have no direct customerOrder on demand. Never guess by document name.
         filters = [f'{key}={shipment[key]["meta"]["href"]}' for key in ('agent', 'organization')
                    if (shipment.get(key) or {}).get('meta', {}).get('href')]
@@ -863,9 +878,7 @@ class MoySkladService:
                 if len(rows) < 1000:
                     break
                 offset += len(rows)
-        if not matches:
-            raise ValueError('Не удалось найти заказ покупателя по связанному счёту. Откройте отгрузку из заказа покупателя.')
-        return next(iter(matches))
+        return next(iter(matches), None)
 
     async def change_collection_state(self, kind: str, doc_id: str, state_id: Optional[str], *, moment: Optional[str] = None):
         if kind not in ('demand', 'customerorder'):
@@ -1012,6 +1025,9 @@ class MoySkladService:
                 response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/{doc_id}')
                 response.raise_for_status()
                 ensure_active_shipment(response.json())
+                expected_order = (shipment_scope or {}).get('moysklad_customer_order_id')
+                if expected_order:
+                    await shipment_order_id(self, response.json(), expected_order)
             # Read before mutation: a failed code read also aborts safely.
             seen = set()
             if write_codes:

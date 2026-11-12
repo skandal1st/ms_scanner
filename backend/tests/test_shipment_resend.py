@@ -79,6 +79,25 @@ async def test_resends_only_missing_56_and_preserves_fields_then_noops_on_second
     ms._request_with_retry.assert_not_awaited()
 
 
+@pytest.mark.parametrize('direct', [None, 'other'])
+async def test_resend_validates_saved_order_before_post(monkeypatch, direct):
+    ms, desired, doc = fixture(monkeypatch, expected=2, existing=1)
+    doc.moysklad_customer_order_id = 'saved'
+    remote = {'invoicesOut': [{'id': 'shared'}], 'customerOrder': {'id': direct}}
+    ms.get_customer_order = AsyncMock(return_value={'invoicesOut': [{'id': 'shared'}]})
+    async def snapshot(*args):
+        return remote, copy.deepcopy(ms.rows)
+    monkeypatch.setattr(service.corrections, 'snapshot', snapshot)
+    if direct:
+        with pytest.raises(ValueError, match='Связь отгрузки'):
+            await service.restore(ms, doc, desired, {}, AsyncMock())
+        ms._request_with_retry.assert_not_awaited()
+    else:
+        job = {}
+        await service.restore(ms, doc, desired, job, AsyncMock())
+        assert job['added'] == 1 and job['confirmed'] == 2
+
+
 @pytest.mark.parametrize('timeout', [False, True])
 async def test_persistent_unconfirmed_write_is_bounded_and_next_attempt_is_not_permanently_blocked(monkeypatch, timeout):
     ms, desired, doc = fixture(monkeypatch, expected=3, existing=1, drop=True, timeout=timeout)

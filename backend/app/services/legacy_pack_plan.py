@@ -6,7 +6,12 @@ async def refresh_legacy_pack_plan(db, doc, ms, kind=None):
         return
     if not any('pack_quantities' not in item for item in doc.plan or []):
         return
+    expected = getattr(doc, 'moysklad_customer_order_id', None)
+    source_id = doc.moysklad_id
     try:
+        if doc.kind.value == 'demand' and expected:
+            from app.services.moysklad import shipment_order_id
+            await shipment_order_id(ms, await ms.get_document('demand', source_id), expected)
         fresh = await ms.build_plan(kind or doc.kind.value, doc.moysklad_id)
     except Exception as exc:
         logger.warning('document.pack_plan_refresh_failed', document_id=str(doc.id), error=str(exc))
@@ -15,7 +20,8 @@ async def refresh_legacy_pack_plan(db, doc, ms, kind=None):
     from app.db.models import Document
     doc = (await db.execute(select(Document).where(Document.id == doc.id)
         .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
-    if not doc or getattr(doc.status, 'value', doc.status) != 'draft':
+    if (not doc or getattr(doc.status, 'value', doc.status) != 'draft' or doc.moysklad_id != source_id
+            or getattr(doc, 'moysklad_customer_order_id', None) != expected):
         return
     doc.plan = fresh
     # MS pack aliases help match products, but cannot reclassify existing marks.

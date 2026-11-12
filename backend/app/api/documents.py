@@ -318,6 +318,8 @@ async def create_document(
     db: AsyncSession = Depends(get_db),
 ):
     _ensure_supported_kind(body.kind.value)
+    from app.services.shipment_guard import opening_order_id
+    order_id = None
     verified_ms_doc = None
     if body.moysklad_id and body.kind == DocumentKind.demand:
         from app.services.document_guard import lock_ms_document
@@ -336,11 +338,14 @@ async def create_document(
         if existing is not None:
             if existing.status == DocumentStatus.accepted:
                 return _doc_to_response(existing, await _scan_count(db, existing.id))
+            order_id = await opening_order_id(ms, verified_ms_doc, existing)
             await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
-                                          existing.moysklad_customer_order_id, body.moysklad_id)
+                                          order_id, body.moysklad_id)
+            existing.moysklad_customer_order_id = order_id
             update_shipment_metadata(existing, verified_ms_doc)
             await db.commit()
             return _doc_to_response(existing, await _scan_count(db, existing.id))
+        order_id = await opening_order_id(ms, verified_ms_doc)
     plan: list = []
     ms_doc = verified_ms_doc or {}
     ms_organization_id: Optional[str] = None
@@ -369,6 +374,8 @@ async def create_document(
                 error=str(exc),
             )
 
+    if order_id:
+        await ensure_no_stranded_scans(db, ms, current_user.id, profile.id, order_id, body.moysklad_id)
     doc = Document(
         user_id=current_user.id,
         name=body.name,
@@ -377,6 +384,7 @@ async def create_document(
         organization_profile_id=profile.id,
         moysklad_organization_id=ms_organization_id,
         moysklad_store_id=ms_store_id,
+        moysklad_customer_order_id=order_id,
         plan=plan,
     )
     db.add(doc)
@@ -407,6 +415,8 @@ async def resolve_document(
     Из заказа завершённую сборку нельзя запускать повторно."""
     _ensure_supported_kind(body.kind.value)
 
+    from app.services.shipment_guard import opening_order_id
+    order_id = None
     order_name = None
     from app.services.document_guard import lock_ms_document
     await lock_ms_document(db, current_user.id, body.kind, body.moysklad_id)
@@ -461,16 +471,17 @@ async def resolve_document(
         if body.kind == DocumentKind.demand and existing.status == DocumentStatus.accepted:
             return _doc_to_response(existing, await _scan_count(db, existing.id))
         if body.kind == DocumentKind.demand:
+            order_id = await opening_order_id(ms, verified_ms_doc, existing, body.customer_order_id)
             await ensure_no_stranded_scans(db, ms, current_user.id, existing.organization_profile_id,
-                                          body.customer_order_id or existing.moysklad_customer_order_id,
+                                          order_id,
                                           body.moysklad_id)
         from app.services.legacy_pack_plan import refresh_legacy_pack_plan
         if existing.status == DocumentStatus.draft and any('pack_quantities' not in p for p in existing.plan or []):
             await refresh_legacy_pack_plan(db, existing, await _get_ms_service(current_user, db), body.kind.value)
         if body.customer_order_id:
-            existing.moysklad_customer_order_id = str(body.customer_order_id)
             existing.customer_order_name = order_name
         if body.kind == DocumentKind.demand:
+            existing.moysklad_customer_order_id = order_id
             update_shipment_metadata(existing, verified_ms_doc, order_name)
         if body.customer_order_id or body.kind == DocumentKind.demand:
             await db.commit()
@@ -490,8 +501,9 @@ async def resolve_document(
         db, current_user.id, ms_organization_id, profile
     )
     if body.kind == DocumentKind.demand:
+        order_id = await opening_order_id(ms, ms_doc, verified_order=body.customer_order_id)
         await ensure_no_stranded_scans(db, ms, current_user.id, profile.id,
-                                      body.customer_order_id, body.moysklad_id)
+                                      order_id, body.moysklad_id)
     plan: list = []
     try:
         # objectId из кнопки МС — документ самого этого типа, поэтому план строим
@@ -516,7 +528,7 @@ async def resolve_document(
         organization_profile_id=profile.id,
         moysklad_organization_id=ms_organization_id,
         moysklad_store_id=ms_store_id,
-        moysklad_customer_order_id=str(body.customer_order_id) if body.customer_order_id else None,
+        moysklad_customer_order_id=order_id,
         customer_order_name=order_name,
         plan=plan,
     )
@@ -595,8 +607,14 @@ async def _upd_source(document_id: UUID, user: User, db: AsyncSession, *, includ
     if doc.status != DocumentStatus.accepted:
         raise HTTPException(409, "Сначала завершите запись марок в МойСклад")
     try:
-        source = await (await _get_ms_service(user, db)).get_upd_source(doc.moysklad_id, include_positions=include_positions)
+        ms = await _get_ms_service(user, db)
+        source = await ms.get_upd_source(doc.moysklad_id, include_positions=include_positions)
+        if getattr(doc, 'moysklad_customer_order_id', None):
+            from app.services.moysklad import shipment_order_id
+            await shipment_order_id(ms, source, doc.moysklad_customer_order_id)
     except UpdExportError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
     except httpx.HTTPError:
         raise HTTPException(502, "Не удалось загрузить реквизиты отгрузки из МойСклад") from None
@@ -958,8 +976,12 @@ async def process_document(
             raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
         try:
             ensure_active_shipment(shipment)
+            from app.services.shipment_corrections import verify_scope
+            await verify_scope(ms, doc, shipment)
         except ValueError as exc:
             raise HTTPException(409, str(exc)) from exc
+        except httpx.HTTPError as exc:
+            raise HTTPException(502, 'Не удалось проверить отгрузку в МойСкладе. Повторите попытку.') from exc
 
     from sqlalchemy import func
     from app.db.models import Scan, ScanStatus

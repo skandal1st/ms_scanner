@@ -30,6 +30,14 @@ def correction(doc):
     return (doc.upd_meta or {}).get(MARKER)
 
 
+async def verify_scope(ms, doc, remote):
+    assert_scope(doc, remote)
+    expected = getattr(doc, 'moysklad_customer_order_id', None)
+    if expected:
+        from app.services.moysklad import shipment_order_id
+        await shipment_order_id(ms, remote, expected)
+
+
 def code_key(code):
     return MoySkladService._cis_dedup_key(code.get('cis') or code.get('cis_1162'))
 
@@ -77,7 +85,7 @@ async def snapshot(ms, ms_id):
 
 async def start(db, source, ms, actor, *, commit=True):
     document, baseline = await snapshot(ms, source.moysklad_id)
-    assert_scope(source, document)
+    await verify_scope(ms, source, document)
     from app.db.models import OrganizationProfile
     profile = await db.get(OrganizationProfile, source.organization_profile_id)
     if profile and profile.moysklad_organization_id and profile.moysklad_organization_id != entity_id(document.get('organization')):
@@ -268,7 +276,7 @@ async def execute(db, doc, ms):
             index = job['completed']
             op = operations[index]
             remote, actual = await snapshot(ms, doc.moysklad_id)
-            assert_scope(doc, remote)
+            await verify_scope(ms, doc, remote)
             expected = job['expected']
             after = after_operation(expected, op)
             if job.get('in_flight') == index and matches(actual, after, touched):
@@ -291,7 +299,7 @@ async def execute(db, doc, ms):
                     response = await ms._request_with_retry(client, 'POST', url + suffix, json=body)
                 response.raise_for_status()
                 remote, actual = await snapshot(ms, doc.moysklad_id)
-                assert_scope(doc, remote)
+                await verify_scope(ms, doc, remote)
                 if not matches(actual, after, touched):
                     raise ValueError('МойСклад не подтвердил ожидаемый состав. Часть исправлений могла сохраниться; повторите сверку.')
             else:
@@ -302,7 +310,7 @@ async def execute(db, doc, ms):
             doc.processing_progress = {'sent': index + 1, 'total': len(operations), 'stage': 'correcting'}
             await save_state(db, doc, state)
     remote, actual = await snapshot(ms, doc.moysklad_id)
-    assert_scope(doc, remote)
+    await verify_scope(ms, doc, remote)
     if not matches(actual, job['expected'], touched):
         raise ValueError('Состав отгрузки изменился после исправления. Проверьте документ в МойСкладе.')
     state['saved_at'] = datetime.now(timezone.utc).isoformat()

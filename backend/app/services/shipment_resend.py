@@ -219,7 +219,7 @@ async def _restore_attempt(ms, doc, desired, job, persist, baseline):
         # Give the interrupted request time to settle before checking absence.
         await asyncio.sleep(RECONCILE_DELAY)
     remote, before = await corrections.snapshot(ms, doc.moysklad_id)
-    corrections.assert_scope(doc, remote)
+    await corrections.verify_scope(ms, doc, remote)
     if baseline:
         _assert_same_fields(baseline['rows'], before)
     else:
@@ -261,7 +261,7 @@ async def _restore_attempt(ms, doc, desired, job, persist, baseline):
                 job['added'] += len(batch)
                 await persist()
     remote, after = await corrections.snapshot(ms, doc.moysklad_id)
-    corrections.assert_scope(doc, remote)
+    await corrections.verify_scope(ms, doc, remote)
     _assert_same_fields(baseline['rows'], after)
     confirmed = index_codes(after)
     if (not set(index_codes(baseline['rows'])) <= set(confirmed)
