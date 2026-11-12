@@ -75,6 +75,8 @@ class User(Base):
 
 class Integration(Base):
     __tablename__ = "integrations"
+    __table_args__ = (UniqueConstraint("moysklad_account_id", "moysklad_app_id", name="uq_ms_installation"),)
+    moysklad_app_id = Column(String(64), nullable=False, server_default="8fa85fbe-eae4-4445-a431-212f735ee9e5")
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, unique=True)

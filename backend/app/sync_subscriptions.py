@@ -11,15 +11,16 @@ from app.api.moysklad_vendor import Subscription
 from app.core.config import settings
 from app.db.models import Integration, User
 from app.db.session import AsyncSessionLocal
+from app.services.ms_installations import signing_key, vendor_uid
 from app.services.subscriptions import update_subscription
 
 
 async def synchronize(app_id: UUID):
-    if not settings.MOYSKLAD_APP_UID or not settings.MOYSKLAD_VENDOR_SECRET_KEY:
+    if not vendor_uid(str(app_id)) or not signing_key(str(app_id)):
         raise RuntimeError('Vendor API не настроен')
     async with AsyncSessionLocal() as db:
         accounts = (await db.execute(select(Integration.user_id, Integration.moysklad_account_id)
-            .where(Integration.moysklad_account_id.is_not(None)))).all()
+            .where(Integration.moysklad_account_id.is_not(None), Integration.moysklad_app_id == str(app_id)))).all()
     async with httpx.AsyncClient(timeout=15) as client:
         for user_id, account_id in accounts:
             async with AsyncSessionLocal() as db:
@@ -28,7 +29,7 @@ async def synchronize(app_id: UUID):
                 integration = (await db.execute(select(Integration).where(Integration.user_id == user_id))).scalar_one()
                 response = await client.get(
                     f'{settings.MOYSKLAD_VENDOR_BASE}/apps/{app_id}/{account_id}/status',
-                    headers={'Authorization': f'Bearer {_build_vendor_jwt()}', 'Accept-Encoding': 'gzip'},
+                    headers={'Authorization': f'Bearer {_build_vendor_jwt(str(app_id))}', 'Accept-Encoding': 'gzip'},
                 )
                 if response.status_code == 404:
                     integration.subscription_active = False

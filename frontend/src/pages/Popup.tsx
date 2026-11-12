@@ -203,7 +203,7 @@ export function PopupPage() {
     fetch('/api/auth/ms-launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contextKey }),
+      body: JSON.stringify({ contextKey, appId: params.get('appId') || undefined }),
     })
       .then(async (resp) => {
         const data = await resp.json().catch(() => ({}))

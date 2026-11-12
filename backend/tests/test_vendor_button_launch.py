@@ -32,8 +32,8 @@ async def test_unselected_buttons_open_picker_even_with_selected_rows(button_env
         authorization='Bearer vendor-token', x_lognex_request_id='request', db=db)
     assert result == {'action': 'showPopup', 'params': {
         'popupName': 'scan-popup', 'popupParameters': {'kind': kind, 'entryMode': 'select'}}}
-    verify.assert_awaited_once_with('Bearer vendor-token')
-    save.assert_awaited_once_with('request', 'button:account', result)
+    verify.assert_awaited_once_with('Bearer vendor-token', 'app')
+    save.assert_awaited_once_with('request', 'button:app:account', result)
 
 
 @pytest.mark.parametrize('button,extension,object_id,selection,kind', [

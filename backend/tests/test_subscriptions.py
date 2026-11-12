@@ -16,6 +16,7 @@ NOW = datetime(2026, 10, 6, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def tariffs(monkeypatch):
+    monkeypatch.setattr(settings, 'MOYSKLAD_APP_UID', 'app')
     monkeypatch.setattr(settings, 'MOYSKLAD_TARIFF_BASIC_ID', 'basic-id')
     monkeypatch.setattr(settings, 'MOYSKLAD_TARIFF_TSD5_ID', 'five-id')
     monkeypatch.setattr(settings, 'MOYSKLAD_TARIFF_UNLIMITED_ID', 'unlimited-id')
@@ -111,7 +112,7 @@ async def test_duplicate_callback_does_not_change_subscription(monkeypatch):
     monkeypatch.setattr(vendor, '_verify_vendor_jwt', AsyncMock())
     monkeypatch.setattr(vendor, '_idempotent_response', AsyncMock(return_value={'status': 'Activated'}))
     db = NS(execute=AsyncMock(), commit=AsyncMock())
-    await vendor.activate('app-id', 'account-id', vendor.ActivateRequest(appUid='app', cause='TariffChanged'), Response(), db, None, 'request-id')
+    await vendor.activate(vendor.PRIMARY_APP_ID, 'account-id', vendor.ActivateRequest(appUid='app', cause='TariffChanged'), Response(), db, None, 'request-id')
     db.execute.assert_not_awaited()
     db.commit.assert_not_awaited()
 
@@ -125,7 +126,7 @@ async def test_callback_stores_subscription_without_erasing_api_token(monkeypatc
     monkeypatch.setattr(vendor, '_save_idempotent', AsyncMock())
     body = vendor.ActivateRequest(appUid='app', cause=cause, subscription={
         'tariffId': 'unlimited-id', 'trial': True, 'expiryMoment': '2026-11-06T00:00:00+03:00'})
-    await vendor.activate('app-id', 'account-id', body, Response(), db, None, None)
+    await vendor.activate(vendor.PRIMARY_APP_ID, 'account-id', body, Response(), db, None, None)
     assert row.subscription_tariff_id == 'unlimited-id' and row.subscription_trial
     assert row.subscription_active and row.subscription_updated_at
     assert row.moysklad_token == 'encrypted-existing'

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
 
     # МойСклад Vendor API (входящие callbacks от МойСклада к нам)
     # Заполняются после создания черновика решения в dev.moysklad.ru
+    MOYSKLAD_SECONDARY_APP_UID: str = "skandata-1-mhyhu.aximatech"
+    MOYSKLAD_SECONDARY_VENDOR_SECRET_KEY: str = ""
     MOYSKLAD_APP_UID: str = ""              # алиас_решения.алиас_разработчика
     MOYSKLAD_VENDOR_SECRET_KEY: str = ""    # для проверки JWT-подписи
     MOYSKLAD_VENDOR_JWT_MAX_LIFETIME: int = 300  # секунд

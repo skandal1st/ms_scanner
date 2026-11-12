@@ -15,6 +15,7 @@ from app.core.logging import logger
 from app.core.security import encrypt_token
 from app.db.models import Integration, User
 from app.db.session import get_db
+from app.services.ms_installations import PRIMARY_APP_ID, installation_query, signing_key, vendor_uid
 from app.services.subscriptions import update_subscription
 
 
@@ -57,12 +58,13 @@ class StatusResponse(BaseModel):
     status: str  # Activating | SettingsRequired | Activated
 
 
-async def _verify_vendor_jwt(authorization: Optional[str]) -> dict[str, Any]:
+async def _verify_vendor_jwt(authorization: Optional[str], app_id: str) -> dict[str, Any]:
     """
     Проверяет JWT подписанный secretKey решения. См.
     dev.moysklad.ru/doc/api/vendor/1.0 — раздел "Аутентификация".
     """
-    if not settings.MOYSKLAD_VENDOR_SECRET_KEY:
+    secret = signing_key(app_id)
+    if not secret:
         # Решение ещё не зарегистрировано — отдаём 503, чтобы МойСклад
         # ушёл в Retry, а не в ActivationFailed.
         raise HTTPException(
@@ -71,14 +73,14 @@ async def _verify_vendor_jwt(authorization: Optional[str]) -> dict[str, Any]:
         )
 
     if not authorization or not authorization.lower().startswith("bearer "):
-        logger.warning("vendor.jwt.no_bearer", got=authorization[:20] if authorization else None)
+        logger.warning("vendor.jwt.no_bearer", app_id=app_id)
         raise HTTPException(401, "missing bearer token")
 
     token = authorization.split(" ", 1)[1].strip()
     try:
         payload = jwt.decode(
             token,
-            settings.MOYSKLAD_VENDOR_SECRET_KEY,
+            secret,
             algorithms=["HS256"],
             options={"verify_aud": False, "verify_iss": False, "verify_exp": False},
         )
@@ -86,9 +88,7 @@ async def _verify_vendor_jwt(authorization: Optional[str]) -> dict[str, Any]:
         logger.warning(
             "vendor.jwt.decode_failed",
             error=str(exc),
-            token_prefix=token[:32],
-            secret_prefix=settings.MOYSKLAD_VENDOR_SECRET_KEY[:6],
-            secret_len=len(settings.MOYSKLAD_VENDOR_SECRET_KEY),
+            app_id=app_id,
         )
         raise HTTPException(401, f"invalid jwt: {exc}")
 
@@ -180,9 +180,11 @@ async def activate(
         default=None, alias="X-Lognex-RequestId"
     ),
 ):
-    await _verify_vendor_jwt(authorization)
+    await _verify_vendor_jwt(authorization, app_id)
 
-    cached = await _idempotent_response(x_lognex_request_id, f"put:{account_id}")
+    if body.appUid != vendor_uid(app_id):
+        raise HTTPException(400, "appUid запроса не соответствует версии решения")
+    cached = await _idempotent_response(x_lognex_request_id, f"put:{app_id}:{account_id}")
     if cached is not None:
         return cached
 
@@ -197,18 +199,20 @@ async def activate(
     access_token = _extract_jsonapi_token(body.access)
 
     result = await db.execute(
-        select(Integration).where(Integration.moysklad_account_id == account_id)
+        installation_query(account_id, app_id)
     )
     integration = result.scalar_one_or_none()
 
     if integration is None:
         # Аккаунт из каталога МойСклад → урезанное издание (см. require_full_edition).
-        user = User(email=f"ms_{account_id}@moysklad.ru", password_hash="", edition="ms_lite")
+        identity = account_id if app_id == PRIMARY_APP_ID else f"{app_id}_{account_id}"
+        user = User(email=f"ms_{identity}@moysklad.ru", password_hash="", edition="ms_lite")
         db.add(user)
         await db.flush()
         integration = Integration(
             user_id=user.id,
             moysklad_account_id=account_id,
+            moysklad_app_id=app_id,
             moysklad_account_name=body.accountName,
             moysklad_token=encrypt_token(access_token) if access_token else None,
         )
@@ -228,7 +232,7 @@ async def activate(
     await db.commit()
 
     payload = {"status": "Activated"}
-    await _save_idempotent(x_lognex_request_id, f"put:{account_id}", payload)
+    await _save_idempotent(x_lognex_request_id, f"put:{app_id}:{account_id}", payload)
     return payload
 
 
@@ -242,9 +246,9 @@ async def deactivate(
         default=None, alias="X-Lognex-RequestId"
     ),
 ):
-    await _verify_vendor_jwt(authorization)
+    await _verify_vendor_jwt(authorization, app_id)
 
-    cached = await _idempotent_response(x_lognex_request_id, f"del:{account_id}")
+    cached = await _idempotent_response(x_lognex_request_id, f"del:{app_id}:{account_id}")
     if cached is not None:
         return cached
 
@@ -256,7 +260,7 @@ async def deactivate(
     )
 
     result = await db.execute(
-        select(Integration).where(Integration.moysklad_account_id == account_id)
+        installation_query(account_id, app_id)
     )
     integration = result.scalar_one_or_none()
     if integration:
@@ -269,7 +273,7 @@ async def deactivate(
         await db.commit()
 
     payload = {"status": "ok"}
-    await _save_idempotent(x_lognex_request_id, f"del:{account_id}", payload)
+    await _save_idempotent(x_lognex_request_id, f"del:{app_id}:{account_id}", payload)
     return payload
 
 
@@ -280,10 +284,10 @@ async def get_status(
     db: AsyncSession = Depends(get_db),
     authorization: Optional[str] = Header(default=None),
 ):
-    await _verify_vendor_jwt(authorization)
+    await _verify_vendor_jwt(authorization, app_id)
 
     result = await db.execute(
-        select(Integration).where(Integration.moysklad_account_id == account_id)
+        installation_query(account_id, app_id)
     )
     integration = result.scalar_one_or_none()
     if integration and integration.moysklad_token:
@@ -332,9 +336,9 @@ async def handle_button(
     showPopup — МС открывает наш попап `scanPopup` и передаёт ему id документа МС
     и kind через popupParameters (сообщение OpenPopup). Таймаут МС — 10 сек, поэтому
     тут только лёгкий ответ, без обращений к МС/ЧЗ."""
-    await _verify_vendor_jwt(authorization)
+    await _verify_vendor_jwt(authorization, app_id)
 
-    cached = await _idempotent_response(x_lognex_request_id, f"button:{account_id}")
+    cached = await _idempotent_response(x_lognex_request_id, f"button:{app_id}:{account_id}")
     if cached is not None:
         return cached
 
@@ -368,7 +372,7 @@ async def handle_button(
 
     integration = (
         await db.execute(
-            select(Integration).where(Integration.moysklad_account_id == account_id)
+            installation_query(account_id, app_id)
         )
     ).scalar_one_or_none()
     if integration is None:
@@ -396,5 +400,5 @@ async def handle_button(
             "popupParameters": popup_parameters,
         },
     }
-    await _save_idempotent(x_lognex_request_id, f"button:{account_id}", payload)
+    await _save_idempotent(x_lognex_request_id, f"button:{app_id}:{account_id}", payload)
     return payload

@@ -17,6 +17,7 @@ from app.core.security import (
     encrypt_token, decrypt_token, decode_token,
 )
 from app.core.config import settings
+from app.services.ms_installations import PRIMARY_APP_ID, installation_query, signing_key, vendor_uid
 from app.core.logging import logger
 import httpx
 
@@ -125,9 +126,9 @@ async def moysklad_callback(code: str, state: str, db: AsyncSession = Depends(ge
         account_id = me.get("accountId")
         account_name = me.get("name")
 
-    result = await db.execute(
-        select(Integration).where(Integration.moysklad_account_id == account_id)
-    )
+    if not account_id:
+        raise HTTPException(401, "МойСклад не подтвердил аккаунт")
+    result = await db.execute(installation_query(account_id, PRIMARY_APP_ID))
     integration = result.scalar_one_or_none()
 
     if integration:
@@ -184,6 +185,7 @@ async def _issue_launch_token(user_id: str) -> str:
 
 class MsLaunchRequest(BaseModel):
     contextKey: str
+    appId: str = PRIMARY_APP_ID
 
 
 class MsLaunchResponse(BaseModel):
@@ -199,17 +201,17 @@ class LaunchExchangeRequest(BaseModel):
     launch_token: str
 
 
-def _build_vendor_jwt() -> str:
+def _build_vendor_jwt(app_id: str = PRIMARY_APP_ID) -> str:
     """JWT Разработчик→МойСклад: sub=appUid + iat + exp + jti, HS256(secretKey)."""
     now = int(time.time())
     payload = {
-        "sub": settings.MOYSKLAD_APP_UID,
+        "sub": vendor_uid(app_id),
         "iat": now,
         "exp": now + 60,
         "jti": secrets.token_urlsafe(24),
     }
     return jwt.encode(
-        payload, settings.MOYSKLAD_VENDOR_SECRET_KEY, algorithm="HS256"
+        payload, signing_key(app_id), algorithm="HS256"
     )
 
 
@@ -224,10 +226,10 @@ async def moysklad_launch(
     launch_token на JWT через /auth/launch. Это нужно, чтобы JWT не светился
     в URL новой вкладки (история, Referer, логи).
     """
-    if not settings.MOYSKLAD_APP_UID or not settings.MOYSKLAD_VENDOR_SECRET_KEY:
+    if not vendor_uid(body.appId) or not signing_key(body.appId):
         raise HTTPException(503, "Vendor API не настроен на сервере")
 
-    vendor_jwt = _build_vendor_jwt()
+    vendor_jwt = _build_vendor_jwt(body.appId)
     url = f"{settings.MOYSKLAD_VENDOR_BASE}/context/{body.contextKey}"
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
@@ -250,6 +252,9 @@ async def moysklad_launch(
         )
 
     ctx = resp.json()
+    if ((ctx.get("appId") and ctx["appId"] != body.appId)
+            or (ctx.get("appUid") and ctx["appUid"] != vendor_uid(body.appId))):
+        raise HTTPException(403, "Контекст выдан для другой версии решения")
     account_id = ctx.get("accountId")
     if not account_id:
         meta = ctx.get("meta") or {}
@@ -261,7 +266,7 @@ async def moysklad_launch(
         raise HTTPException(401, "В контексте нет accountId")
 
     result = await db.execute(
-        select(Integration).where(Integration.moysklad_account_id == account_id)
+        installation_query(account_id, body.appId)
     )
     integration = result.scalar_one_or_none()
     if integration is None:
