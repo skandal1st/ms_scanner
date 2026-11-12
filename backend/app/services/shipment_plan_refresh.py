@@ -64,10 +64,14 @@ async def refresh(db, document_id, user_id, ms):
     if doc.kind.value != 'demand' or not doc.moysklad_id:
         raise HTTPException(400, 'Пересверка доступна для отгрузки МойСклад.')
     source_id = doc.moysklad_id
+    saved_order = doc.moysklad_customer_order_id
     await db.rollback()  # Scanning on other devices must not wait for remote IO.
     try:
         shipment = await ms.get_document('demand', source_id)
         ensure_active_shipment(shipment)
+        order_id = entity_id(shipment.get('customerOrder'))
+        if saved_order and not order_id:
+            order_id = await ms.resolve_shipment_order(shipment, saved_order)
         fresh = await ms.build_plan('demand', source_id)
         if not fresh:
             raise ValueError('В отгрузке МС больше нет товарных позиций. Марки сохранены, прежний план не изменён. Проверьте отгрузку в МС.')
@@ -81,8 +85,9 @@ async def refresh(db, document_id, user_id, ms):
     last = ((doc.upd_meta or {}).get('plan_sync') or {}).get('checked_at')
     if last and datetime.fromisoformat(last) > started:
         raise HTTPException(409, 'План уже обновили на другом устройстве. Обновите экран и при необходимости повторите пересверку.')
-    for field, remote in [('moysklad_organization_id','organization'),('moysklad_store_id','store'),
-                           ('moysklad_customer_order_id','customerOrder')]:
+    if doc.moysklad_customer_order_id != saved_order or (saved_order and saved_order != order_id):
+        raise HTTPException(409, 'Связанный заказ изменился. Марки сохранены; откройте актуальную отгрузку из заказа.')
+    for field, remote in [('moysklad_organization_id','organization'),('moysklad_store_id','store')]:
         if getattr(doc, field) and getattr(doc, field) != entity_id(shipment.get(remote)):
             raise HTTPException(409, 'В МС изменились юрлицо, склад или связанный заказ. Марки сохранены; откройте актуальную отгрузку из заказа.')
     summary = {'checked_at': datetime.now(timezone.utc).isoformat(), 'changes': changes(doc.plan, fresh)}
