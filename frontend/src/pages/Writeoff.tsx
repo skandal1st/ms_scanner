@@ -73,6 +73,8 @@ export function WriteoffPage({
   // Нужно, когда карточка МС содержит неверный trackingType (кальянный табак как TOBACCO).
   const [groupOverride, setGroupOverride] = useState('')
   const [certs, setCerts] = useState<CzCertificate[]>([])
+  const [certStatus, setCertStatus] = useState('Читаем сертификаты…')
+  const [certAttempt, setCertAttempt] = useState(0)
   const [thumbprint, setThumbprint] = useState('')
   const [phase, setPhase] = useState<Phase>('idle')
   const [message, setMessage] = useState<string | null>(null)
@@ -184,23 +186,28 @@ export function WriteoffPage({
   // Сертификаты для подписи документа вывода из оборота (как при входе в ЧЗ).
   useEffect(() => {
     let cancelled = false
+    setCertStatus('Читаем сертификаты…')
+    setCerts([])
+    setThumbprint('')
     void listCertificates()
       .then((list) => {
         if (cancelled) return
         setCerts(list)
+        setCertStatus(list.length ? '' : 'Действующие сертификаты не найдены')
         if (list.length) {
           // По возможности — сертификат, которым входили в ЧЗ.
           const match = list.find((c) => c.subject === integration?.cz_cert_subject)
           setThumbprint((match ?? list[0]).thumbprint)
         }
       })
-      .catch(() => {
-        /* плагин/сертификаты недоступны — отдельная ошибка покажется при попытке списания */
+      .catch((error: unknown) => {
+        if (!cancelled) setCertStatus('Не удалось прочитать сертификаты КриптоПро' +
+          (error instanceof Error ? ': ' + error.message : ''))
       })
     return () => {
       cancelled = true
     }
-  }, [integration?.cz_cert_subject])
+  }, [integration?.cz_cert_subject, certAttempt])
 
   // Результат списания по WS.
   useEffect(() => {
@@ -275,6 +282,7 @@ export function WriteoffPage({
   const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
   const canSubmit =
     !!document &&
+    !!thumbprint &&
     !bulkBusy &&
     !importCodes.isPending &&
     scans.length > 0 &&
@@ -532,23 +540,28 @@ export function WriteoffPage({
               />
             </div>
 
-            {certs.length > 1 && (
-              <>
-                <label className="field-label" style={{ marginTop: 8 }}>
-                  Сертификат подписи
-                </label>
-                <select
-                  className="ui-select ui-input--block"
-                  value={thumbprint}
-                  onChange={(e) => setThumbprint(e.target.value)}
-                >
-                  {certs.map((c) => (
-                    <option key={c.thumbprint} value={c.thumbprint}>
-                      {c.subject}
-                    </option>
-                  ))}
-                </select>
-              </>
+            <label htmlFor="writeoff-cert" className="field-label" style={{ marginTop: 8 }}>
+              Сертификат подписи
+            </label>
+            <select
+              id="writeoff-cert"
+              className="ui-select ui-input--block"
+              value={thumbprint}
+              disabled={!certs.length}
+              onChange={(e) => setThumbprint(e.target.value)}
+            >
+              {!certs.length && <option value="">Нет доступного сертификата</option>}
+              {certs.map((c) => (
+                <option key={c.thumbprint} value={c.thumbprint}>
+                  {c.subject} · {c.thumbprint.slice(-8)}
+                </option>
+              ))}
+            </select>
+            {certStatus && <div role="status">{certStatus}</div>}
+            {certStatus && certStatus !== 'Читаем сертификаты…' && (
+              <button type="button" className="ui-btn" onClick={() => setCertAttempt(n => n + 1)}>
+                Обновить список сертификатов
+              </button>
             )}
           </div>
         </div>
