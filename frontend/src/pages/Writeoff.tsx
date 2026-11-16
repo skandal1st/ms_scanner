@@ -24,10 +24,15 @@ import {
   CZ_PRODUCT_GROUPS,
   type Document,
   type UnresolvedCode,
+  type WriteoffPlace,
 } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
 
 type Phase = 'idle' | 'signing' | 'submitting' | 'processing' | 'done' | 'error'
+
+function placeKey(place: WriteoffPlace) {
+  return JSON.stringify([place.fiasId, place.kpp])
+}
 
 interface WriteoffPageProps {
   /** Попап МС (кнопка на документе Списание): документ задан заранее; после
@@ -174,6 +179,19 @@ export function WriteoffPage({
     queryFn: () => integrationsApi.get().then((r) => r.data),
   })
 
+  const documentId = document?.id
+  const [placeChoice, setPlaceChoice] = useState<{ documentId: string; group: string; key: string }>()
+  const placesQuery = useQuery({
+    queryKey: ['writeoff-places', documentId, groupOverride],
+    queryFn: () => czApi.writeoffPlaces(documentId!, groupOverride).then(r => r.data),
+    enabled: !!documentId && document?.kind === 'loss' && document.status === 'draft',
+    retry: false,
+  })
+  const places = placesQuery.data ?? []
+  const selectedPlace = places.length === 1 ? places[0] : places.find(p =>
+    placeChoice?.documentId === documentId && placeChoice?.group === groupOverride && placeChoice.key === placeKey(p))
+  const placesError = (placesQuery.error as { response?: { data?: { detail?: string } } } | null)?.response?.data?.detail
+
   // В выпадающем списке товарных групп — только выбранные клиентом в настройках
   // (если ничего не выбрано, показываем весь справочник).
   const groupOptions = useMemo(() => {
@@ -282,6 +300,7 @@ export function WriteoffPage({
   const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
   const canSubmit =
     !!document &&
+    placesQuery.isSuccess && (!places.length || !!selectedPlace) &&
     !!thumbprint &&
     !bulkBusy &&
     !importCodes.isPending &&
@@ -336,6 +355,8 @@ export function WriteoffPage({
       const { data: prep } = await czApi.writeoffPrepare({
         document_id: document.id,
         reason,
+        fias_id: selectedPlace?.fiasId ?? undefined,
+        kpp: selectedPlace?.kpp ?? undefined,
         product_group: groupOverride || undefined,
         basis_number: basisNumber.trim() || undefined,
         basis_date: basisDate || undefined,
@@ -519,6 +540,28 @@ export function WriteoffPage({
                 </option>
               ))}
             </select>
+
+            {document?.status === 'draft' && <>
+              <label className="field-label" htmlFor="writeoff-place" style={{ marginTop: 8 }}>
+                Место осуществления деятельности
+              </label>
+              <select id="writeoff-place" className="ui-select ui-input--block"
+                disabled={places.length < 2 || marksLocked || !placesQuery.isSuccess}
+                value={selectedPlace ? placeKey(selectedPlace) : ''}
+                onChange={e => setPlaceChoice({ documentId: document.id, group: groupOverride, key: e.target.value })}>
+                {(places.length !== 1) && <option value="">{placesQuery.isError ? 'Не удалось загрузить точки'
+                  : placesQuery.isPending ? 'Загрузка точек…' : places.length ? 'Выберите точку' : 'Нет доступных МОД'}</option>}
+                {places.map(p => <option key={placeKey(p)} value={placeKey(p)}>
+                  {p.address}{p.kpp && p.address !== p.kpp ? ' · КПП ' + p.kpp : ''}
+                </option>)}
+              </select>
+              {placesQuery.isError && <div role="alert">{placesError || 'Ошибка загрузки МОД'}</div>}
+              {placesQuery.isSuccess && !places.length && <div className="text-muted">
+                Если для списания нужна точка, добавьте её в профиле Честного Знака и обновите список.
+              </div>}
+              <button type="button" className="btn btn--ghost" disabled={placesQuery.isFetching || marksLocked}
+                onClick={() => void placesQuery.refetch()}>Обновить список точек</button>
+            </>}
 
             <label className="field-label" style={{ marginTop: 8 }}>
               Документ-основание (необязательно)

@@ -1484,6 +1484,56 @@ class ChestnyZnakService:
             # result:false без списка codes — не можем судить, пробуем следующую группу
         return valid_origs, had_infra_failure
 
+    async def writeoff_places(self, inn: str, product_group: Optional[str] = None) -> list[dict]:
+        if self.mock:
+            return [{"fiasId": str(uuid_lib.uuid5(uuid_lib.NAMESPACE_DNS, inn)),
+                     "address": "Тестовая точка", "kpp": None, "productGroups": []}]
+
+        from app.services.cz_logger import log_cz_request
+
+        url = f"{self.base_url}/api/v3/true-api/mods/list"
+        params = {"inns": inn, "limit": 1000, "page": 0}
+        if product_group:
+            params["productGroups"] = product_group
+        places = {}
+        async with httpx.AsyncClient(timeout=15) as client:
+            while True:
+                start = time.monotonic()
+                try:
+                    response = await client.get(url, params=params, headers={"Authorization": f"Bearer {self.token}"})
+                except httpx.RequestError as exc:
+                    await log_cz_request("GET", url, None, None, None, int((time.monotonic()-start)*1000),
+                                         error=type(exc).__name__)
+                    raise CZApiError("Не удалось загрузить МОД из Честного Знака") from exc
+                await log_cz_request("GET", url, None, response.status_code, None, int((time.monotonic()-start)*1000))
+                if response.status_code == 401:
+                    raise CZApiError("Для загрузки МОД войдите в Честный Знак заново")
+                if response.status_code != 200:
+                    raise CZApiError(f"Не удалось загрузить МОД из Честного Знака (HTTP {response.status_code})")
+                try:
+                    data = response.json()
+                    rows = data["result"]
+                    more = data["nextPage"]
+                    if not isinstance(rows, list) or not isinstance(more, bool) or (more and not rows):
+                        raise ValueError()
+                    for row in rows:
+                        if row["inn"] != inn or row.get("isBlockedEgais"):
+                            continue
+                        fias = row.get("fiasId") or None
+                        kpp = row.get("kpp") or None
+                        if not (fias or kpp):
+                            continue
+                        place = places.setdefault((fias, kpp), {"fiasId": fias, "kpp": kpp,
+                            "address": row.get("address") or fias or kpp, "productGroups": []})
+                        for group in row.get("productGroups", []):
+                            if group not in place["productGroups"]:
+                                place["productGroups"].append(group)
+                except (KeyError, ValueError, TypeError, AttributeError) as exc:
+                    raise CZApiError("Честный Знак вернул некорректный список МОД") from exc
+                if not more:
+                    return list(places.values())
+                params["page"] += 1
+
     @staticmethod
     def build_writeoff_document(
         *,
@@ -1491,6 +1541,8 @@ class ChestnyZnakService:
         action: str,
         action_date: str,
         cises: list[str],
+        fias_id: Optional[str] = None,
+        kpp: Optional[str] = None,
         custom_name: Optional[str] = None,
         basis_type: str = "OTHER",
         basis_number: Optional[str] = None,
@@ -1503,6 +1555,10 @@ class ChestnyZnakService:
             "action_date": action_date,
             "products": [{"cis": c} for c in cises],
         }
+        if fias_id:
+            doc["fiasId"] = fias_id
+        if kpp:
+            doc["kpp"] = kpp
         if custom_name:
             doc["primary_document_custom_name"] = custom_name
         if basis_number or basis_date:

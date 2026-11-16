@@ -335,6 +335,8 @@ WRITEOFF_TTL_SECONDS = 120
 
 
 class WriteoffPrepareRequest(BaseModel):
+    fias_id: Optional[str] = None
+    kpp: Optional[str] = None
     document_id: UUID
     reason: str
     basis_number: Optional[str] = None
@@ -454,6 +456,41 @@ async def cz_set_gtin_group(
     return {"gtin": body.gtin, "product_group": pg}
 
 
+async def _writeoff_client(db, doc, user_id):
+    cz_source = await _cz_source_for_document(db, doc, user_id)
+    if not cz_source or not cz_source.cz_token:
+        raise HTTPException(status_code=400, detail="Нет токена Честного Знака — войдите по УКЭП")
+    if (
+        cz_source.cz_token_expires_at is not None
+        and cz_source.cz_token_expires_at <= datetime.now(timezone.utc)
+    ):
+        raise HTTPException(status_code=400, detail="Токен Честного Знака истёк — войдите заново")
+    if not cz_source.cz_inn:
+        raise HTTPException(
+            status_code=400,
+            detail="Не задан ИНН участника оборота — укажите его в настройках",
+        )
+
+    return cz_source.cz_inn, ChestnyZnakService(
+        token=decrypt_token(cz_source.cz_token),
+        product_groups=cz_source.cz_product_groups,
+    )
+
+async def _writeoff_places(cz, inn, group):
+    try:
+        return await cz.writeoff_places(inn, group)
+    except CZApiError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/cz/writeoff/places")
+async def cz_writeoff_places(document_id: UUID, product_group: Optional[str] = None,
+                            current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    doc = await _load_owned_document(db, document_id, current_user.id)
+    inn, cz = await _writeoff_client(db, doc, current_user.id)
+    return await _writeoff_places(cz, inn, product_group)
+
+
 @router.post("/cz/writeoff/prepare", response_model=WriteoffPrepareResponse)
 async def cz_writeoff_prepare(
     body: WriteoffPrepareRequest,
@@ -476,20 +513,7 @@ async def cz_writeoff_prepare(
     if doc.cz_doc_ids:
         raise HTTPException(409, "Списание уже отправлялось в ЧЗ. Проверьте результат ранее отправленных документов.")
 
-    cz_source = await _cz_source_for_document(db, doc, current_user.id)
-    if not cz_source or not cz_source.cz_token:
-        raise HTTPException(status_code=400, detail="Нет токена Честного Знака — войдите по УКЭП")
-    if (
-        cz_source.cz_token_expires_at is not None
-        and cz_source.cz_token_expires_at <= datetime.now(timezone.utc)
-    ):
-        raise HTTPException(status_code=400, detail="Токен Честного Знака истёк — войдите заново")
-    if not cz_source.cz_inn:
-        raise HTTPException(
-            status_code=400,
-            detail="Не задан ИНН участника оборота — укажите его в настройках",
-        )
-
+    inn, cz = await _writeoff_client(db, doc, current_user.id)
     scan_result = await db.execute(
         select(Scan).where(
             Scan.document_id == doc.id,
@@ -500,11 +524,6 @@ async def cz_writeoff_prepare(
     cises = _scan_cises(list(scans))
     if not cises:
         raise HTTPException(status_code=400, detail="Нет валидных марок для списания")
-
-    cz = ChestnyZnakService(
-        token=decrypt_token(cz_source.cz_token),
-        product_groups=cz_source.cz_product_groups,
-    )
 
     # Группируем КМ по товарной группе (pg). Марки, которые ЧЗ не находит (нельзя
     # списать физически), не роняют весь документ — собираем их отдельным списком.
@@ -530,6 +549,21 @@ async def cz_writeoff_prepare(
     stored_parts: dict[str, dict] = {}
     token = ""
     if groups:
+        places = await _writeoff_places(cz, inn, body.product_group)
+        selected = None
+        if body.fias_id or body.kpp:
+            selected = next((p for p in places if (p["fiasId"], p["kpp"]) == (body.fias_id, body.kpp)), None)
+            if selected is None:
+                raise HTTPException(409, "Выбранное МОД недоступно. Обновите список точек.")
+        elif len(places) == 1:
+            selected = places[0]
+        elif places:
+            raise HTTPException(400, "Выберите место осуществления деятельности для списания")
+        elif (groups.keys() & {"beer", "alcohol"} or
+              (reason["action"] == "UTILIZATION" and groups.keys() & {"otp", "tobacco", "ncp"})):
+            raise HTTPException(400, "Нет доступного МОД. Проверьте адрес точки в профиле Честного Знака.")
+        if selected and selected["productGroups"] and set(groups) - set(selected["productGroups"]):
+            raise HTTPException(400, "Выбранное МОД не зарегистрировано для всех товарных групп списания")
         for pg, pg_cises in groups.items():
             # В документ вывода из оборота уходит КОД ИДЕНТИФИКАЦИИ (01+GTIN+21+серия),
             # без криптохвоста. Сканер в USB-режиме часто не отдаёт разделитель GS —
@@ -541,7 +575,9 @@ async def cz_writeoff_prepare(
                 for c in pg_cises
             ]
             document = cz.build_writeoff_document(
-                inn=cz_source.cz_inn,
+                inn=inn,
+                fias_id=selected["fiasId"] if selected else None,
+                kpp=selected["kpp"] if selected else None,
                 action=reason["action"],
                 action_date=action_date,
                 cises=ki_cises,

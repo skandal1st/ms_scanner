@@ -1303,6 +1303,12 @@ export const CZ_PRODUCT_GROUPS: { value: string; label: string }[] = [
   { value: 'antiseptic', label: 'Антисептики' },
 ]
 
+export interface WriteoffPlace {
+  fiasId: string | null
+  kpp: string | null
+  address: string
+}
+
 export const czApi = {
   challenge: () => api.post<CzChallenge>('/integrations/cz/challenge'),
   setGtinGroup: (gtin: string, product_group: string) =>
@@ -1317,7 +1323,13 @@ export const czApi = {
     cert_subject?: string
   }) => api.post<CzLoginResult>('/integrations/cz/login', body),
   logout: () => api.delete<Integration>('/integrations/cz'),
+  writeoffPlaces: (documentId: string, productGroup: string) =>
+    api.get<WriteoffPlace[]>('/integrations/cz/writeoff/places', {
+      params: { document_id: documentId, product_group: productGroup || undefined },
+    }),
   writeoffPrepare: (body: {
+    fias_id?: string
+    kpp?: string
     document_id: string
     reason: string
     product_group?: string
