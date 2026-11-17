@@ -831,10 +831,10 @@ async def start_tsd_collection(document_id: UUID,
     # Require an active session on this device as well as workplace access.
     await get_tsd_document(document_id, device, db)
     from app.services.collection_start import start_collection
-    await start_collection(db, doc, await _ms_for_user(db, device.user_id),
+    warning = await start_collection(db, doc, await _ms_for_user(db, device.user_id),
                            client_timezone=body.timezone if body else None,
                            client_utc_offset_minutes=body.utc_offset_minutes if body else None)
-    return {'status': 'started', 'collection_started': True}
+    return {'status': 'started', 'collection_started': True, 'warning': warning}
 
 
 @router.post("/documents/{document_id}/scans/{scan_id}/pack-mode", response_model=ScanResponse)

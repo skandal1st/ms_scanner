@@ -42,7 +42,7 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
             if not collection_started(doc):
                 doc.upd_meta = {**(doc.upd_meta or {}), 'collection_start': dict(completed.upd_meta['collection_start'])}
                 await db.commit()
-            return
+            return completed.upd_meta['collection_start'].get('date_warning')
         owner = next((d for d in siblings if (d.upd_meta or {}).get('collection_start')), doc)
         profile = (await db.execute(select(OrganizationProfile).where(
             OrganizationProfile.id == doc.organization_profile_id,
@@ -97,7 +97,16 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
             if not marker.get('moment_done') or (marker['shipment_state'] and not marker.get('shipment_done')):
                 target = marker['shipment_state'] if not marker.get('shipment_done') else None
                 date_fields = {'moment': marker['shipment_moment']} if not marker.get('moment_done') else {}
-                await ms.change_collection_state('demand', doc.moysklad_id, target, **date_fields)
+                try:
+                    await ms.change_collection_state('demand', doc.moysklad_id, target, **date_fields)
+                except (httpx.HTTPError, ValueError):
+                    if not date_fields:
+                        raise
+                    marker['date_warning'] = 'МойСклад не подтвердил изменение даты отгрузки. Сборка начата, можно сканировать марки.'
+                    marker['moment_done'] = True
+                    await save()
+                    if target:
+                        await ms.change_collection_state('demand', doc.moysklad_id, target)
                 marker['shipment_done'] = True
                 marker['moment_done'] = True
                 await save()
@@ -110,5 +119,6 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
             if owner.id != doc.id:
                 doc.upd_meta = {**(doc.upd_meta or {}), 'collection_start': dict(marker)}
                 await db.commit()
+            return marker.get('date_warning')
         except (ValueError, httpx.HTTPError) as exc:
             raise HTTPException(502, 'Не удалось изменить дату или статусы при начале сборки. Проверьте настройки и права решения в МойСкладе, затем нажмите «Начать сборку» повторно. ' + (str(exc) if isinstance(exc, ValueError) else '')) from exc

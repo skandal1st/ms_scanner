@@ -156,26 +156,32 @@ async def test_local_accounting_date_uses_document_profile_before_device(monkeyp
         await engine.dispose()
 
 
-async def test_uncertain_shipment_write_retries_same_date_after_midnight_and_timezone_change(monkeypatch):
-    from app.services import collection_start
-    monkeypatch.setattr(collection_start, 'datetime', FrozenDatetime)
+async def test_uncertain_date_write_continues_with_status_only(monkeypatch):
     engine, factory, user, profile, doc, ms = await context(monkeypatch)
     ms.change_collection_state.side_effect = [httpx.ReadTimeout('lost response'), None, None]
     try:
         async with factory() as db:
-            with pytest.raises(HTTPException):
-                await documents.begin_collection(doc.id, user, db)
-        first = ms.change_collection_state.call_args
-        monkeypatch.setattr(FrozenDatetime, 'instant', datetime(2026, 11, 9, 2, tzinfo=timezone.utc))
+            result = await documents.begin_collection(doc.id, user, db)
+            assert result['collection_started'] and result['warning']
         async with factory() as db:
-            profile = await db.get(OrganizationProfile, profile.id)
-            profile.shipment_timezone = 'Asia/Kamchatka'
-            await db.commit()
+            assert await documents.begin_collection(doc.id, user, db) == result
+        first, retry, order = ms.change_collection_state.call_args_list
+        assert first.args == retry.args and first.kwargs['moment'] and not retry.kwargs
+        assert order.args[0] == 'customerorder'
+    finally:
+        await engine.dispose()
+
+
+async def test_rejected_date_only_starts_without_second_write(monkeypatch):
+    engine, factory, user, profile, doc, ms = await context(monkeypatch, enabled=False)
+    request = httpx.Request('PUT', 'https://example.test/demand')
+    ms.change_collection_state.side_effect = httpx.HTTPStatusError('date rejected', request=request,
+        response=httpx.Response(412, request=request))
+    try:
         async with factory() as db:
-            await documents.begin_collection(doc.id, user, db, CollectionStartRequest(timezone='America/New_York'))
-        assert ms.change_collection_state.call_args_list[1] == first
-        assert first.kwargs['moment'] == '2026-11-08 01:30:00'
-        assert ms.change_collection_state.call_args_list[2].args[0] == 'customerorder'
+            result = await documents.begin_collection(doc.id, user, db)
+            assert result['collection_started'] and result['warning']
+        ms.change_collection_state.assert_awaited_once()
     finally:
         await engine.dispose()
 

@@ -72,6 +72,7 @@ export function ShipmentPage({
   const [bulkBusy, setBulkBusy] = useState(false)
   const openingRef = useRef(false)
   const [opening, setOpening] = useState(false)
+  const [dateNotice, setDateNotice] = useState<{ id: string; text: string } | null>(null)
   const [openingWriteoff, setOpeningWriteoff] = useState(false)
   const writeoffRequestId = useRef(0)
   const writeoffBusy = useRef(false)
@@ -257,7 +258,8 @@ export function ShipmentPage({
     openingRef.current = true
     setOpening(true)
     try {
-      await documentsApi.startCollection(document.id)
+      const { data: result } = await documentsApi.startCollection(document.id)
+      setDateNotice(result.warning ? { id: document.id, text: result.warning } : null)
       const { data } = await documentsApi.get(document.id)
       setDocument(data)
     } catch (error) {
@@ -429,6 +431,7 @@ export function ShipmentPage({
           </button>
         </div>
       )}
+      {dateNotice && dateNotice.id === document?.id && <p role="status" className="hint">{dateNotice.text}</p>}
       {terminalMode && document && <div style={{padding:'12px 18px'}}>
         <p className="hint">Режим ТСД: сканируйте марки на терминале. Изменения сборки отображаются здесь автоматически.</p>
         <StatsPanel />

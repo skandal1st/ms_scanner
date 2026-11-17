@@ -271,7 +271,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const online = useTsdOnline()
   const sound = useTsdSound()
   const qc = useQueryClient()
-  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error' | 'warning'; text: string } | null>(null)
   const [hasCode, setHasCode] = useState(false)
   const [inputResetVersion, setInputResetVersion] = useState(0)
   const [lastCode, setLastCode] = useState('')
@@ -544,12 +544,12 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
   const startCollection = useMutation({
     networkMode: 'always',
     mutationFn: () => tsdApi.startCollection(doc.id),
-    onSuccess: () => {
+    onSuccess: ({ data }) => {
       qc.setQueryData<TsdDocumentDetail>(['tsd-document', initial.id], (previous) => previous
         ? { ...previous, collection_started: true } : previous)
       setInputResetVersion(value => value + 1)
       setReviewing(false)
-      setMessage(null)
+      setMessage(data.warning ? { kind: 'warning', text: data.warning } : null)
       refresh()
     },
     onError: (error) => { setMessage({ kind: 'error', text: apiMessage(error) }); sound.play('error') },

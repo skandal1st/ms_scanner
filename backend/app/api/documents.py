@@ -1075,7 +1075,7 @@ async def begin_collection(document_id: UUID, current_user: User = Depends(get_c
     if doc.kind != DocumentKind.demand or not doc.moysklad_id:
         return {'status': 'started'}
     from app.services.collection_start import start_collection
-    await start_collection(db, doc, await _get_ms_service(current_user, db),
+    warning = await start_collection(db, doc, await _get_ms_service(current_user, db),
                            client_timezone=body.timezone if body else None,
                            client_utc_offset_minutes=body.utc_offset_minutes if body else None)
-    return {'status': 'started', 'collection_started': True}
+    return {'status': 'started', 'collection_started': True, 'warning': warning}
