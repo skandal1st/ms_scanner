@@ -607,7 +607,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
     <main className="tsd-shell tsd-picking">
       <section ref={scannerDockRef} className="tsd-scanner-dock" aria-label="Сканер маркировки">
         <TsdScanInput inputRef={inputRef} blocked={scannerBlocked} online={online}
-          collectionStarted={Boolean(doc.collection_started)} pending={scan.isPending} messageKind={message?.kind}
+          collectionStarted={Boolean(doc.collection_started)} pending={scan.isPending} messageKind={message?.kind === 'warning' ? undefined : message?.kind}
           resetVersion={inputResetVersion} onHasCodeChange={setHasCode} onScan={acceptCode} />
         <div className="tsd-dock-meta">
           <button type="button" className="tsd-button" disabled={!online || checkingMarks || verify.isPending || doc.status !== 'draft' || !doc.scans.some(item => !item.is_barcode)} aria-busy={checkingMarks} onClick={() => verify.mutate()}>{checkingMarks ? 'Проверяем марки в ЧЗ…' : 'Проверить все марки в ЧЗ'}</button>
