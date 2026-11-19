@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, delete, func, or_, and_
 from pydantic import BaseModel
 from typing import Optional, List
 from uuid import UUID
@@ -203,6 +203,7 @@ async def customer_order_shipments(
     completed = set((await db.execute(select(Document.moysklad_id).where(
         Document.user_id == current_user.id, Document.organization_profile_id == profile.id,
         Document.kind == DocumentKind.demand, Document.status == DocumentStatus.accepted,
+        Document.upd_meta['superseded_by_document_id'].astext.is_(None),
         Document.moysklad_id.in_([row["id"] for row in rows]),
     ))).scalars().all())
     return [MoySkladDocumentItem(id=row["id"], name=row.get("name") or "Без номера", moment=row.get("moment"),
@@ -562,6 +563,58 @@ async def refresh_plan(
         await db.commit()
     await db.refresh(doc)
     return _doc_to_response(doc, await _scan_count(db, doc.id))
+
+
+@router.delete("/{document_id}/assembly", status_code=204)
+async def delete_shipment_assembly(
+    document_id: UUID,
+    current_user: User = Depends(get_current_user),
+    profile: OrganizationProfile = Depends(get_active_organization_profile),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.core.logging import logger
+    from app.db.models import OutgoingUpd, TsdDocumentSession
+    from app.services.mixed_import import active_import
+    from app.services.shipment_corrections import MARKER
+    from app.services.shipment_resend import assert_idle
+
+    doc = await db.scalar(select(Document).where(
+        Document.id == document_id, Document.user_id == current_user.id,
+        Document.organization_profile_id == profile.id, Document.kind == DocumentKind.demand,
+    ).with_for_update())
+    if doc is None:
+        raise HTTPException(404, 'Сборка не найдена в выбранном юрлице')
+    if (doc.upd_meta or {}).get('superseded_by_document_id'):
+        raise HTTPException(409, 'Эта версия сборки уже заменена. Откройте актуальную сборку.')
+    if doc.status == DocumentStatus.processing or active_import(doc):
+        raise HTTPException(409, 'Идёт обработка сборки. Дождитесь её завершения.')
+    if doc.moysklad_id:
+        # Match both the open/select lock and the external shipment writer lock.
+        # Try rather than wait while holding the document row lock.
+        for key in (f'document:{doc.user_id}:demand:{doc.moysklad_id}', f'ms:{doc.user_id}:demand:{doc.moysklad_id}'):
+            if not await db.scalar(select(func.pg_try_advisory_xact_lock(func.hashtextextended(key, 0)))):
+                raise HTTPException(409, 'Сборка занята другой операцией. Повторите удаление позже.')
+        await assert_idle(db, doc)
+        open_revision = await db.scalar(select(Document.id).where(
+            Document.user_id == doc.user_id, Document.organization_profile_id == profile.id,
+            Document.kind == DocumentKind.demand, Document.moysklad_id == doc.moysklad_id,
+            Document.upd_meta[MARKER].astext.isnot(None),
+            Document.upd_meta['superseded_by_document_id'].astext.is_(None),
+            Document.status != DocumentStatus.accepted,
+        ).limit(1))
+        if open_revision:
+            raise HTTPException(409, 'Открыто исправление этой отгрузки. Сохраните или отмените его перед удалением сборки.')
+    if await db.scalar(select(OutgoingUpd.id).where(OutgoingUpd.document_id == doc.id,
+            OutgoingUpd.status.in_(('prepared', 'uploading', 'uncertain')))):
+        raise HTTPException(409, 'Сначала проверьте результат загрузки УПД в СБИС.')
+
+    await db.execute(delete(TsdDocumentSession).where(TsdDocumentSession.document_id == doc.id))
+    scans = await db.execute(delete(Scan).where(Scan.document_id == doc.id))
+    await db.execute(delete(Document).where(Document.id == doc.id))
+    await db.commit()
+    logger.info('shipment.assembly_deleted', document_id=str(document_id), user_id=str(current_user.id),
+                organization_profile_id=str(profile.id), scan_count=scans.rowcount)
+    return Response(status_code=204)
 
 
 @router.get("/{document_id}", response_model=DocumentResponse)

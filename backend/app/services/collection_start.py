@@ -36,6 +36,7 @@ async def start_collection(db, doc, ms, *, client_timezone=None, client_utc_offs
         siblings = (await db.execute(select(Document).where(
             Document.user_id == doc.user_id, Document.kind == DocumentKind.demand,
             Document.moysklad_id == doc.moysklad_id,
+            Document.upd_meta['superseded_by_document_id'].astext.is_(None),
         ))).scalars().all()
         completed = next((d for d in siblings if collection_started(d)), None)
         if completed:

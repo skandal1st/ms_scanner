@@ -6,7 +6,7 @@ export function preferResolvedScan(existing: Scan | undefined, incoming: Scan): 
   const pendingSource = incoming.verification?.source
   if (existing && pendingSource === 'packaging_recheck'
       && existing.verification?.packaging_request_id === incoming.verification?.request_id) return existing
-  if (existing && ['sscc_pending', 'packaging_pending'].includes(pendingSource || '')
+  if (existing && existing.status !== 'used_in_other_doc' && ['sscc_pending', 'packaging_pending'].includes(pendingSource || '')
       && (existing.status !== 'pending' || existing.box_quantity != null)) {
     return { ...existing, duplicate: incoming.duplicate }
   }

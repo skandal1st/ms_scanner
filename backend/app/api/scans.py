@@ -248,6 +248,7 @@ async def _create_scan_record(
     gtin_override: Optional[str] = None,
     device_id: Optional[UUID] = None,
     sscc_unpack: Optional[bool] = None,
+    retry_blocked: bool = False,
 ) -> tuple[Scan, bool]:
     """
     Создаёт скан. Возвращает (scan, is_duplicate).
@@ -411,7 +412,13 @@ async def _create_scan_record(
         scan_values.update(box_expanded=sscc_unpack,
                            verification={'source': 'sscc_pending', 'unpack': sscc_unpack})
     scan = None
-    if original_code is not None:
+    # A previously blocked scan can become usable when its other assembly is
+    # deleted. Keep its id and run the normal checks on an explicit rescan.
+    if retry_blocked and conflict_doc_name is None:
+        scan = await db.scalar(select(Scan).where(
+            Scan.document_id == document_id, Scan.code == code, Scan.status == ScanStatus.used_in_other_doc,
+        ))
+    if scan is None and original_code is not None:
         canonical_exists = (await db.execute(select(Scan.id).where(
             Scan.document_id == document_id, Scan.code == code))).scalar_one_or_none()
         if canonical_exists is None:
@@ -450,6 +457,15 @@ async def _create_scan_record(
             )
         )
         existing = existing_q.scalar_one()
+        if (not retry_blocked and existing.status == ScanStatus.used_in_other_doc
+                and conflict_doc_name is None):
+            # The failed insert released the document lock. Recheck ownership,
+            # editability and conflicts under a fresh lock before updating.
+            return await _create_scan_record(
+                db, document_id, original_code or code, current_user_id, moysklad_product_id,
+                is_box=is_box, box_quantity=box_quantity, gtin_override=gtin_override,
+                device_id=device_id, sscc_unpack=sscc_unpack, retry_blocked=True,
+            )
         if original_code is not None and existing.original_code is None:
             existing.original_code = original_code
             await db.commit()

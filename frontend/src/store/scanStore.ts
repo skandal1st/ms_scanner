@@ -199,7 +199,7 @@ function scanMatchesPlanRow(
 /** Evaluate the committed result once, whether HTTP or the live event arrived first. */
 export function progressAfterScan(plan: PlanItem[] | undefined, scans: Scan[], result: Scan) {
   const resolved = scans.find(item => item.id === result.id)
-  if (resolved && ['sscc_pending', 'packaging_pending'].includes(result.verification?.source || '')
+  if (resolved && resolved.status !== 'used_in_other_doc' && ['sscc_pending', 'packaging_pending'].includes(result.verification?.source || '')
       && (resolved.status !== 'pending' || resolved.box_quantity != null)) {
     result = { ...resolved, duplicate: result.duplicate }
   }
@@ -414,7 +414,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
       // Upsert по id: повторный скан штрихкода немаркированного товара возвращает тот
       // же скан с обновлённым box_quantity — заменяем строку, а не плодим дубль.
       const idx = state.scans.findIndex((s) => s.id === scan.id)
-      if (idx >= 0 && ['sscc_pending', 'packaging_pending'].includes(scan.verification?.source || '')
+      if (idx >= 0 && state.scans[idx].status !== 'used_in_other_doc' && ['sscc_pending', 'packaging_pending'].includes(scan.verification?.source || '')
           && (state.scans[idx].status !== 'pending' || state.scans[idx].box_quantity != null)) {
         return { flashScanId: null }
       }

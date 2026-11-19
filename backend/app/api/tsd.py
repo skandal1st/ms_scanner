@@ -451,6 +451,7 @@ async def list_tsd_orders(
     local_docs = (await db.execute(select(Document).where(
         Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
         Document.kind == DocumentKind.demand, Document.status != DocumentStatus.accepted,
+        Document.upd_meta['superseded_by_document_id'].astext.is_(None),
         or_(Document.moysklad_customer_order_id.in_([row["id"] for row in rows]),
             Document.moysklad_id.in_(list(demand_orders))),
     ))).scalars().all()
@@ -503,6 +504,7 @@ async def get_tsd_order_shipments(
     local_docs = (await db.execute(select(Document).where(
         Document.user_id == device.user_id, Document.organization_profile_id == profile.id,
         Document.kind == DocumentKind.demand, Document.moysklad_id.in_([row["id"] for row in rows]),
+        Document.upd_meta['superseded_by_document_id'].astext.is_(None),
     ))).scalars().all()
     completed_ids = {doc.moysklad_id for doc in local_docs if doc.status == DocumentStatus.accepted}
     docs = {doc.moysklad_id: doc for doc in local_docs}

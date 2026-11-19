@@ -44,6 +44,7 @@ async def ensure_no_stranded_scans(db, ms, user_id, profile_id, order_id, shipme
         Document.organization_profile_id == profile_id,
         Document.kind == DocumentKind.demand,
         Document.status != DocumentStatus.accepted,
+        Document.upd_meta['superseded_by_document_id'].astext.is_(None),
         Document.moysklad_customer_order_id == str(order_id),
         Document.moysklad_id.is_not(None),
         Document.moysklad_id != shipment_id,

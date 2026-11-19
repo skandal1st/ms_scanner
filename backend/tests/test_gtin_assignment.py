@@ -100,7 +100,7 @@ async def test_invalid_and_duplicate_scans_never_change_mapping(monkeypatch,dupl
     monkeypatch.setattr(gtin_product_store,'remember_gtin_product',remember)
     monkeypatch.setattr(tasks.persist_assigned_gtin_task,'delay',queue)
     raw='010462016440535821TEST000000001\x1d93TEST' if duplicate else '010462016440535921TEST000000001\x1d93TEST'
-    existing=NS(id=uuid4(),moysklad_product_id='original')
+    existing=NS(id=uuid4(),moysklad_product_id='original',status='valid')
     db=NS(execute=AsyncMock(side_effect=[Result(None),Result(existing)]),add=Mock(),commit=AsyncMock(),refresh=AsyncMock(),rollback=AsyncMock(),flush=AsyncMock())
     if duplicate:db.flush.side_effect=IntegrityError('duplicate',{},Exception())
     _,is_duplicate=await scans._create_scan_record(db,uuid4(),raw,uuid4(),moysklad_product_id='chosen')

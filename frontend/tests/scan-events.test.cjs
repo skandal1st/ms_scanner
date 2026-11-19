@@ -11,6 +11,12 @@ function load(file, context = {}) {
 }
 const { applyScanEvent } = load('lib/scanEvents.ts');
 
+test('rescanning a released mark clears its previous shipment conflict', () => {
+  const blocked = {id:'pack',status:'used_in_other_doc',error_message:'Код занят'};
+  const retried = {id:'pack',status:'pending',verification:{source:'packaging_pending'},error_message:null};
+  assert.equal(applyScanEvent([blocked], {type:'scan_upsert',scan:retried})[0], retried);
+});
+
 test('late recheck response cannot replace the completed result, but a new request can', () => {
   const resolved={id:'pack',status:'scanned',box_quantity:10,
     verification:{source:'packaging',packaging_request_id:'first'}};

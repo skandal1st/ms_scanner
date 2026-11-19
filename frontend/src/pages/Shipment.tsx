@@ -3,7 +3,7 @@ import { PackagingComposition } from '../components/PackagingComposition'
 import type { MixedImportTarget } from '../api/client'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { isProblemScan } from '../lib/shipmentProblems'
@@ -53,6 +53,7 @@ export function ShipmentPage({
 }: ShipmentPageProps = {}) {
   const matchPanel = useRef<HTMLDivElement>(null)
   const modal = useModal()
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const location = useLocation()
   const { document, setDocument, reset, stats, scans, getProgress, addScan, unpackBox, czTokenExpired, setCzTokenExpired, verifying, setVerifying } = useScanStore()
@@ -300,6 +301,38 @@ export function ShipmentPage({
     setShowClearConfirm(false)
   }
 
+  const deleteAssembly = useMutation({ mutationFn: documentsApi.deleteShipmentAssembly })
+  const handleDeleteAssembly = async () => {
+    if (!document) return
+    const id = document.id
+    const confirmed = await modal.confirm(
+      'Марки этой сборки освободятся для другой отгрузки. Если товар уже отгружен, одни и те же марки могут попасть в две отгрузки. '
+      + 'Проверьте исходную отгрузку перед удалением. Восстановить сборку в Скандате нельзя. '
+      + 'Документы и переданные марки в МойСкладе, ЭДО и Честном Знаке сохранятся.',
+      { title: `Удалить сборку «${document.display_name || document.name}» из Скандаты?`,
+        variant: 'warn', danger: true, focusCancel: true, okText: 'Удалить сборку', cancelText: 'Оставить сборку' },
+    )
+    if (!confirmed || useScanStore.getState().document?.id !== id) return
+    try {
+      await deleteAssembly.mutateAsync(id)
+    } catch (error) {
+      const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+      void modal.alert(detail || 'Не удалось удалить сборку. Обновите страницу и проверьте её состояние.', { variant: 'error' })
+      return
+    }
+    if (useScanStore.getState().document?.id === id) {
+      handleDetach()
+      if (searchParams.has('doc')) {
+        const params = new URLSearchParams(searchParams)
+        params.delete('doc')
+        setSearchParams(params, { replace: true })
+      }
+    }
+    queryClient.removeQueries({ queryKey: ['document', id], exact: true })
+    void queryClient.invalidateQueries({ queryKey: ['documents'] })
+    void queryClient.invalidateQueries({ queryKey: ['shipment-correction-sources'] })
+  }
+
   // После «Отгружено» (COM-режим): убрать оверлей и вернуться к выбору документа,
   // не закрывая вкладку — COM-порт остаётся открытым для следующей отгрузки.
   const handleNextShipment = () => {
@@ -392,6 +425,9 @@ export function ShipmentPage({
                   {document.status === 'draft' && <button className="button" disabled={clearMutation.isPending || verifying || sending || bulkBusy}
                     onClick={() => setShowClearConfirm(true)}>Очистить</button>}
                 </>}
+                {!embedded && document.kind === 'demand' && <button className="button" type="button"
+                  disabled={document.status === 'processing' || deleteAssembly.isPending || opening || openingWriteoff || openCorrection.isPending || sending || bulkBusy || verifying}
+                  onClick={() => void handleDeleteAssembly()}>Удалить сборку</button>}
               </>}
             </div>
           </details>}

@@ -561,6 +561,7 @@ export const documentsApi = {
   resolve: (moysklad_id: string, kind: DocumentKind, customer_order_id?: string) =>
     api.post<Document>('/documents/resolve', { moysklad_id, kind, customer_order_id }),
   get: (id: string) => api.get<Document>(`/documents/${id}`),
+  deleteShipmentAssembly: (id: string) => api.delete<void>(`/documents/${id}/assembly`),
   startCollection: (id: string) => api.post(`/documents/${id}/start-collection`, getClientTimezoneContext()),
   refreshPlan: (id: string) => api.post<Document>(`/documents/${id}/refresh-plan`),
   importShipmentCodes: (id: string) =>
