@@ -12,17 +12,24 @@ export function normalizeGs(s: string): string {
 }
 
 export class SerialLineBuffer {
-  private buf = ''
+  private pending: number[] = []
+  private decoder = new TextDecoder('latin1')
 
-  feed(chunk: string): string[] {
-    this.buf += chunk
-    const parts = this.buf.split(/\r\n|\r|\n/)
-    // Последний элемент — хвост без терминатора, оставляем в буфере.
-    this.buf = parts.pop() ?? ''
-    return parts.filter((line) => line.length > 0)
-  }
-
-  reset(): void {
-    this.buf = ''
+  feed(chunk: Uint8Array) {
+    const frames: { line: string; rawHex?: string }[] = []
+    for (const byte of chunk) {
+      if (byte !== 13 && byte !== 10) {
+        this.pending.push(byte)
+        continue
+      }
+      if (!this.pending.length) continue
+      // Capture the bytes of this frame before text decoding or GS substitution.
+      const rawHex = this.pending.length <= 4096
+        ? this.pending.map(value => value.toString(16).padStart(2, '0')).join('')
+        : undefined
+      frames.push({ line: this.decoder.decode(Uint8Array.from(this.pending)), rawHex })
+      this.pending = []
+    }
+    return frames
   }
 }

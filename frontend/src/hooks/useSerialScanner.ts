@@ -44,7 +44,7 @@ export function humanizeSerialOpenError(e: unknown): string {
 
 interface UseSerialScannerArgs {
   enabled: boolean
-  onCode: (code: string) => void
+  onCode: (code: string, rawHex?: string) => void
 }
 
 export interface UseSerialScannerResult {
@@ -174,20 +174,15 @@ export function useSerialScanner({ enabled, onCode }: UseSerialScannerArgs): Use
     // а lock на readable снимается ровно один раз — в finally этого цикла.
     loopRef.current = (async () => {
       const buffer = new SerialLineBuffer()
-      // latin1, НЕ utf-8: сканер шлёт байты GS1 DataMatrix как есть (включая GS-подмену
-      // 0xF8). UTF-8 ломал бы невалидные байты на U+FFFD; latin1 маппит байт↔кодпоинт 1:1.
-      const decoder = new TextDecoder('latin1')
       try {
         while (aliveRef.current) {
           const { value, done } = await reader.read()
           if (done) break
           if (!value) continue
-          const text = decoder.decode(value, { stream: true })
-          const lines = buffer.feed(text)
-          for (const line of lines) {
+          for (const { line, rawHex } of buffer.feed(value)) {
             // normalizeGs: подменный GS-байт сканера (0xF8) → каноничный 0x1D.
             const code = normalizeGs(line).trim()
-            if (code && !deliverCapturedSerialScan(code)) onCodeRef.current(code)
+            if (code && !deliverCapturedSerialScan(code)) onCodeRef.current(code, rawHex)
           }
         }
       } catch (e) {

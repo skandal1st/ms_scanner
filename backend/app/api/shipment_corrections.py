@@ -17,6 +17,7 @@ from app.db.models import Document, DocumentKind, DocumentStatus, Scan, TsdDocum
 from app.db.session import get_db
 from app.core.security import decode_token
 from app.services import shipment_corrections as service
+from app.services import serial_diagnostics
 from app.services.document_guard import editable_document, lock_ms_document, processing_lock
 
 router = APIRouter(prefix='/shipment-corrections', tags=['shipment-corrections'])
@@ -225,7 +226,7 @@ async def detail(document_id: UUID, access: Scope = Depends(scope), db: AsyncSes
     }
 
 
-class AddCode(BaseModel):
+class AddCode(serial_diagnostics.SerialCapture):
     code: str = Field(min_length=1, max_length=4096)
     position_id: UUID | None = None
     replace_scan_id: UUID | None = None
@@ -240,6 +241,7 @@ async def add_code(document_id: UUID, body: AddCode, access: Scope = Depends(sco
     from app.services.scan_input import decode_base64_mark
     decoded = decode_base64_mark(body.code)
     raw = strip_ai_brackets(decoded or body.code).strip()
+    await serial_diagnostics.record(doc.id, body.code, body.serial_raw_hex, decoded or raw)
     pid = str(body.position_id) if body.position_id else None
     if pid is None:
         gtin = normalize_gtin_key(extract_gtin(raw))

@@ -765,15 +765,19 @@ export interface MixedImportJob {
 export const scansApi = {
   composition: (document_id: string) => api.get<PackagingCompositionData>(`/scans/composition/${document_id}`),
   refreshComposition: (document_id: string, code?: string) => api.post(`/scans/composition/${document_id}`, { code }),
-  create: (document_id: string, code: string, moysklad_product_id?: string | null) =>
+  serialAttempts: (documentId: string, code: string) =>
+    api.post<{ received_at: string; raw_hex: string; received_code: string }[]>(
+      `/scans/serial-diagnostics/${documentId}`, { code }),
+  create: (document_id: string, code: string, moysklad_product_id?: string | null, rawHex?: string) =>
     api.post<Scan>('/scans/', {
       document_id,
       code,
       ...(moysklad_product_id ? { moysklad_product_id } : {}),
+      serial_raw_hex: rawHex,
     }),
   /** Принять SSCC-короб. unpack=true — раскрыть на штучные КМ; false — целиком (transportpack). */
-  box: (document_id: string, sscc: string, unpack: boolean) =>
-    api.post<Scan[]>('/scans/box', { document_id, sscc, unpack }),
+  box: (document_id: string, sscc: string, unpack: boolean, rawHex?: string) =>
+    api.post<Scan[]>('/scans/box', { document_id, sscc, unpack, serial_raw_hex: rawHex }),
   /** Массовая загрузка списка марок (отгрузка): проходят обычный конвейер проверки. */
   bulk: (document_id: string, codes: string[], unpack_boxes = false) =>
     api.post<Scan[]>('/scans/bulk', { document_id, codes, unpack_boxes }),
@@ -1430,7 +1434,7 @@ export function shipmentCorrectionsApi(terminal = false) {
     list: () => client.get<{ id: string; name: string; resume: boolean }[]>(base),
     open: (id: string) => client.post<{ id: string }>(`${base}/${id}/open`),
     get: (id: string) => client.get<ShipmentCorrectionDetail>(`${base}/${id}`),
-    scan: (id: string, code: string, position_id?: string, replace_scan_id?: string) => client.post<{ duplicate: boolean; replaced?: boolean }>(`${base}/${id}/scans`, { code, position_id, replace_scan_id }),
+    scan: (id: string, code: string, position_id?: string, replace_scan_id?: string, rawHex?: string) => client.post<{ duplicate: boolean; replaced?: boolean }>(`${base}/${id}/scans`, { code, position_id, replace_scan_id, serial_raw_hex: rawHex }),
     remove: (id: string, scanId: string) => client.delete(`${base}/${id}/scans/${scanId}`),
     verify: (id: string) => client.post(`${base}/${id}/verify`),
     preview: (id: string) => client.post<ShipmentCorrectionDelta>(`${base}/${id}/preview`, { adjust_quantities: false }),

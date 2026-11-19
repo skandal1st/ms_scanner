@@ -10,6 +10,7 @@ import { FlowWorkspaceTabs, type FlowWorkspaceTab } from './FlowWorkspaceTabs'
 import { Icon } from './Icon'
 import { CodeSearchModal } from './CodeSearchModal'
 import { ResendShipmentMarks } from './ResendShipmentMarks'
+import { SerialDiagnostics } from './SerialDiagnostics'
 
 type CorrectionScan = ShipmentCorrectionDetail['scans'][number]
 
@@ -71,7 +72,7 @@ export function ShipmentCorrections({ terminal = false, initialRevisionId, onClo
     return task
   }
   // Capture the document and position at scan time; serialize COM requests.
-  const enqueue = (value: string) => {
+  const enqueue = (value: string, rawHex?: string) => {
     const raw = normalizeScannerInput(value).trim()
     if (!raw) return
     if (locked || preview) { setError('Сканирование недоступно. Вернитесь к редактированию марок.'); return }
@@ -79,7 +80,7 @@ export function ShipmentCorrections({ terminal = false, initialRevisionId, onClo
     const documentId = id, positionId = position || undefined, replaceId = replacement?.id
     setCode('')
     void run(async () => {
-        const { data } = await api.scan(documentId, raw, positionId, replaceId)
+        const { data } = await api.scan(documentId, raw, positionId, replaceId, rawHex)
         setPreview(null)
         if (data.duplicate) setError('Эта марка уже есть в исправлении. Исходная марка сохранена.')
         else if (replaceId && !data.replaced) setError('Новая марка не прошла проверку формата или уже используется. Исходная марка сохранена; удалите ошибочный скан.')
@@ -202,7 +203,9 @@ export function ShipmentCorrections({ terminal = false, initialRevisionId, onClo
               <div className="correction-marks__filters"><input className="ui-input" aria-label="Найти марку в отгрузке" placeholder="Код или товар" value={markSearch} onChange={e => setMarkSearch(e.target.value)} />{position && <button type="button" className="button button--sm" disabled={Boolean(replacement)} onClick={() => setPosition('')}>Все товары</button>}</div>
               {position && <p className="hint">{doc.positions.find(p => p.id === position)?.name}</p>}
               <div className="correction-marks__list">{filtered.slice(0, visibleScans).map(scan => <article className="correction-mark" key={scan.id}>
-                <div className="correction-mark__content"><strong>{scan.product_name || doc.positions.find(p => p.id === scan.position_id)?.name}</strong><code>{scan.code}</code><span className={scan.existing ? 'hint' : `badge ${['valid', 'overflow'].includes(scan.status) ? 'badge--ok' : ['scanned', 'pending'].includes(scan.status) ? 'badge--warn' : 'badge--err'}`}>{scan.existing ? 'Из МойСклада' : scan.error_message || verificationLabel(scan)}</span>{!scan.existing && scan.verification?.owner_result !== 'match' && <small className="hint">{scan.verification?.owner_reason}</small>}</div>
+                <div className="correction-mark__content"><strong>{scan.product_name || doc.positions.find(p => p.id === scan.position_id)?.name}</strong><code>{scan.code}</code><span className={scan.existing ? 'hint' : `badge ${['valid', 'overflow'].includes(scan.status) ? 'badge--ok' : ['scanned', 'pending'].includes(scan.status) ? 'badge--warn' : 'badge--err'}`}>{scan.existing ? 'Из МойСклада' : scan.error_message || verificationLabel(scan)}</span>{!scan.existing && scan.verification?.owner_result !== 'match' && <small className="hint">{scan.verification?.owner_reason}</small>}
+                  {!terminal && !scan.existing && <SerialDiagnostics documentId={id} code={scan.code} />}
+                </div>
                 <div className="correction-mark__actions"><button type="button" className="button button--sm" disabled={blocked || scan.package} onClick={() => { setReplacement(scan); setPosition(scan.position_id); setManualOpen(true); setCode(''); setNotice(''); setError('') }}>Заменить</button><button type="button" className="button button--sm" disabled={blocked} onClick={() => remove(scan)}><Icon name="trash" size={14} />{scan.package ? 'Удалить упаковку' : 'Удалить'}</button></div>
               </article>)}</div>
               {!filtered.length && <p className="flow-tabs__empty">Марок по выбранному фильтру нет.</p>}

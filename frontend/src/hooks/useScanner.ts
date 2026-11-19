@@ -55,7 +55,7 @@ export function useScanner(documentId: string | null) {
   useScanUpdates(documentId, failed => playBeep(failed ? 'error' : 'ok'))
 
   const submitCode = useCallback(
-    async (code: string): Promise<ScanOutcome | undefined> => {
+    async (code: string, rawHex?: string): Promise<ScanOutcome | undefined> => {
       if (!documentId || !code.trim()) return
       if (audioCtx.state === 'suspended') void audioCtx.resume().catch(() => {})
       void conflictSound.prepare(audioCtx).catch(() => {})
@@ -90,6 +90,7 @@ export function useScanner(documentId: string | null) {
             documentId,
             trimmed,
             state.unpackBox,
+            rawHex,
           )
           if (useScanStore.getState().document?.id !== documentId) return
           let hadError = false
@@ -124,7 +125,8 @@ export function useScanner(documentId: string | null) {
         const { data: scan } = await scansApi.create(
           documentId,
           trimmed,
-          targetPid || undefined
+          targetPid || undefined,
+          rawHex,
         )
         if (useScanStore.getState().document?.id !== documentId) return
         if (state.document?.kind === 'demand') recordMarkScan(scan)

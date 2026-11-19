@@ -7,6 +7,7 @@ import {
   buildProgress,
 } from '../store/scanStore'
 import { scansApi, type Scan } from '../api/client'
+import { SerialDiagnostics } from './SerialDiagnostics'
 import { verificationLabel, ownerCheckLabel, ownerBadgeLabel } from '../lib/scanVerification'
 import { Icon } from './Icon'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
@@ -321,6 +322,7 @@ function ScanRow({
               <span className="scans-expanded__label">Полный код:</span>
               <code>{scan.code}</code>
             </div>
+            <SerialDiagnostics documentId={scan.document_id} code={scan.code} />
             {scan.gtin && (
               <div className="scans-expanded__row">
                 <span className="scans-expanded__label">GTIN:</span>

@@ -37,11 +37,11 @@ export function ScanInput({ documentId, inactiveHint = 'Выберите док�
   const setUnpackBox = useScanStore((s) => s.setUnpackBox)
 
   const handleScannedCode = useCallback(
-    async (code: string) => {
+    async (code: string, rawHex?: string) => {
       const trimmed = normalizeScannerInput(code).trim()
       if (!trimmed) return
       const request = ++version.current
-      const result = await submitCode(trimmed)
+      const result = await submitCode(trimmed, rawHex)
       if (request !== version.current || !result) return
       setOutcome(result)
       if (!result.scan?.duplicate) setUndoIds(result.undoIds ?? [])

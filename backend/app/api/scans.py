@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, field_serializer
+from redis.exceptions import RedisError
 from app.services.cz_status import localize_cz_error, localize_cz_verification
 from typing import List, Optional, Literal
 from uuid import UUID
@@ -34,6 +35,7 @@ from app.services.chestnyznak import (
 )
 from app.services.gtin_cz_group import get_cached_pg
 from app.services.scan_input import decode_base64_mark
+from app.services import serial_diagnostics
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -118,7 +120,7 @@ class CodeSearchResponse(BaseModel):
     edo_unparsed_outgoing_documents: int = 0
 
 
-class CreateScanRequest(BaseModel):
+class CreateScanRequest(serial_diagnostics.SerialCapture):
     document_id: UUID
     code: str
     moysklad_product_id: Optional[str] = None
@@ -187,7 +189,7 @@ async def recheck_packaging(scan_id: UUID, current_user: User = Depends(get_curr
     return ScanResponse.model_validate(await start(db, scan, current_user.id))
 
 
-class CreateBoxRequest(BaseModel):
+class CreateBoxRequest(serial_diagnostics.SerialCapture):
     document_id: UUID
     sscc: str
     # True — раскрыть короб на штучные КМ (ЧЗ aggregated/list по SSCC).
@@ -637,6 +639,9 @@ async def create_scan(
     """
     doc = await editable_document(db, body.document_id, current_user.id)
     require_collection_started(doc)
+    if body.serial_raw_hex:
+        await serial_diagnostics.record(doc.id, body.code, body.serial_raw_hex,
+                                        decode_base64_mark(body.code) or body.code.strip())
     if is_sscc(body.code):
         raise HTTPException(
             400,
@@ -790,6 +795,7 @@ async def create_box_scans(
     doc = await editable_document(db, body.document_id, current_user.id)
     require_collection_started(doc)
     sscc = normalize_sscc(body.sscc)
+    await serial_diagnostics.record(doc.id, body.sscc, body.serial_raw_hex, sscc)
     if not is_sscc(sscc):
         raise HTTPException(400, "Это не SSCC-код короба")
 
@@ -801,6 +807,20 @@ async def create_box_scans(
 
 class CompositionRefreshRequest(BaseModel):
     code: Optional[str] = None
+
+
+class SerialDiagnosticsLookup(BaseModel):
+    code: str
+
+
+@router.post('/serial-diagnostics/{document_id}', response_model=list[serial_diagnostics.SerialAttempt])
+async def serial_attempts(document_id: UUID, body: SerialDiagnosticsLookup,
+                          current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    await _ensure_document_owner(document_id, current_user, db)
+    try:
+        return await serial_diagnostics.attempts(document_id, body.code)
+    except (RedisError, OSError) as exc:
+        raise HTTPException(503, 'Не удалось загрузить диагностику COM-скана.') from exc
 
 
 @router.get('/composition/{document_id}')
