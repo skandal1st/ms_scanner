@@ -13,11 +13,15 @@ import { ResendShipmentMarks } from './ResendShipmentMarks'
 
 type CorrectionScan = ShipmentCorrectionDetail['scans'][number]
 
-export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: boolean; onClose: () => void }) {
+export function ShipmentCorrections({ terminal = false, initialRevisionId, onClose }: {
+  terminal?: boolean
+  initialRevisionId?: string
+  onClose: (savedId?: string) => void
+}) {
   const api = useMemo(() => shipmentCorrectionsApi(terminal), [terminal])
   const qc = useQueryClient()
   const storageKey = terminal ? 'tsd_correction_document_id' : 'shipment_correction_document_id'
-  const [id, setId] = useState(() => localStorage.getItem(storageKey) || '')
+  const [id, setId] = useState(() => initialRevisionId || localStorage.getItem(storageKey) || '')
   const [search, setSearch] = useState('')
   const [position, setPosition] = useState('')
   const [code, setCode] = useState('')
@@ -35,16 +39,22 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
   const requestPending = useRef(0)
   const scanQueue = useRef(Promise.resolve())
   const { width, startResize } = useResizableWidth('shipment_correction_left_width', 420, { min: 300, max: 700, reserveRight: 400 })
-  const sources = useQuery({ queryKey: ['shipment-correction-sources', terminal], queryFn: () => api.list().then(r => r.data) })
+  const sources = useQuery({ queryKey: ['shipment-correction-sources', terminal], enabled: !id, queryFn: () => api.list().then(r => r.data) })
   const detail = useQuery({ queryKey: ['shipment-correction', terminal, id], enabled: Boolean(id), queryFn: () => api.get(id).then(r => r.data), refetchInterval: id ? 2000 : false })
   const doc = detail.data
+  const backLabel = initialRevisionId ? 'К отгрузке' : 'К отгрузкам'
+  const close = () => onClose(doc?.status === 'accepted' ? doc.id : undefined)
   const locked = !doc || doc.locked || doc.status !== 'draft'
   const blocked = busy || locked
   useTsdScannerFocus(inputRef, blocked || !terminal || Boolean(preview), value => setCode(previous => previous + value))
   const forget = () => {
+    if (initialRevisionId) {
+      close()
+      return
+    }
     localStorage.removeItem(storageKey)
+    void qc.invalidateQueries({ queryKey: ['shipment-correction-sources', terminal] })
     setId(''); setPosition(''); setPreview(null); setError(''); setNotice(''); setCode(''); setReplacement(null)
-    void sources.refetch()
   }
   const refresh = () => qc.invalidateQueries({ queryKey: ['shipment-correction', terminal, id] })
   const errorText = (e: unknown) => (e as { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Операция не выполнена. Проверьте сеть и повторите.'
@@ -111,12 +121,12 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
   return <main className={`acc-page correction-workspace${terminal ? ' correction-workspace--terminal' : ''}`}>
     <header className="acc-header">
       <div className="flex-row gap-8">
-        <button type="button" className="button button--sm" disabled={busy} onClick={onClose}>К отгрузкам</button>
+        <button type="button" className="button button--sm" disabled={busy} onClick={close}>{backLabel}</button>
         <h1 className="acc-header__title">Исправить отгрузку</h1>
         {doc && <ResendShipmentMarks key={doc.id} documentId={doc.id} terminal={terminal} disabled={busy || doc.locked || doc.status === 'processing' || added > 0 || removed > 0} />}
         {doc && <span className={`badge ${doc.status === 'accepted' ? 'badge--ok' : 'badge--warn'}`}>{doc.status === 'accepted' ? 'Сохранено' : doc.status === 'processing' ? 'Сохраняется' : 'Исправление'}</span>}
       </div>
-      <span className="acc-header__doc">{doc ? `Отгрузка ${doc.name}` : 'Выберите отправленную отгрузку'}</span>
+      <span className="acc-header__doc">{doc ? `Отгрузка ${doc.name}` : !id && 'Выберите отправленную отгрузку'}</span>
     </header>
     <div className="correction-workspace__info hint">Исправление меняет только марки. Товары, количества и цены сохраняются. Отправленный УПД через ЭДО этим действием не исправляется.</div>
     {(error || doc?.error_message) && <div role="alert" className="alert alert--error correction-workspace__message">{error || doc?.error_message}</div>}
@@ -133,10 +143,10 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
     </section> : !doc ? <section className="correction-picker">
       <p>{detail.error ? 'Не удалось открыть исправление.' : 'Загружаем состав отгрузки…'}</p>
       <button className="button" onClick={() => void detail.refetch()}>Повторить</button>{' '}
-      <button className="button" onClick={forget}>К списку исправлений</button>
+      {!initialRevisionId && <button className="button" onClick={forget}>К списку исправлений</button>}
     </section> : doc.status === 'accepted' ? <section className="correction-picker">
       <p role="status" className="alert alert--ok">Исправления сохранены в МойСклад.</p>
-      <button type="button" className="button button--primary" onClick={forget}>Следующее исправление</button>
+      <button type="button" className="button button--primary" onClick={forget}>{initialRevisionId ? backLabel : 'Следующее исправление'}</button>
     </section> : <>
       <div className="acc-body">
         <aside className="acc-left" style={{ width }}>
@@ -168,7 +178,9 @@ export function ShipmentCorrections({ terminal = false, onClose }: { terminal?: 
           {doc.locked && <div className="alert alert--warn">Версия зафиксирована для отправки. При сбое повторите сохранение: выполненные изменения повторно не отправятся.</div>}
           {doc.locked && doc.status === 'draft' && <button type="button" className="button" disabled={busy} onClick={() => void run(async () => {
             const { data } = await api.rebase(id)
-            setId(data.id); localStorage.setItem(storageKey, data.id); setPreview(null); setPosition(''); setCode(''); setReplacement(null)
+            setId(data.id)
+            if (!initialRevisionId) localStorage.setItem(storageKey, data.id)
+            setPreview(null); setPosition(''); setCode(''); setReplacement(null)
             setNotice('Состав обновлён из МС. Просмотрите оставшиеся изменения перед сохранением.')
           })}>Обновить из МС и продолжить исправление</button>}
         </aside>

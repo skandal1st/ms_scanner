@@ -3,6 +3,7 @@ import { PackagingComposition } from '../components/PackagingComposition'
 import type { MixedImportTarget } from '../api/client'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { useMutation } from '@tanstack/react-query'
 import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { isProblemScan } from '../lib/shipmentProblems'
@@ -20,7 +21,7 @@ import { useScanStore, ownerCheckState } from '../store/scanStore'
 import { useLoadDocument, useClearDocumentScans, useIntegration } from '../hooks/useDocuments'
 import { useResizableWidth } from '../hooks/useResizableWidth'
 import { useSendToMoysklad } from '../hooks/useSendToMoysklad'
-import { scansApi, documentsApi } from '../api/client'
+import { scansApi, documentsApi, shipmentCorrectionsApi } from '../api/client'
 import type { Document } from '../api/client'
 import { setOrganizationProfileId } from '../lib/organizationProfile'
 import { useScanUpdates } from '../hooks/useScanUpdates'
@@ -65,7 +66,7 @@ export function ShipmentPage({
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
   // вкладку и порт открытыми всю смену, как это делает 1С.
-  const [pendingDoc, setPendingDoc] = useState<Document | null>(null)
+  const [pendingDocId, setPendingDocId] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -77,7 +78,27 @@ export function ShipmentPage({
   const writeoffRequestId = useRef(0)
   const writeoffBusy = useRef(false)
   useEffect(() => () => { writeoffRequestId.current += 1 }, [])
-  const [correctionsOpen, setCorrectionsOpen] = useState(false)
+  const [corrections, setCorrections] = useState<{ revisionId?: string } | null>(null)
+  const openCorrection = useMutation({
+    mutationFn: (sourceId: string) => shipmentCorrectionsApi().open(sourceId),
+  })
+  const handleOpenCorrection = () => {
+    if (!document) {
+      setCorrections({})
+      return
+    }
+    const sourceId = document.id
+    openCorrection.mutate(sourceId, {
+      onSuccess: ({ data }) => {
+        if (useScanStore.getState().document?.id === sourceId) setCorrections({ revisionId: data.id })
+      },
+      onError: error => {
+        if (useScanStore.getState().document?.id !== sourceId) return
+        const detail = (error as { response?: { data?: { detail?: string } } }).response?.data?.detail
+        modal.alert(detail || 'Не удалось открыть исправление отгрузки. Повторите попытку.', { variant: 'error' })
+      },
+    })
+  }
   const [updOpen, setUpdOpen] = useState(false)
   useEffect(() => { setUpdOpen(false) }, [document?.id])
   const collectionReady = Boolean(document && (!document.moysklad_id || document.collection_started))
@@ -191,12 +212,12 @@ export function ShipmentPage({
     { min: 300, max: 900 },
   )
 
-  useLoadDocument(pendingDoc?.id ?? null)
+  useLoadDocument(pendingDocId)
 
   // Попап МС: документ приходит извне — выбираем его сразу, без DocumentSelector.
   useEffect(() => {
     if (embedded && presetDocument) {
-      setPendingDoc(presetDocument)
+      setPendingDocId(presetDocument.id)
       setDocument(presetDocument)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,7 +226,7 @@ export function ShipmentPage({
   // Внешняя вкладка COM-сканирования, открытая из кнопки МС: ?doc=<id> — сразу
   // выбираем этот документ (DocumentSelector остаётся для перехода к следующему,
   // не переоткрывая вкладку/порт). Один раз на монтировании.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   useEffect(() => {
     if (embedded) return
     const docId = searchParams.get('doc')
@@ -238,10 +259,10 @@ export function ShipmentPage({
     if (openingRef.current) return
     openingRef.current = true
     setOpening(true)
-    setPendingDoc(null)
+    setPendingDocId(null)
     reset()
     try {
-      setPendingDoc(doc)
+      setPendingDocId(doc.id)
       setDocument(doc)
       if (doc.kind === 'demand') reachGoal('shipment_selected')
     } catch (error) {
@@ -274,7 +295,7 @@ export function ShipmentPage({
   // Отвязаться от текущей отгрузки → вернуться к выбору (без F5). Сканы остаются в БД.
   const handleDetach = () => {
     reset()
-    setPendingDoc(null)
+    setPendingDocId(null)
     setShowConfirm(false)
     setShowClearConfirm(false)
   }
@@ -327,7 +348,18 @@ export function ShipmentPage({
     document?.status === 'accepted' ? 'Завершено' :
     document?.status === 'processing' ? 'Обрабатывается' : collectionReady ? 'В процессе' : 'Не начата'
 
-  if (correctionsOpen) return <ShipmentCorrections onClose={() => setCorrectionsOpen(false)} />
+  if (corrections) return <ShipmentCorrections initialRevisionId={corrections.revisionId} onClose={savedId => {
+    if (savedId && corrections.revisionId) {
+      reset()
+      setPendingDocId(savedId)
+      if (searchParams.has('doc')) {
+        const params = new URLSearchParams(searchParams)
+        params.set('doc', savedId)
+        setSearchParams(params, { replace: true })
+      }
+    }
+    setCorrections(null)
+  }} />
   return (
     <div className="acc-page" style={terminalMode ? {height:'100%'} : undefined}>
       <header className="acc-header">
@@ -346,7 +378,7 @@ export function ShipmentPage({
             <div className="shipment-actions__list" onClick={event => {
               if ((event.target as Element).closest('button')) event.currentTarget.closest('details')?.removeAttribute('open')
             }}>
-              {!embedded && <button className="button" onClick={() => setCorrectionsOpen(true)}>Исправить отгрузку</button>}
+              {!embedded && <button className="button" disabled={opening || openCorrection.isPending || sending} onClick={handleOpenCorrection}>Исправить отгрузку</button>}
               {document && <>
                 {collectionReady && document.status === 'draft' && !terminalMode &&
                   <button className="button" onClick={() => setBulkOpen(true)}>Загрузить список марок</button>}
