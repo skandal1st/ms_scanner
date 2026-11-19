@@ -1562,7 +1562,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             else:
                 cz_groups = await _get_cz_product_groups(db, user_id, document_id)
                 cz = ChestnyZnakService(
-                    token=cz_token, mock=False, product_groups=cz_groups
+                    token=cz_token, mock=False, product_groups=cz_groups, retry_composition_timeouts=True
                 )
                 for s in boxes_to_expand:
                     try:

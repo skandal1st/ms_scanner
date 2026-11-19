@@ -641,8 +641,11 @@ class ChestnyZnakService:
         token: Optional[str] = None,
         mock: Optional[bool] = None,
         product_groups: Optional[list[str]] = None,
+        *,
+        retry_composition_timeouts: bool = False,
     ):
         self.token = token
+        self._composition_retry_delays = (2, 5) if retry_composition_timeouts else ()
         # Read-only observations for the document packaging viewer.
         self.aggregate_trees: dict = {}
         self.aggregate_kinds: dict = {}
@@ -762,6 +765,37 @@ class ChestnyZnakService:
         except httpx.HTTPStatusError as e:
             raise CZApiError(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
 
+    async def _read_composition(
+        self, url: str, pg: str, cis: str, original_code: str, headers: dict[str, str], timeout: float,
+    ) -> tuple[int | None, Any]:
+        """Read one package in one product group. Retry only this lookup on timeout."""
+        from app.core.diagnostics import response_body
+        from app.services.cz_logger import log_cz_request
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            for attempt, delay in enumerate((0, *self._composition_retry_delays), start=1):
+                if delay:
+                    logger.warning("cz.composition.retry_timeout", pg=pg, code=original_code,
+                                   attempt=attempt, delay_seconds=delay)
+                    await asyncio.sleep(delay)
+                start = time.monotonic()
+                status, body, error = None, None, None
+                try:
+                    resp = await client.post(url, params={"pg": pg}, headers=headers, json=[cis])
+                    status, body = resp.status_code, response_body(resp)
+                    timed_out = status in (408, 504)
+                except httpx.HTTPError as exc:
+                    error = type(exc).__name__
+                    timed_out = isinstance(exc, httpx.TimeoutException)
+                await log_cz_request(
+                    method="POST", url=f"{url}?pg={pg}", request_body=[cis],
+                    response_status=status, response_body=body, error=error,
+                    duration_ms=int((time.monotonic() - start) * 1000), original_code=original_code,
+                )
+                if not timed_out:
+                    break
+        return status, body
+
     async def unpack_box(
         self, sscc: str, plan_gtins: Optional[list[str]] = None
     ) -> list[str]:
@@ -805,8 +839,6 @@ class ChestnyZnakService:
                 "Нет действующего токена Честного Знака для раскрытия короба (войдите по УКЭП)."
             )
 
-        from app.services.cz_logger import log_cz_request
-
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -814,31 +846,8 @@ class ChestnyZnakService:
             "Content-Type": "application/json",
         }
         for pg in self.product_groups:
-            start = time.time()
-            try:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.post(
-                        agg_url, params={"pg": pg}, headers=headers, json=[sscc]
-                    )
-                    from app.core.diagnostics import response_body
-                    body = response_body(resp)
-                    await log_cz_request(
-                        method="POST",
-                        url=f"{agg_url}?pg={pg}",
-                        request_body=[sscc],
-                        response_status=resp.status_code,
-                        response_body=body,
-                        duration_ms=int((time.time() - start) * 1000),
-                        original_code=sscc,
-                    )
-            except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                logger.warning("cz.unpack_box.http_error", pg=pg, error=str(exc))
-                from app.core.diagnostics import capture_request
-                capture_request('chestnyznak', 'POST', f'{agg_url}?pg={pg}', [sscc],
-                                error=type(exc).__name__, original_code=sscc)
-                continue
-
-            if resp.status_code != 200 or not isinstance(body, dict):
+            status, body = await self._read_composition(agg_url, pg, sscc, sscc, headers, timeout=15)
+            if status != 200 or not isinstance(body, dict):
                 continue
             children = _flatten_aggregate_leaves(body.get(sscc)) if body.get(sscc) else []
             if children:
@@ -941,7 +950,6 @@ class ChestnyZnakService:
         if self.mock or not self.token:
             return None
 
-        from app.services.cz_logger import log_cz_request
         from app.services.cz_pg_cache import get_cached_pg, set_cached_pg
 
         # Голый табачный код (<GTIN><серийник> без 01/21) достраиваем до КИ, иначе
@@ -950,7 +958,6 @@ class ChestnyZnakService:
         cis = logistic or _normalize_bare_gtin_serial_to_gs1_element_string(strip_ai_brackets(code))
         info_url = f"{self.base_url}/api/v3/true-api/cises/info"
         agg_url = f"{self.base_url}/api/v3/true-api/cises/aggregated/list"
-        from app.core.diagnostics import response_body, capture_request
         headers = {
             "Authorization": f"Bearer {self.token}",
             "accept": "application/json",
@@ -961,29 +968,8 @@ class ChestnyZnakService:
         cached_pg = await get_cached_pg(gtin_key)
         for pg in self._ordered_groups(cached_pg):
             cis = cis_for_cz_info(code, pg)
-            start = time.time()
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
-                    resp = await client.post(
-                        info_url, params={"pg": pg}, headers=headers, json=[cis]
-                    )
-                    body = response_body(resp)
-                    await log_cz_request(
-                        method="POST",
-                        url=f"{info_url}?pg={pg}",
-                        request_body=[cis],
-                        response_status=resp.status_code,
-                        response_body=body,
-                        duration_ms=int((time.time() - start) * 1000),
-                        original_code=code,
-                    )
-            except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                capture_request('chestnyznak', 'POST', f'{info_url}?pg={pg}', [cis],
-                                error=type(exc).__name__, original_code=code)
-                logger.warning("cz.code_info.http_error", pg=pg, error=str(exc))
-                continue
-
-            if resp.status_code != 200 or not isinstance(body, list) or not body:
+            status, body = await self._read_composition(info_url, pg, cis, code, headers, timeout=10)
+            if status != 200 or not isinstance(body, list) or not body:
                 continue
             entry = body[0] if isinstance(body[0], dict) else {}
             if entry.get("errorCode"):
@@ -994,28 +980,10 @@ class ChestnyZnakService:
             # Для агрегата (есть вложения) забираем ВСЕ листовые КМ рекурсивно.
             children: list[str] = []
             if first_layer or (ci.get("generalPackageType") or ci.get("packageType")) in {"GROUP", "LEVEL1", "BOX", "LEVEL2"}:
-                try:
-                    async with httpx.AsyncClient(timeout=15) as client:
-                        ar = await client.post(
-                            agg_url, params={"pg": pg}, headers=headers, json=[cis]
-                        )
-                        abody = response_body(ar)
-                        await log_cz_request(
-                            method="POST",
-                            url=f"{agg_url}?pg={pg}",
-                            request_body=[cis],
-                            response_status=ar.status_code,
-                            response_body=abody,
-                            duration_ms=0,
-                            original_code=code,
-                        )
-                    if isinstance(abody, dict) and abody.get(cis):
-                        children = _flatten_aggregate_leaves(abody[cis])
-                        self.aggregate_trees[code] = {"code": code, "kind": ci.get("generalPackageType") or ci.get("packageType"), "raw": abody[cis]}
-                except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                    logger.warning("cz.aggregated_list.http_error", pg=pg, error=str(exc))
-                    capture_request('chestnyznak', 'POST', f'{agg_url}?pg={pg}', [cis],
-                                    error=type(exc).__name__, original_code=code)
+                status, abody = await self._read_composition(agg_url, pg, cis, code, headers, timeout=15)
+                if status == 200 and isinstance(abody, dict) and abody.get(cis):
+                    children = _flatten_aggregate_leaves(abody[cis])
+                    self.aggregate_trees[code] = {"code": code, "kind": ci.get("generalPackageType") or ci.get("packageType"), "raw": abody[cis]}
                 # A box's first layer may contain blocks, not individual marks.
                 # Never replace a complete composition with that partial layer.
 

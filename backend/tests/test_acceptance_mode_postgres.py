@@ -1,12 +1,14 @@
 import os
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -90,6 +92,70 @@ async def test_no_cz_receipt_keeps_all_raw_marks_and_sends_only_goods_to_ms(monk
             found = await scans.search_scans_by_code(RAW, await db.get(User, user_id), db)
             assert len(found.scans) == 1
             assert found.scans[0].accepted_without_cz and found.scans[0].document_status == DocumentStatus.accepted
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize('outcome,attempts,accepted', [
+    ('connect_then_ok', 2, True), ('gateway_then_ok', 2, True),
+    ('persistent_timeout', 3, False), ('not_found', 1, False),
+])
+async def test_receipt_retries_only_timed_out_box(monkeypatch, outcome, attempts, accepted):
+    from app.core import security
+    from app.db import session
+    from app.services import cz_logger
+
+    engine, factory, user_id, _, doc_id = await seed(enabled=True)
+    box = '00046402759700411525'
+    other_box = '00046402759700334510'
+    contents = {box: ['010466032120585821UNIT001'], other_box: ['010466032120585821UNIT002']}
+    requests = []
+
+    def lookup(request):
+        assert request.url.path.endswith('/cises/aggregated/list') and request.url.params['pg'] == 'otp'
+        code, = json.loads(request.content)
+        requests.append(code)
+        if code == box:
+            if outcome == 'persistent_timeout' or (outcome == 'connect_then_ok' and requests.count(box) == 1):
+                raise httpx.ConnectTimeout('ЧЗ не отвечает', request=request)
+            if outcome == 'gateway_then_ok' and requests.count(box) == 1:
+                return httpx.Response(504)
+            if outcome == 'not_found':
+                return httpx.Response(404)
+        return httpx.Response(200, json={code: contents[code]})
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: client(transport=httpx.MockTransport(lookup), **kwargs))
+    monkeypatch.setattr(settings, 'CZ_MOCK_MODE', False)
+    monkeypatch.setattr(session, 'AsyncSessionLocal', factory)
+    monkeypatch.setattr(tasks, '_get_cz_token', AsyncMock(return_value='test'))
+    monkeypatch.setattr(tasks, '_get_cz_product_groups', AsyncMock(return_value=['otp']))
+    monkeypatch.setattr(cz_logger, 'log_cz_request', AsyncMock())
+    monkeypatch.setattr(tasks, 'monitoring_emit', AsyncMock())
+    monkeypatch.setattr(document_guard, 'processing_lock', lock)
+    monkeypatch.setattr(security, 'decrypt_token', lambda _: 'test')
+    update = AsyncMock(return_value={})
+    monkeypatch.setattr(moysklad, 'MoySkladService', lambda _: NS(update_document=update))
+    try:
+        async with factory() as db:
+            await db.execute(delete(Scan).where(Scan.document_id == doc_id))
+            doc = await db.get(Document, doc_id)
+            doc.status = DocumentStatus.processing
+            doc.plan = [{'product_id': 'p', 'expected_qty': 2}]
+            db.add_all([Scan(document_id=doc_id, code=code, status=ScanStatus.valid,
+                             is_box=True, moysklad_product_id='p') for code in contents])
+            await db.commit()
+        await tasks._process_document_unlocked_async(str(doc_id), str(user_id))
+        assert requests.count(box) == attempts and requests.count(other_box) == 1
+        async with factory() as db:
+            doc = await db.get(Document, doc_id)
+            assert doc.status == (DocumentStatus.accepted if accepted else DocumentStatus.draft)
+            if accepted:
+                update.assert_awaited_once()
+                assert sorted(row['code'] for row in update.await_args.args[2]) == sorted(contents[box] + contents[other_box])
+            else:
+                update.assert_not_awaited()
+                assert 'Не получен полный состав' in doc.error_message
     finally:
         await engine.dispose()
 
