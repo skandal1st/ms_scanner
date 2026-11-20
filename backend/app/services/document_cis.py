@@ -13,13 +13,13 @@ def needs_cis_confirmation(code: str) -> bool:
     return bool(re.fullmatch(r"[0-9]{14}[!-~]{7}AAAA", code))
 
 
-async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None) -> list[dict]:
+async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None, approved_applied=()) -> list[dict]:
     """Use only the matching UNIT CIS returned by CZ; preserve original rows.
 
     AAAA can also belong to a legitimate serial. Never trim it without an
     official response. requestedCis binds each answer to its original input.
     Supply imports may record APPLIED marks in MS; this does not introduce them
-    into circulation in CZ. Outbound documents still require INTRODUCED.
+    into circulation in CZ. A demand can include a specifically approved APPLIED unit.
     """
     pending = dict.fromkeys(
         row['code'] for row in rows
@@ -32,7 +32,6 @@ async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None)
         raise ValueError('Для подтверждения кодов с хвостом AAAA войдите в Честный Знак по УКЭП и повторите отправку.')
 
     resolved = {}
-    allowed_statuses = {'INTRODUCED', 'APPLIED'} if kind == 'supply' else {'INTRODUCED'}
     url = f'{cz.base_url}/api/v3/true-api/cises/info'
     headers = {'Authorization': f'Bearer {cz.token}'}
     async with httpx.AsyncClient(timeout=15) as client:
@@ -73,8 +72,9 @@ async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None)
                     if original in duplicates or entry.get('errorCode') or ci.get('errorCode'):
                         continue
                     canonical = ci.get('cis')
+                    applied_allowed = kind == 'supply' or (kind == 'demand' and original in approved_applied)
                     if (canonical != original[:21]
-                            or ci.get('status') not in allowed_statuses
+                            or not (ci.get('status') == 'INTRODUCED' or (ci.get('status') == 'APPLIED' and applied_allowed))
                             or ci.get('markWithdraw')
                             or ci.get('generalPackageType') != 'UNIT'
                             or ci.get('child')):

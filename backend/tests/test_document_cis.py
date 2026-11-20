@@ -51,6 +51,15 @@ async def test_confirmed_aliases_keep_source_and_order_and_log_request(install):
     assert log.await_args.args[2] == [RAW, OTHER]
 
 
+async def test_applied_demand_permission_covers_only_the_approved_code(install):
+    install(lambda request: httpx.Response(200, json=[
+        answer(raw, status='APPLIED') for raw in json.loads(request.content)]))
+    result = await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind='demand', approved_applied={RAW})
+    assert result == [{'code': RAW[:21]}]
+    with pytest.raises(ValueError, match='не подтвердил'):
+        await document_cis.confirm_document_cis([{'code': RAW}, {'code': OTHER}], cz(), kind='demand', approved_applied={RAW})
+
+
 @pytest.mark.parametrize('change', [
     {'cis': RAW}, {'cis': OTHER[:21]}, {'requestedCis': OTHER},
     {'status': 'WITHDRAWN'}, {'markWithdraw': True},

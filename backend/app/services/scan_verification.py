@@ -46,6 +46,8 @@ def evidence(check, signature_inn=None):
         owner = 'match' if inn == reference else 'mismatch'
         reason = 'Владелец совпадает' if owner == 'match' else 'ИНН владельца не совпадает с ИНН подключённой подписи ЧЗ'
     return {'source': check.verification_source, 'checked_at': datetime.now(timezone.utc).isoformat(),
+            'cz_status': check.status if check.found and not check.uncertain else None,
+            'cz_child_count': check.child_count,
             'owner_result': owner, 'owner_reason': reason, 'owner_reference_inn': reference or None}
 
 

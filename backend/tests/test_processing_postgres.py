@@ -46,6 +46,60 @@ async def test_advisory_lock_is_exclusive_and_released(monkeypatch):
     await engine.dispose()
 
 
+async def test_only_explicitly_included_applied_units_reach_moysklad(monkeypatch):
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.api.scans import IncludeAppliedRequest, include_applied_in_shipment
+    from app.core import security
+    from app.db.models import DocumentKind
+    from app.services import moysklad
+    from app.services.applied_shipment import reserves_mark
+    from app.services.cz_status import cz_status_error
+
+    engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(session, 'engine', engine)
+    monkeypatch.setattr(session, 'AsyncSessionLocal', factory)
+    ms = SimpleNamespace(get_document=AsyncMock(return_value={}), update_document=AsyncMock(return_value={}))
+    monkeypatch.setattr(documents, '_get_ms_service', AsyncMock(return_value=ms))
+    monkeypatch.setattr(security, 'decrypt_token', lambda token: 'dummy')
+    monkeypatch.setattr(moysklad, 'MoySkladService', lambda token: ms)
+    queued = []
+    monkeypatch.setattr(tasks.process_document_task, 'delay', lambda *args: queued.append(args))
+    user, doc = await seed(factory)
+    try:
+        async with factory() as db:
+            saved = await db.get(Document, doc.id)
+            saved.kind = DocumentKind.demand
+            await db.delete((await db.scalars(select(Scan).where(Scan.document_id == doc.id))).one())
+            now = datetime.now(timezone.utc)
+            marks = [Scan(document_id=doc.id, code=f'010464027597268621ABCD{i:03d}',
+                          status=ScanStatus.invalid, package_type='UNIT', verified_at=now,
+                          moysklad_product_id='p1', error_message=cz_status_error(status),
+                          verification={'source': 'cz_info', 'checked_at': now.isoformat(), 'cz_status': status})
+                     for i, status in enumerate(['APPLIED', 'APPLIED', 'RETIRED'])]
+            db.add_all(marks)
+            await db.commit()
+            with pytest.raises(HTTPException, match='Нет проверенных марок'):
+                await documents.process_document(doc.id, user, db)
+            queued_before = len(queued)
+            request = IncludeAppliedRequest(scan_ids={marks[0].id})
+            approved, = await include_applied_in_shipment(doc.id, request, user, db)
+            assert approved.status == ScanStatus.ms_approved
+            assert len(queued) == queued_before == 0
+            await documents.process_document(doc.id, user, db)
+            assert len(queued) == 1
+        await tasks._process_document_async(*queued[0])
+        assert [row['code'] for row in ms.update_document.await_args.args[2]] == [marks[0].code]
+        async with factory() as db:
+            assert (await db.get(Document, doc.id)).status == DocumentStatus.accepted
+            reserved = (await db.scalars(select(Scan.id).join(Document).where(
+                Scan.document_id == doc.id, reserves_mark()))).all()
+            assert reserved == [marks[0].id]
+    finally:
+        await engine.dispose()
+
+
 async def test_concurrent_process_only_enqueues_once(monkeypatch):
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -147,11 +201,12 @@ async def test_worker_confirms_upd_cis_before_any_ms_write_and_preserves_raw(mon
             scan.moysklad_product_id = 'p1'
             await db.commit()
         update = AsyncMock(return_value={})
-        async def confirm(rows, cz, *, kind=None):
+        async def confirm(rows, cz, *, kind=None, approved_applied=()):
             update.assert_not_awaited()
             assert rows[0]['code'] == raw
             assert cz.token == 'fake-cz'
             assert kind == 'supply'
+            assert not approved_applied
             if not confirmed:
                 raise ValueError('Честный Знак не подтвердил КИ')
             return [{**row, 'code': raw[:21]} for row in rows]

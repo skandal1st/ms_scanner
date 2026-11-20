@@ -9,6 +9,7 @@ from app.db.session import AsyncSessionLocal
 from app.services.chestnyznak import ChestnyZnakService, extract_gtin, normalize_gtin_key
 from app.services.plan_matching import plan_gtin_keys, unique_plan_product
 from app.services.scan_events import publish_scan
+from app.services.applied_shipment import reserves_mark
 
 
 async def discover_sscc(scan_id, user_id):
@@ -75,8 +76,7 @@ async def discover_sscc(scan_id, user_id):
                 Document.upd_meta['superseded_by_document_id'].astext.is_(None),
                 Scan.id != scan.id,
                 or_(Scan.code.in_(children), Scan.child_codes.has_any(array(children))),
-                Scan.status.in_([ScanStatus.valid, ScanStatus.overflow, ScanStatus.pending,
-                                ScanStatus.scanned, ScanStatus.unknown_product]),
+                reserves_mark(),
             ).limit(1))).scalar_one_or_none()
             if conflict:
                 error = 'Марки из короба уже отсканированы в этой или другой сборке. Удалите короб и проверьте повторные марки.'

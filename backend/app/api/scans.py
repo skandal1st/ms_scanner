@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, or_, func
 from sqlalchemy.exc import IntegrityError
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, computed_field, field_serializer
 from redis.exceptions import RedisError
 from app.services.cz_status import localize_cz_error, localize_cz_verification
 from typing import List, Optional, Literal
@@ -36,6 +36,7 @@ from app.services.chestnyznak import (
 from app.services.gtin_cz_group import get_cached_pg
 from app.services.scan_input import decode_base64_mark
 from app.services import serial_diagnostics
+from app.services.applied_shipment import can_include_applied, include_applied, reserves_mark
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -73,6 +74,11 @@ class ScanResponse(BaseModel):
     duplicate: bool = False
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def can_include_in_shipment(self) -> bool:
+        return can_include_applied(self)
 
     @field_serializer('error_message')
     def russian_error(self, value):
@@ -132,6 +138,20 @@ class PatchScanBody(BaseModel):
 
 class PackModeRequest(BaseModel):
     unpack: bool
+
+
+class IncludeAppliedRequest(BaseModel):
+    scan_ids: set[UUID]
+
+
+@router.post('/{document_id}/include-applied', response_model=list[ScanResponse])
+async def include_applied_in_shipment(document_id: UUID, body: IncludeAppliedRequest,
+                                      current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    doc = await editable_document(db, document_id, current_user.id)
+    require_collection_started(doc)
+    scans = await include_applied(db, doc, body.scan_ids)
+    await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(doc.id)})
+    return [ScanResponse.model_validate(s) for s in scans]
 
 
 async def set_scan_pack_mode(db, scan, user_id, unpack):
@@ -292,15 +312,7 @@ async def _create_scan_record(
             Document.id != document_id,
             Document.kind == doc_obj.kind,
             Document.upd_meta['superseded_by_document_id'].astext.is_(None),
-            Scan.status.in_(
-                [
-                    ScanStatus.valid,
-                    ScanStatus.overflow,
-                    ScanStatus.pending,
-                    ScanStatus.scanned,
-                    ScanStatus.unknown_product,
-                ]
-            ),
+            reserves_mark(),
         )
         .limit(1)
     )

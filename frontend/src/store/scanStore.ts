@@ -4,6 +4,7 @@ import type { Scan, Document, PlanItem } from '../api/client'
 interface Stats {
   valid: number
   invalid: number
+  ms_approved: number
   duplicate: number
   pending: number
   scanned: number
@@ -14,7 +15,7 @@ interface Stats {
 
 /** Статусы, которые оптимистично считаем «добавленными» в документ до пакетной проверки:
  * valid/overflow — подтверждены ЧЗ, scanned — принят локально, ждёт проверки. */
-const ADDED_STATUSES = ['valid', 'overflow', 'scanned'] as const
+const ADDED_STATUSES = ['valid', 'overflow', 'ms_approved', 'scanned'] as const
 function isAdded(status: string): boolean {
   return (ADDED_STATUSES as readonly string[]).includes(status)
 }
@@ -119,7 +120,7 @@ function calcStats(scans: Scan[]): Stats {
       acc[s.status] = (acc[s.status] || 0) + 1
       return acc
     },
-    { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
+    { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
   )
 }
 
@@ -171,7 +172,7 @@ export function ownerCheckState(
 ): OwnerCheck | null {
   if (scan.is_barcode) return null
   if (!signatureInn) return null
-  if (scan.status !== 'valid' && scan.status !== 'overflow') return null
+  if (!['valid', 'overflow', 'ms_approved'].includes(scan.status)) return null
   const inn = (scan.owner_inn ?? '').trim()
   if (!inn) return 'unknown'
   return inn === signatureInn.trim() ? null : 'mismatch'
@@ -276,7 +277,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       const row = findProgressRowForScan(scan, rows)
       if (!row) continue
       if (isAdded(scan.status)) row.addedTotal += scanUnits(scan)
-      if (scan.status === 'valid') row.scanned += scanUnits(scan)
+      if (scan.status === 'valid' || scan.status === 'ms_approved') row.scanned += scanUnits(scan)
     }
     const total = {
       scanned: rows.reduce((a, r) => a + r.scanned, 0),
@@ -297,7 +298,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
       // до этого GTIN марки часто не совпадает ни с plan.gtin (внутренний код МС), ни с
       // pack_gtins. Клеймить непроверенную марку «отсканирована ошибочно» — вводит в
       // заблуждение. Классифицируем как «не в плане» только уже проверенные коды.
-      if (!['valid', 'overflow', 'pending'].includes(s.status)
+      if (!['valid', 'overflow', 'ms_approved', 'pending'].includes(s.status)
           && !(s.status === 'scanned' && s.moysklad_product_id)) continue
       if (inPlan(s)) continue
       const k = `${s.moysklad_product_id || ''}:${groupKey(s)}`
@@ -330,7 +331,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
     { gtin: string; productNames: string[]; list: Scan[] }
   >()
   for (const s of scans) {
-    if (!['valid', 'overflow', 'pending', 'scanned'].includes(s.status)) continue
+    if (!['valid', 'overflow', 'ms_approved', 'pending', 'scanned'].includes(s.status)) continue
     const k = groupKey(s)
     let g = groups.get(k)
     if (!g) {
@@ -379,7 +380,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
-  stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+  stats: { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
   targetProductId: null,
   selection: null,
   deleteMode: false,
@@ -441,7 +442,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     set({
       document: null,
       scans: [],
-      stats: { valid: 0, invalid: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+      stats: { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
       targetProductId: null,
       selection: null,
       deleteMode: false,

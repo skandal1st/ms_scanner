@@ -9,6 +9,7 @@ from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
 from app.services.cz_status import cz_status_error, localize_cz_error, localize_cz_verification
+from app.services.applied_shipment import SHIPMENT_STATUSES, can_include_applied
 from app.services.chestnyznak import (
     ChestnyZnakService,
     cis_compare_forms_for_ms,
@@ -379,7 +380,7 @@ async def _count_valid_units_for_gtin(db, document_id, scan_key: str, exclude_id
     rows = await db.execute(
         select(Scan.gtin, Scan.box_quantity).where(
             Scan.document_id == document_id,
-            Scan.status == ScanStatus.valid,
+            Scan.status.in_((ScanStatus.valid, ScanStatus.ms_approved)),
             Scan.id != exclude_id,
         )
     )
@@ -922,6 +923,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             withdraw_reason=scan.withdraw_reason,
             child_codes=scan.child_codes,
             verification=getattr(scan, 'verification', None), verified_at=scan.verified_at,
+            can_include_in_shipment=can_include_applied(scan),
         )
 
 
@@ -976,7 +978,7 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
                     return
             baseline_ids = list((correction(doc) or {}).get('baseline_scans', {}))
             filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
-                       Scan.status.in_([ScanStatus.scanned, ScanStatus.valid, ScanStatus.overflow, ScanStatus.invalid, ScanStatus.unknown_product])
+                       Scan.status.in_([ScanStatus.scanned, *SHIPMENT_STATUSES, ScanStatus.invalid, ScanStatus.unknown_product])
                        if recheck_all else Scan.status == ScanStatus.scanned]
             if baseline_ids:
                 filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
@@ -1229,6 +1231,7 @@ async def _push_ws_update(
     box_expanded: Optional[bool] = None,
     verification: Optional[dict] = None,
     verified_at=None,
+    can_include_in_shipment: bool = False,
 ):
     import redis.asyncio as aioredis
     import json
@@ -1257,6 +1260,7 @@ async def _push_ws_update(
         "box_expanded": box_expanded,
         "verification": localize_cz_verification(verification),
         "verified_at": verified_at.isoformat() if verified_at else None,
+        "can_include_in_shipment": can_include_in_shipment,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()
@@ -1486,7 +1490,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             select(Scan).where(
                 Scan.document_id == document_id,
                 or_(
-                    Scan.status.in_([ScanStatus.valid, ScanStatus.overflow]),
+                    Scan.status.in_(SHIPMENT_STATUSES if kind == 'demand' else (ScanStatus.valid, ScanStatus.overflow)),
                     and_(
                         Scan.is_box.is_(True),
                         Scan.status == ScanStatus.unknown_product,
@@ -1731,7 +1735,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 cis_groups = await _get_cz_product_groups(db, user_id, document_id)
                 scans_data = await confirm_document_cis(scans_data, ChestnyZnakService(
                     token=cis_token, mock=False, product_groups=cis_groups,
-                ), kind=kind)
+                ), kind=kind, approved_applied={s.code for s in valid_scans if s.status == ScanStatus.ms_approved})
                 if operation:
                     operation.stage = 'moysklad.write_document'
 

@@ -111,7 +111,8 @@ async def resend_marks(source_id: UUID, access: Scope = Depends(scope), db: Asyn
             if source.status != DocumentStatus.accepted:
                 from app.db.models import ScanStatus
                 scans = (await db.execute(select(Scan).where(Scan.document_id == source.id))).scalars().all()
-                if (not any(s.status in {ScanStatus.valid, ScanStatus.overflow} for s in scans)
+                from app.services.applied_shipment import SHIPMENT_STATUSES
+                if (not any(s.status in SHIPMENT_STATUSES for s in scans)
                         or any(s.status in {ScanStatus.scanned, ScanStatus.pending, ScanStatus.unknown_product} for s in scans)):
                     raise ValueError('Перед повторной отправкой дождитесь проверки марок и сопоставьте неизвестные товары.')
                 job['retry_failed'] = True

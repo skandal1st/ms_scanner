@@ -12,6 +12,7 @@ from app.services.scan_events import publish_scan
 from app.services.chestnyznak import ChestnyZnakService, _gs1_check_digit_ok
 from app.services.scan_packaging_discovery import packaging_metadata
 from app.services.scan_packaging import package_type
+from app.services.applied_shipment import reserves_mark
 from app.services.plan_matching import unique_plan_product
 from app.core.logging import logger
 
@@ -95,8 +96,7 @@ async def run(scan_id, user_id, request_id):
                 Document.user_id == doc.user_id, Document.kind == doc.kind,
                 Document.upd_meta['superseded_by_document_id'].astext.is_(None), Scan.id != scan.id,
                 or_(Scan.code.in_(leaves), Scan.child_codes.has_any(array(leaves))),
-                Scan.status.in_([ScanStatus.valid, ScanStatus.overflow, ScanStatus.pending,
-                    ScanStatus.scanned, ScanStatus.unknown_product]),
+                reserves_mark(),
             ).limit(1))).scalar_one_or_none()
             if conflict:
                 error = 'Состав пересекается с марками в этой или другой сборке. Данные сохранены; проверьте повторы.'

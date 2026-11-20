@@ -11,6 +11,7 @@ from app.services.moysklad import shipment_order_id
 from app.services.shipment_corrections import entity_id
 from app.services.shipment_labels import update_shipment_metadata
 from app.services.scan_events import publish_event
+from app.services.applied_shipment import SHIPMENT_STATUSES
 
 
 def index_plan(plan):
@@ -41,7 +42,7 @@ def changes(before, after):
 def reclassify(plan, scans):
     indexed, used = index_plan(plan), defaultdict(int)
     for s in sorted(scans, key=lambda item: (item.scanned_at, str(item.id))):
-        if s.status not in {ScanStatus.valid, ScanStatus.overflow}:
+        if s.status not in SHIPMENT_STATUSES:
             continue
         product = s.moysklad_product_id
         if not product:
@@ -52,6 +53,8 @@ def reclassify(plan, scans):
         if row:
             used[product] += int(s.box_quantity or 1)
             overflow = used[product] > row['expected_qty']
+        if s.status == ScanStatus.ms_approved:
+            continue
         s.status = ScanStatus.overflow if overflow else ScanStatus.valid
         if overflow:
             s.error_message = f"Сверх плана: ожидалось {row['expected_qty']}, отсканировано {used[product]}"

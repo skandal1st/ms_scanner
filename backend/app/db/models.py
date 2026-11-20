@@ -45,6 +45,7 @@ class ScanStatus(str, PyEnum):
     scanned = "scanned"  # формат GS1 локально валиден, но КМ ещё не проверена в ЧЗ (пакетная проверка по кнопке)
     valid = "valid"
     invalid = "invalid"
+    ms_approved = "ms_approved"  # Марка APPLIED явно включена в отгрузку МС
     duplicate = "duplicate"
     overflow = "overflow"  # сверх плана: визуально красный, но идёт в отгрузку
     unknown_product = "unknown_product"  # КМ валидна, но GTIN не найден ни в плане, ни в каталоге МС — нужно ручное сопоставление

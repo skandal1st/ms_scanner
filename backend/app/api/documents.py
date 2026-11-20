@@ -16,6 +16,7 @@ from app.services.customer_order_filters import resolve_order_filter
 from app.core.security import decrypt_token
 from app.services.collection_start import collection_started, require_collection_started
 from app.services.collection_time import CollectionStartRequest
+from app.services.applied_shipment import SHIPMENT_STATUSES
 from app.services.shipment_labels import update_shipment_metadata, shipment_display_name
 from app.services.shipment_sessions import shipment_session_query, visible_documents
 from app.schemas.upd_export import UpdExportOptions
@@ -964,7 +965,7 @@ async def verify_document(
     from app.services.shipment_corrections import correction
     baseline_ids = list((correction(doc) or {}).get('baseline_scans', {}))
     filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
-               Scan.status.in_([ScanStatus.scanned, ScanStatus.valid, ScanStatus.overflow, ScanStatus.invalid, ScanStatus.unknown_product])
+               Scan.status.in_([ScanStatus.scanned, *SHIPMENT_STATUSES, ScanStatus.invalid, ScanStatus.unknown_product])
                if recheck_all else Scan.status == ScanStatus.scanned]
     if baseline_ids:
         filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
@@ -1084,7 +1085,8 @@ async def process_document(
 
     from app.worker.tasks import process_document_task
     count = (await db.execute(select(func.count(Scan.id)).where(
-        Scan.document_id == document_id, Scan.status.in_([ScanStatus.valid, ScanStatus.overflow])
+        Scan.document_id == document_id,
+        Scan.status.in_(SHIPMENT_STATUSES if doc.kind == DocumentKind.demand else (ScanStatus.valid, ScanStatus.overflow))
     ))).scalar_one()
     from app.services.supply_positions import prepare_supply_rows
     quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz) if doc.kind == DocumentKind.supply else []

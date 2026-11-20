@@ -5,6 +5,7 @@ export function StatsPanel() {
   const total =
     stats.valid +
     stats.invalid +
+    stats.ms_approved +
     stats.duplicate +
     stats.pending +
     stats.scanned +
@@ -17,6 +18,7 @@ export function StatsPanel() {
       <Row label="Всего" value={total} />
       {stats.scanned > 0 && <Row label="Ждут проверки" value={stats.scanned} variant="warn" />}
       {stats.valid > 0 && <Row label="Проверено" value={stats.valid} variant="ok" />}
+      {stats.ms_approved > 0 && <Row label="Включено до ввода в оборот" value={stats.ms_approved} variant="warn" />}
       {stats.overflow > 0 && <Row label="Сверх плана" value={stats.overflow} variant="error" />}
       {stats.unknown_product > 0 && (
         <Row label="Без товара" value={stats.unknown_product} variant="warn" />

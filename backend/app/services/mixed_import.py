@@ -13,6 +13,7 @@ from app.services.chestnyznak import (
     ChestnyZnakService, extract_gtin, is_sscc, normalize_sscc, verify_code_local_gs1,
 )
 from app.services.mark_search import mark_key
+from app.services.applied_shipment import reserves_mark
 from app.services.scan_input import decode_base64_mark
 from app.services.scan_packaging import package_type, scan_package_type
 
@@ -265,8 +266,7 @@ async def conflicts_elsewhere(db, doc, wanted, *, include_children=False):
     statement = select(Scan.code, Document.name).join(Document).where(
         Document.user_id == doc.user_id, Document.id != doc.id, Document.kind == doc.kind,
         Document.upd_meta['superseded_by_document_id'].astext.is_(None),
-        Scan.status.in_([ScanStatus.valid, ScanStatus.overflow, ScanStatus.pending,
-                        ScanStatus.scanned, ScanStatus.unknown_product]))
+        reserves_mark())
     if (doc.upd_meta or {}).get('shipment_correction'):
         statement = statement.where(or_(Document.moysklad_id.is_(None), Document.moysklad_id != doc.moysklad_id))
     result = {}

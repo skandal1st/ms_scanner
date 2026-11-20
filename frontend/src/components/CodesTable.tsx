@@ -14,12 +14,14 @@ import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from
 import { isProblemScan, numberedScans } from '../lib/shipmentProblems'
 import { useMarksPanelVisible } from './FlowWorkspaceTabs'
 import { PackagingRecheck } from './PackagingRecheck'
+import { IncludeAppliedMarks } from './IncludeAppliedMarks'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
   scanned:           { label: 'Отсканирован',      cls: 'badge--pending' },
   valid:             { label: 'Валиден',           cls: 'badge--ok' },
   invalid:           { label: 'Ошибка',            cls: 'badge--error' },
+  ms_approved:       { label: 'Включена до ввода в оборот', cls: 'badge--warn' },
   duplicate:         { label: 'Дубль',             cls: 'badge--warn' },
   overflow:          { label: 'Сверх плана',       cls: 'badge--error' },
   unknown_product:   { label: 'Нет товара',        cls: 'badge--warn' },
@@ -304,6 +306,8 @@ function ScanRow({
       {isExpanded && (
         <tr>
           <td colSpan={number !== undefined ? 5 : 4} className="scans-expanded">
+            {document?.kind === 'demand' && document.status === 'draft' && scan.status === 'invalid' && scan.can_include_in_shipment &&
+              <IncludeAppliedMarks documentId={document.id} scanIds={[scan.id]} single />}
             <PackagingRecheck key={scan.id} scan={scan} disabled={document?.status !== 'draft'}
               onQueued={data => {
                 const current = useScanStore.getState().scans.find(item => item.id === scan.id)

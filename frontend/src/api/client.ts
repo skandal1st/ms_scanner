@@ -592,12 +592,14 @@ export type ScanStatus =
   | 'scanned'
   | 'valid'
   | 'invalid'
+  | 'ms_approved'
   | 'duplicate'
   | 'overflow'
   | 'unknown_product'
   | 'used_in_other_doc'
 
 export interface Scan {
+  can_include_in_shipment?: boolean
   id: string
   document_id: string
   code: string
@@ -763,6 +765,8 @@ export interface MixedImportJob {
 }
 
 export const scansApi = {
+  includeApplied: (documentId: string, scanIds: string[]) =>
+    api.post<Scan[]>(`/scans/${documentId}/include-applied`, { scan_ids: scanIds }),
   composition: (document_id: string) => api.get<PackagingCompositionData>(`/scans/composition/${document_id}`),
   refreshComposition: (document_id: string, code?: string) => api.post(`/scans/composition/${document_id}`, { code }),
   serialAttempts: (documentId: string, code: string) =>

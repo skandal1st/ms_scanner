@@ -8,6 +8,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { isProblemScan } from '../lib/shipmentProblems'
 import { StatsPanel } from '../components/StatsPanel'
+import { IncludeAppliedMarks } from '../components/IncludeAppliedMarks'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { CustomerOrderPicker } from '../components/CustomerOrderPicker'
 import { ProgressTable } from '../components/ProgressTable'
@@ -64,6 +65,8 @@ export function ShipmentPage({
     ? `${progress.total.addedTotal}/${progress.total.expected}`
     : progress.total.addedTotal
   const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
+  const appliedIds = scans.filter(scan => scan.status === 'invalid' && scan.can_include_in_shipment).map(scan => scan.id)
+  const shipmentUnits = progress.total.addedTotal + progress.offPlanRows.reduce((sum, row) => sum + row.addedTotal, 0)
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
   // вкладку и порт открытыми всю смену, как это делает 1С.
@@ -183,6 +186,7 @@ export function ShipmentPage({
   )
   // Марки, выведенные из оборота / заблокированные (ЧЗ) — предупреждаем, но не блокируем.
   const withdrawnCount = scans.reduce((n, s) => (s.withdrawn ? n + 1 : n), 0)
+  const withdrawnToSend = scans.filter(s => s.withdrawn && ['valid', 'overflow'].includes(s.status)).length
   const [exporting, setExporting] = useState(false)
 
   const handleExportXlsx = async () => {
@@ -592,6 +596,8 @@ export function ShipmentPage({
             Повторно проверить все марки в ЧЗ
           </button>
         )}
+        {document.kind === 'demand' && document.status === 'draft' && appliedIds.length > 0 &&
+          <IncludeAppliedMarks documentId={document.id} scanIds={appliedIds} disabled={sending || bulkBusy || verifying} />}
         {waitingForCheck || stats.scanned > 0 ? (
           <button type="button" className="button button--success"
             disabled={document.status !== 'draft' || sending || bulkBusy || waitingForCheck}
@@ -606,7 +612,7 @@ export function ShipmentPage({
         ) : <button
           type="button"
           className="button button--success"
-          disabled={sending || bulkBusy || document.status !== 'draft' || progress.total.addedTotal === 0}
+          disabled={sending || bulkBusy || document.status !== 'draft' || shipmentUnits === 0}
           onClick={() => setShowConfirm(true)}
         >
           {sending
@@ -697,18 +703,18 @@ export function ShipmentPage({
                   </span>
                 </div>
               </div>
-              {withdrawnCount > 0 && (
+              {stats.ms_approved > 0 && <p className="alert alert--warn">
+                В отгрузку включены марки до ввода в оборот ({stats.ms_approved}).
+              </p>}
+              {withdrawnToSend > 0 && (
                 <div className="alert alert--error" style={{ marginTop: 10, fontWeight: 600 }}>
-                  Внимание: {withdrawnCount}{' '}
-                  {withdrawnCount === 1 ? 'марка выведена' : 'марок выведены'} из оборота
-                  (заблокированы). Всё равно отгрузить?
+                  В отгрузку попадают марки, выведенные из оборота ({withdrawnToSend}). Всё равно отгрузить?
                 </div>
               )}
               {(hasErrors || stats.overflow > 0) && (
                 <p className="hint">
-                  В отгрузку попадут валидные ({stats.valid})
-                  {stats.overflow > 0 ? ` + сверх плана (${stats.overflow})` : ''}.
-                  Ошибки и дубли пропускаются.
+                  {stats.overflow > 0 && `Сверх плана будут переданы марки (${stats.overflow}). `}
+                  {hasErrors && 'Ошибочные сканы и дубли будут пропущены.'}
                 </p>
               )}
               {progress.hasPlan && progress.total.scanned < progress.total.expected && (
@@ -733,9 +739,9 @@ export function ShipmentPage({
                 type="button"
                 className="button button--success"
                 onClick={handleProcess}
-                disabled={progress.total.addedTotal === 0}
+                disabled={shipmentUnits === 0}
               >
-                Отгрузить {progress.total.addedTotal}
+                Отгрузить {shipmentUnits}
                 {stats.overflow > 0 ? ` (вкл. ${stats.overflow} сверх)` : ''}
               </button>
             </div>
