@@ -2,10 +2,14 @@ from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
-from app.services.supply_positions import prepare_supply_rows
-from app.api import products
+from app.services.supply_positions import prepare_supply_rows, prepare_supply_without_cz
+from app.api import acceptance, products
+from app.core.config import settings
+from app.services.moysklad import MoySkladService
+from app.worker.tasks import _build_moysklad_scans_data
 
 
 def test_accessories_follow_xml_order_without_synthetic_marking_codes():
@@ -56,4 +60,102 @@ async def test_link_accessory_with_numeric_article_without_scans(monkeypatch):
     data.moysklad_product_id = 'other-bowl'
     await products.link_upd_position_to_product(data, user, db)
     assert [p['product_id'] for p in doc.plan] == ['other-bowl']
+
+
+@pytest.mark.parametrize('without_cz', [False, True])
+@pytest.mark.parametrize('existing_prices', [[], [12500], [12500, 10000]])
+async def test_two_upd_prices_survive_import_write_and_retry(monkeypatch, without_cz, existing_prices):
+    gtin = '04660321205858'
+    a, b, c = [f'01{gtin}21{i:07}' for i in (1, 2, 3)]
+    xml = f'''<Файл><ТаблСчФакт>
+      <СведТов НомСтр="1" НаимТов="Товар" КолТов="2" СтТовУчНал="200" НалСт="10%">
+        <НомСредИдентТов><КИЗ>{a}</КИЗ><КИЗ>{b}</КИЗ></НомСредИдентТов></СведТов>
+      <СведТов НомСтр="2" НаимТов="Товар" КолТов="1" СтТовУчНал="125" НалСт="22%">
+        <НомСредИдентТов><КИЗ>{c}</КИЗ></НомСредИдентТов></СведТов>
+      </ТаблСчФакт></Файл>'''
+    doc = NS(id=uuid4(), plan=[], upd_meta={}, organization_profile_id=uuid4())
+    scans = []
+    db = NS(add=scans.append, commit=AsyncMock(), execute=AsyncMock(return_value=NS(all=lambda: [])))
+    monkeypatch.setattr(acceptance, '_maybe_ms_service', AsyncMock(return_value=None))
+    monkeypatch.setattr(acceptance, '_maybe_cz_service', AsyncMock(return_value=None))
+    monkeypatch.setattr(acceptance, '_enrich_unmatched_names_nk', AsyncMock())
+    monkeypatch.setattr(acceptance, '_resolve_product', AsyncMock(return_value=('p', 'Товар')))
+    imported = await acceptance._import_upd_bytes_traced(doc.id, doc, xml.encode(), NS(id=uuid4()), db)
+    assert [(p.price, p.source_codes) for p in imported.positions] == [(100, [a, b]), (125, [c])]
+    if without_cz:
+        rows = prepare_supply_without_cz(doc.plan, doc.upd_meta)
+    else:
+        rows = prepare_supply_rows(_build_moysklad_scans_data(reversed(scans), 'supply', {}), doc.plan, doc.upd_meta)
+
+    monkeypatch.setattr(settings, 'CZ_MOCK_MODE', False)
+    ms = MoySkladService('test')
+    assortment = {'id': 'p', 'meta': {'type': 'product', 'href': f'{ms.base_url}/entity/product/p'}}
+    stored = [dict(id=f'old-{price}', price=price, assortment=assortment, quantity=3,
+                   vat=10 if price == 10000 else 22) for price in existing_prices]
+    marks = {}
+    writes = []
+    async def request(client, method, url, json):
+        if method == 'PUT':
+            stored[:] = [{**p, 'assortment': assortment, 'id': p.get('id', f'new-{i}')}
+                         for i, p in enumerate(json['positions'])]
+            writes.append([(p['id'], p['quantity'], p['price'], p['vat']) for p in stored])
+        else:
+            assert method == 'POST' and url.endswith('/trackingCodes')
+            marks.setdefault(url.split('/')[-2], []).extend(json)
+        return httpx.Response(200, json={}, request=httpx.Request(method, url))
+    ms._request_with_retry = request
+    ms._load_positions_rows = AsyncMock(side_effect=lambda *args: list(reversed(stored)))
+    ms._load_tracking_codes = AsyncMock(side_effect=lambda c, k, d, row_id: marks.get(row_id, []))
+    for _ in range(2):
+        await ms.update_document('supply', 'doc', rows)
+    assert writes[0] == writes[1]
+    assert [r[1:] for r in writes[0]] == [(2, 10000, 10), (1, 12500, 22)]
+    for row_id, _, price, _ in writes[0]:
+        if price in existing_prices:
+            assert row_id == f'old-{price}'
+    if without_cz:
+        assert marks == {}
+    else:
+        for entry, originals in zip(stored, [[a, b], [c]]):
+            assert sorted(ms._cis_dedup_key(t['cis']) for t in marks[entry['id']]) == sorted(
+                ms._cis_dedup_key(code) for code in originals)
+
+
+def test_expanded_box_and_verified_mark_keep_their_xml_line():
+    lines = [{'price': 80, 'vat': 10, 'items': [{'product_id': 'p', 'quantity': 2, 'codes': ['box']}]},
+             {'price': 95, 'vat': 22, 'items': [{'product_id': 'p', 'quantity': 1, 'codes': ['short']}]}]
+    rows = [{'product_id': 'p', 'code': 'full', 'source_code': 'short'},
+            {'product_id': 'p', 'code': 'unit1', 'source_code': 'box'},
+            {'product_id': 'p', 'code': 'unit2', 'source_code': 'box'}]
+    prepared = prepare_supply_rows(rows, [], {'physical_plan': lines})
+    assert [(r['code'], r['price']) for r in prepared] == [('unit1', 80), ('unit2', 80), ('full', 95)]
+
+
+def test_unmarked_lines_with_one_product_keep_fractional_quantities_and_zero_price():
+    lines = [{'price': price, 'items': [{'product_id': 'p', 'quantity': qty, 'codes': []}]}
+             for price, qty in [(315, 2.5), (0, 0.5)]]
+    rows = prepare_supply_rows([], [], {'physical_plan': lines})
+    assert [(r['upd_line'], r['quantity'], r['price']) for r in rows] == [(0, 2.5, 315), (1, 0.5, 0)]
+
+
+def test_old_receipt_with_merged_prices_requires_the_original_xml():
+    meta = {'physical_plan': [{'product_id': 'p', 'expected_qty': 2}, {'product_id': 'p', 'expected_qty': 3}]}
+    with pytest.raises(ValueError, match='Загрузите исходный УПД'):
+        prepare_supply_rows([], [{'product_id': 'p', 'price': 80, 'expected_qty': 5}], meta)
+
+
+async def test_manual_link_of_repeated_unmarked_line_only_changes_its_product(monkeypatch):
+    lines = [{'position_key': f'xml:{i}', 'product_name': 'Чаша', 'product_id': None,
+              'price': price, 'items': [{'product_id': None, 'quantity': 2.5, 'codes': []}]}
+             for i, price in enumerate([100, 125])]
+    doc = NS(id=uuid4(), kind='supply', plan=[], upd_meta={'physical_plan': lines})
+    from app.services import document_guard
+    monkeypatch.setattr(products, '_get_document_owned', AsyncMock(return_value=doc))
+    monkeypatch.setattr(document_guard, 'editable_document', AsyncMock(return_value=doc))
+    for i, pid in [(0, 'p'), (1, 'p'), (1, 'other')]:
+        request = products.LinkUpdPositionRequest(document_id=doc.id, xml_index=i, position_name='Чаша',
+            quantity=2.5, price=lines[i]['price'], moysklad_product_id=pid)
+        await products.link_upd_position_to_product(request, NS(id=uuid4()), NS(commit=AsyncMock()))
+    rows = prepare_supply_without_cz(doc.plan, doc.upd_meta)
+    assert [(r['product_id'], r['price'], r['quantity']) for r in rows] == [('p', 100, 2.5), ('other', 125, 2.5)]
 

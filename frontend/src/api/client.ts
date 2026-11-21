@@ -861,6 +861,7 @@ export const productsApi = {
     }),
   linkUpdPosition: (data: {
     document_id: string
+    xml_index?: number | null
     line_number: number | null
     position_name: string
     article: string | null
@@ -912,6 +913,8 @@ export interface AcceptanceDoc {
 
 export interface ImportPositionResult {
   name: string
+  xml_index?: number | null
+  source_codes?: string[] | null
   gtin: string | null
   article: string | null
   quantity: number | null

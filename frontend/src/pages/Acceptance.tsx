@@ -27,6 +27,10 @@ function errorDetail(e: unknown): string | null {
 const rub = (v: number) =>
   v.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+function positionRowKey(p: ImportPositionResult) {
+  return JSON.stringify([p.xml_index ?? p.line_number, p.gtin, p.name, p.source_codes?.[0]])
+}
+
 interface AcceptancePageProps {
   /** Попап МС: поступление задано заранее (кнопка на документе Поступление);
    *  после успешной отправки в МС вызывается onSent (попап закрывает окно). */
@@ -182,6 +186,7 @@ export function AcceptancePage({
         ? {
             ...r,
             positions: r.positions.map((p) => {
+              if (!p.codes_count && !p.packages_count) return p
               const linked = sc.find(
                 (s) => s.gtin === p.gtin && s.moysklad_product_id,
               )
@@ -238,7 +243,10 @@ export function AcceptancePage({
                 position.line_number == null &&
                 position.name === target.name &&
                 position.article === target.article
-              return sameLine || sameFallback
+              const matches = target.xml_index != null
+                ? position.xml_index === target.xml_index
+                : sameLine || sameFallback
+              return matches
                 ? {
                     ...position,
                     matched: true,
@@ -254,7 +262,8 @@ export function AcceptancePage({
 
   const confirmAllSuggestions = async () => {
     if (!docId) return
-    const links = highUnmatched
+    const suggestionsByGtin = new Map(highUnmatched.map(p => [p.gtin, p]))
+    const links = [...suggestionsByGtin.values()]
       .map((p) => ({ gtin: p.gtin as string, sug: sugFor(p.gtin) }))
       .filter((x) => x.sug?.best)
       .map((x) => ({
@@ -519,7 +528,7 @@ export function AcceptancePage({
             )}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {unmatched.map((p) => (
-                <div key={`${p.gtin}|${p.name}`}>
+                <div key={positionRowKey(p)}>
                   <div style={{ fontSize: 13, marginBottom: 4 }}>
                     <b>{p.name}</b>{' '}
                     <span className="text-muted" style={{ fontSize: 11 }}>
@@ -551,7 +560,7 @@ export function AcceptancePage({
             <ResizableTable
               columns={columns}
               rows={positions}
-              rowKey={(p) => `${p.gtin ?? 'none'}|${p.name}`}
+              rowKey={positionRowKey}
               storageKey="acceptance_table_widths"
               emptyText="В файле нет товарных позиций"
               rowClassName={(p) => (p.matched ? undefined : 'is-unmatched')}
@@ -561,7 +570,7 @@ export function AcceptancePage({
                       onLinked={product => markPositionLinked(p, product)} /> : <span>{p.product_name}</span>
                   :
                 <ExpandedPosition
-                  codes={p.gtin ? codesByGtin.get(p.gtin) ?? [] : []}
+                  codes={p.source_codes ?? (p.gtin ? codesByGtin.get(p.gtin) ?? [] : [])}
                   documentId={docId}
                   gtin={p.gtin}
                   currentProductName={p.product_name}
@@ -750,6 +759,7 @@ function InlineProductPicker({
       } else if (position) {
         await productsApi.linkUpdPosition({
           document_id: documentId,
+          xml_index: position.xml_index,
           line_number: position.line_number,
           position_name: position.name,
           article: position.article,

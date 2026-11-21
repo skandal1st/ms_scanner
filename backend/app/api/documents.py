@@ -1089,7 +1089,10 @@ async def process_document(
         Scan.status.in_(SHIPMENT_STATUSES if doc.kind == DocumentKind.demand else (ScanStatus.valid, ScanStatus.overflow))
     ))).scalar_one()
     from app.services.supply_positions import prepare_supply_rows
-    quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz) if doc.kind == DocumentKind.supply else []
+    try:
+        quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz) if doc.kind == DocumentKind.supply else []
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if not count and not quantity_only:
         raise HTTPException(409, "Нет проверенных марок или товаров для отправки")
     doc.status = DocumentStatus.processing

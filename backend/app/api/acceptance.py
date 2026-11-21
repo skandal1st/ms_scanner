@@ -9,6 +9,7 @@
 отгрузки — поэтому отдельный роутер, без _ensure_supported_kind.
 """
 
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import UUID
@@ -83,6 +84,8 @@ class AcceptanceDocResponse(BaseModel):
 
 class ImportPositionResult(BaseModel):
     name: str
+    xml_index: Optional[int] = None
+    source_codes: Optional[List[str]] = None
     gtin: Optional[str] = None
     article: Optional[str] = None
     quantity: Optional[float] = None
@@ -807,6 +810,10 @@ async def _import_upd_bytes_traced(
     except UpdParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     positions: list[ParsedPosition] = parsed.positions
+    from app.api.products import _upd_position_key
+    legacy_keys = [_upd_position_key(p.line_number, p.name, p.article) for p in positions]
+    key_counts = Counter(legacy_keys)
+    position_keys = [key if key_counts[key] == 1 else f'xml:{i}' for i, key in enumerate(legacy_keys)]
 
     # Цена/НДС/кол-во из УПД по GTIN позиции — сохраняем НЕЗАВИСИМО от того,
     # сопоставился ли товар. Нужны при ручной привязке GTIN (link-gtin), чтобы
@@ -889,13 +896,12 @@ async def _import_upd_bytes_traced(
                 article_map.setdefault(a, (pid, name))
 
     # Уже имеющиеся коды документа — чтобы не плодить дубли при повторной загрузке.
-    existing_codes = set(
-        (
-            await db.execute(
-                select(Scan.code).where(Scan.document_id == document_id)
-            )
-        ).scalars().all()
-    )
+    stored_scans = (await db.execute(
+        select(Scan.code, Scan.original_code, Scan.is_box, Scan.gtin, Scan.moysklad_product_id,
+               Scan.product_name, Scan.box_quantity).where(Scan.document_id == document_id)
+    )).all()
+    existing_codes = {code for s in stored_scans for code in (s.code, s.original_code) if code}
+    existing_boxes = {s.code: s for s in stored_scans if s.is_box}
 
     resolve_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
     results: list[ImportPositionResult] = []
@@ -904,10 +910,11 @@ async def _import_upd_bytes_traced(
     skipped = 0
     # Накопление товарных позиций для плана: product_id → {gtin, product_name,
     # expected_qty}. expected_qty = сумма КолТов (УПД) по «основной» группе позиции.
-    # При «Отправить в МС» из плана создаются позиции поступления с этими кол-вами.
+    # Сводка нужна для сопоставления GTIN. Цена и марки для записи в МС
+    # сохраняются ниже по исходным строкам, даже когда product_id совпадает.
     plan_acc: dict[str, dict] = {}
 
-    for pos in positions:
+    for xml_index, pos in enumerate(positions):
         # Группируем коды позиции по их СОБСТВЕННОМУ GTIN (01+GTIN внутри кода).
         # Блочные/смешанные позиции содержат коды с разными GTIN — каждый код
         # резолвится в свой товар, а не в один GTIN на всю позицию (вариант B).
@@ -942,17 +949,8 @@ async def _import_upd_bytes_traced(
 
         # Позиция без кодов — показываем строку «без марок» (как раньше).
         if not order:
-            manual_key = (
-                f"line:{pos.line_number}"
-                if pos.line_number is not None
-                else (
-                    f"article:{_norm_article(pos.article)}"
-                    if _norm_article(pos.article)
-                    else f"name:{' '.join((pos.name or '').lower().split())}"
-                )
-            )
             manual_link = ((doc.upd_meta or {}).get("manual_position_links") or {}).get(
-                manual_key
+                position_keys[xml_index]
             ) or {}
             product_id = manual_link.get("product_id")
             product_name = manual_link.get("product_name")
@@ -991,6 +989,8 @@ async def _import_upd_bytes_traced(
             results.append(
                 ImportPositionResult(
                     name=pos.name,
+                    xml_index=xml_index,
+                    source_codes=[],
                     gtin=pos.gtin,
                     article=pos.article,
                     quantity=pos.quantity,
@@ -1074,12 +1074,16 @@ async def _import_upd_bytes_traced(
             for sscc in bucket["packages"]:
                 if sscc in existing_codes:
                     skipped += 1
-                    continue
-                existing_codes.add(sscc)
                 b_gtin, b_pid, b_name, b_status = g, product_id, product_name, status
                 b_children: Optional[list] = None
                 b_qty: Optional[int] = None
-                if cz is not None and b_pid is None:
+                if sscc in existing_boxes:
+                    previous = existing_boxes[sscc]
+                    b_pid = previous.moysklad_product_id or product_id
+                    b_gtin = previous.gtin or g
+                    b_name = previous.product_name or product_name
+                    b_qty = previous.box_quantity
+                elif sscc not in existing_codes and cz is not None and b_pid is None:
                     exp = await _expand_box_via_cz(sscc, cz)
                     if exp and exp.get("gtin"):
                         u_pid, u_name = await _resolve_product(
@@ -1093,8 +1097,9 @@ async def _import_upd_bytes_traced(
                             b_status = ScanStatus.valid
                             b_children = exp["children"]
                             b_qty = exp["qty"]
-                db.add(
-                    Scan(
+                if sscc not in existing_codes:
+                    existing_codes.add(sscc)
+                    db.add(Scan(
                         document_id=document_id,
                         code=sscc,
                         gtin=b_gtin,
@@ -1104,9 +1109,8 @@ async def _import_upd_bytes_traced(
                         is_box=True,
                         child_codes=b_children,
                         box_quantity=b_qty,
-                    )
-                )
-                created += 1
+                    ))
+                    created += 1
                 # Развёрнутый короб добавляет свой товар и единицы в план, чтобы
                 # update_document создал позицию поступления с ценой/НДС из УПД.
                 if b_pid and b_pid != product_id:
@@ -1134,27 +1138,31 @@ async def _import_upd_bytes_traced(
                         "product_id": b_pid if key else product_id,
                         "product_name": b_name if key else product_name,
                         "gtin": b_gtin if key else g,
-                        "count": 0,
+                        "codes": [],
+                        "quantity": 0,
                     },
                 )
-                row["count"] += 1
+                row["codes"].append(sscc)
+                row["quantity"] += b_qty or 0
 
             # «Основная» строка группы: листовые коды + не развёрнутые короба. Если
             # листовых кодов нет и ВСЕ короба развернулись в товары — пустую строку не
             # добавляем (иначе показала бы ложное «не сопоставлен»).
-            base_pkgs = box_rows.get(None, {}).get("count", 0)
+            base_pkgs = box_rows.get(None, {}).get("codes", [])
             has_expanded = any(k is not None for k in box_rows)
             if len(bucket["codes"]) or base_pkgs or not has_expanded:
                 results.append(
                     ImportPositionResult(
                         name=pos.name,
+                        xml_index=xml_index,
+                        source_codes=[*bucket["codes"], *base_pkgs],
                         gtin=g,
                         article=pos.article,
                         # Кол-во (КолТов) — на «основную» строку позиции (GTIN единиц);
                         # для отделившихся блочных GTIN кол-во неоднозначно → не показываем.
-                        quantity=pos.quantity if g == pos.gtin else None,
+                        quantity=pos.quantity if g == order[0] else None,
                         codes_count=len(bucket["codes"]),
-                        packages_count=base_pkgs,
+                        packages_count=len(base_pkgs),
                         product_id=product_id,
                         product_name=product_name,
                         matched=matched,
@@ -1170,11 +1178,13 @@ async def _import_upd_bytes_traced(
                 results.append(
                     ImportPositionResult(
                         name=pos.name,
+                        xml_index=xml_index,
+                        source_codes=row["codes"],
                         gtin=row["gtin"],
                         article=pos.article,
-                        quantity=None,
+                        quantity=row["quantity"] or None,
                         codes_count=0,
-                        packages_count=row["count"],
+                        packages_count=len(row["codes"]),
                         product_id=row["product_id"],
                         product_name=row["product_name"],
                         matched=True,
@@ -1186,8 +1196,7 @@ async def _import_upd_bytes_traced(
 
     # Обновляем план документа позициями из УПД (товар + КолТов). Сохраняем
     # pack_gtins из прежнего плана (если поступление МС уже имело позиции), КолТов
-    # УПД имеет приоритет по количеству. Из этого плана при «Отправить в МС»
-    # создаются позиции поступления.
+    # УПД имеет приоритет по количеству.
     existing_by_pid = {
         p["product_id"]: p
         for p in (doc.plan or [])
@@ -1202,19 +1211,24 @@ async def _import_upd_bytes_traced(
         if pid not in plan_acc:
             new_plan.append(old)
     doc.plan = new_plan
-    # Keep every XML line for physical verification, including unmatched/unmarked goods.
+    # Keep the source lines for physical verification and for the financial MS write.
     physical_plan = []
-    from app.api.products import _upd_position_key
+    by_xml_index: dict[int, list[ImportPositionResult]] = {}
+    for result in results:
+        by_xml_index.setdefault(result.xml_index, []).append(result)
     for index, pos in enumerate(positions):
-        matching = [v for v in results if v.line_number == pos.line_number and v.name == pos.name]
+        matching = by_xml_index[index]
         aliases = set(filter(None, [normalize_gtin_key(pos.gtin), *[_code_gtin(c, None) for c in pos.codes]]))
         product_ids = {v.product_id for v in matching if v.product_id}
         pid = next(iter(product_ids)) if len(product_ids) == 1 else None
         old = existing_by_pid.get(pid, {}) if pid else {}
         physical_plan.append({'key': f'xml:{index}', 'product_id': pid,
-            'position_key': _upd_position_key(pos.line_number, pos.name, pos.article),
+            'position_key': position_keys[index],
             'product_name': pos.name or (next((v.product_name for v in matching if v.product_name), None)) or f'Позиция {index + 1}',
             'gtins': sorted(aliases), 'expected_qty': float(pos.quantity or 0),
+            'price': pos.price, 'vat': pos.vat,
+            'items': [{'product_id': v.product_id, 'gtin': v.gtin, 'quantity': v.quantity,
+                       'codes': v.source_codes} for v in matching],
             'pack_gtins': old.get('pack_gtins', []), 'pack_quantities': old.get('pack_quantities', {}),
             'package_codes': list(pos.packages)})
     doc.upd_meta = {**(doc.upd_meta or {}), 'physical_plan': physical_plan}

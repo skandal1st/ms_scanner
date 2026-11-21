@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections import deque
+from collections import Counter, deque
 from typing import Awaitable, Callable
 import httpx
 from typing import List, Dict, Any, Optional
@@ -846,6 +846,77 @@ class MoySkladService:
 
     TRACKING_BATCH_SIZE = 500
 
+    async def _saved_mark_positions(self, kind, doc_id, rows):
+        saved = {}
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90, connect=10)) as client:
+            for row in rows:
+                if not row.get('id'):
+                    raise ValueError('МойСклад не вернул идентификатор позиции')
+                for entry in await self._load_tracking_codes(client, kind, doc_id, row['id']):
+                    key = self._cis_dedup_key(entry.get('cis') or entry.get('cis_1162'))
+                    if key:
+                        saved[key] = row['id']
+        return saved
+
+    def _match_supply_lines(self, groups, rows, saved_marks, *, created=False):
+        """Reserve matching financial rows before using any remaining row of the product."""
+        available = {}
+        for index, row in enumerate(rows):
+            available.setdefault(self._product_id_from_position(row), []).append(index)
+        matches = {}
+        group_count = Counter(group[0]['product_id'] for group in groups.values())
+        index_by_id = {row.get('id'): i for i, row in enumerate(rows)}
+        reserved = set()
+        if saved_marks:
+            for key, group in groups.items():
+                pid = group[0]['product_id']
+                if not isinstance(key, tuple) or group_count[pid] == 1:
+                    continue
+                owners = {saved_marks[mark] for s in group if s.get('code') and not s.get('is_barcode')
+                          if (mark := self._cis_dedup_key(s['code'])) in saved_marks}
+                if not owners:
+                    continue
+                index = index_by_id[next(iter(owners))]
+                if len(owners) > 1 or index not in available.get(pid, ()):
+                    raise ValueError('Марки в существующем поступлении распределены иначе, чем в УПД. Проверьте позиции в МойСкладе.')
+                matches[index] = key
+                available[pid].remove(index)
+                reserved.add(key)
+        # A retry may read the same rows in a different order. In particular,
+        # reserve the second XML price even if the first price has no match.
+        pending = []
+        for key, group in groups.items():
+            if key in reserved:
+                continue
+            pid = group[0]['product_id']
+            candidates = available.get(pid, [])
+            if not isinstance(key, tuple):
+                if created:
+                    pending.append((key, candidates))
+                continue
+            if not created and group_count[pid] == 1:
+                # A single source line can already occupy several MS rows.
+                matches.update((i, key) for i in candidates)
+                candidates.clear()
+                continue
+            item = group[0]
+            price = item.get('price')
+            cents = round(price * 100) if price is not None else None
+            matching = [i for i in candidates
+                        if (cents is None or rows[i].get('price') == cents)
+                        and (item.get('vat') is None or rows[i].get('vat') == item['vat'])]
+            if matching:
+                quantity = max(item.get('expected_qty') or 0, sum(self._scan_units(s) for s in group))
+                index = min(matching, key=lambda i: (rows[i].get('quantity') != quantity, rows[i].get('id') or ''))
+                candidates.remove(index)
+                matches[index] = key
+            elif not created:
+                pending.append((key, candidates))
+        for key, candidates in pending:
+            if candidates:
+                matches[candidates.pop(0)] = key
+        return matches
+
     async def get_shipment_states(self) -> list[dict]:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await self._request_with_retry(client, 'GET', f'{self.base_url}/entity/demand/metadata')
@@ -956,66 +1027,77 @@ class MoySkladService:
             pid = scan.get("product_id")
             if not pid:
                 raise ValueError("Не все марки сопоставлены с товарами МойСклад")
-            groups.setdefault(pid, []).append(scan)
+            key = (pid, scan["upd_line"]) if kind == 'supply' and 'upd_line' in scan else pid
+            groups.setdefault(key, []).append(scan)
         if not groups:
             raise ValueError("Нет товаров для отправки в МойСклад")
 
+        prices = dict(position_prices or {})
+        quantities = dict(position_quantities or {})
+        for key, group in groups.items():
+            if isinstance(key, tuple):
+                prices.pop(group[0]['product_id'], None)
+                prices[key] = group[0]
+                quantities[key] = group[0].get('expected_qty')
+
         # A read failure must never be treated as an empty document.
         ms_rows = await self._load_positions_rows(kind, doc_id)
-        pending = {pid: deque(group) for pid, group in groups.items()}
-        last_row = {self._product_id_from_position(row): i for i, row in enumerate(ms_rows)}
-        positions = []
+        saved_marks = await self._saved_mark_positions(kind, doc_id, ms_rows) if write_codes and ms_rows else {}
+        line_matches = self._match_supply_lines(groups, ms_rows, saved_marks) if kind == 'supply' else {}
+        pending = {key: deque(group) for key, group in groups.items()}
+        row_keys = [line_matches.get(i, self._product_id_from_position(row)) for i, row in enumerate(ms_rows)]
+        last_row = {key: i for i, key in enumerate(row_keys)}
+        row_count = Counter(row_keys)
+        ordered_positions = []
         allocated = []
         for i, row in enumerate(ms_rows):
-            pid = self._product_id_from_position(row)
             payload = self._position_put_payload(row)
             payload.pop("trackingCodes", None)
             payload.pop("trackingCodes_1162", None)
-            remaining = pending.get(pid)
+            key = row_keys[i]
+            remaining = pending.get(key)
             take = []
             if remaining:
                 cap = max(1, int(row.get("quantity") or 0))
                 units = 0
                 # The final row of a product receives overflow as well.
-                while remaining and (units < cap or last_row.get(pid) == i):
+                while remaining and (units < cap or last_row[key] == i):
                     item = remaining.popleft()
                     take.append(item)
                     units += self._scan_units(item)
-                payload["quantity"] = units
-            pp = (position_prices or {}).get(pid) or {}
-            if pp.get("price") is not None:
-                payload["price"] = int(round(float(pp["price"]) * 100))
-            if pp.get("vat") is not None:
-                payload.update(vat=int(pp["vat"]), vatEnabled=True)
-            positions.append(payload)
+                payload["quantity"] = max(units, take[0].get('expected_qty') or 0) if row_count[key] == 1 else units
+            ordered_positions.append((key, payload))
             allocated.append((row, take))
 
         new_products = {}
-        for pid, remaining in pending.items():
+        for key, remaining in pending.items():
             if not remaining:
                 continue
             group = list(remaining)
+            pid = group[0]['product_id']
             units = sum(self._scan_units(item) for item in group)
-            qty = max(units, int((position_quantities or {}).get(pid) or 0))
+            qty = max(units, quantities.get(key) or 0)
             payload = {"assortment": {"meta": {
                 "href": f"{self.base_url}/entity/product/{pid}",
                 "type": "product", "mediaType": "application/json",
             }}, "quantity": qty}
-            pp = (position_prices or {}).get(pid) or {}
-            if pp.get("price") is not None:
-                payload["price"] = int(round(float(pp["price"]) * 100))
-            if pp.get("vat") is not None:
-                payload.update(vat=int(pp["vat"]), vatEnabled=True)
-            positions.append(payload)
-            new_products[pid] = group
-        if len(positions) > 1000:
+            ordered_positions.append((key, payload))
+            new_products[key] = group
+        if len(ordered_positions) > 1000:
             raise ValueError("В документе больше 1000 позиций. Разделите его на несколько документов МойСклад.")
 
         if kind == 'supply':
             # Quantity-only lines and marked lines follow the same UPD order.
-            order = {pid: index for index, pid in enumerate(groups)}
-            positions.sort(key=lambda p: order.get(
-                (p.get('assortment', {}).get('meta', {}).get('href') or '').rsplit('/', 1)[-1], len(order)))
+            order = {key: index for index, key in enumerate(groups)}
+            ordered_positions.sort(key=lambda pair: order.get(pair[0], len(order)))
+        positions = []
+        for key, payload in ordered_positions:
+            financials = prices.get(key) or {}
+            if financials.get('price') is not None:
+                payload['price'] = round(float(financials['price']) * 100)
+            if financials.get('vat') is not None:
+                payload.update(vat=int(financials['vat']), vatEnabled=True)
+            positions.append(payload)
         body = {"positions": positions}
         if description:
             body["description"] = description
@@ -1028,16 +1110,7 @@ class MoySkladService:
                 expected_order = (shipment_scope or {}).get('moysklad_customer_order_id')
                 if expected_order:
                     await shipment_order_id(self, response.json(), expected_order)
-            # Read before mutation: a failed code read also aborts safely.
-            seen = set()
-            if write_codes:
-                for row in ms_rows:
-                    if not row.get("id"):
-                        raise ValueError("МойСклад не вернул идентификатор позиции")
-                    for tc in await self._load_tracking_codes(client, kind, doc_id, row["id"]):
-                        key = self._cis_dedup_key(tc.get("cis") or tc.get("cis_1162"))
-                        if key:
-                            seen.add(key)
+            seen = set(saved_marks)
             batches = []
             for row, group in allocated:
                 codes = self._tracking_batch(group, self._moysklad_tracking_type_from_position(row), seen, doc_id) if write_codes else []
@@ -1049,10 +1122,16 @@ class MoySkladService:
                 return {"__moysklad_412__": True, "body": resp.text}
             resp.raise_for_status()
             # New positions are created without an unbounded embedded code array.
-            if write_codes and new_products:
+            new_marked = {key: group for key, group in new_products.items()
+                          if any(s.get('code') and not s.get('is_barcode') for s in group)}
+            if write_codes and new_marked:
                 refreshed = await self._load_positions_rows(kind, doc_id)
-                for pid, group in new_products.items():
-                    row = next((r for r in refreshed if self._product_id_from_position(r) == pid), None)
+                previous_ids = {r.get('id') for r in ms_rows}
+                created = [r for r in refreshed if r.get('id') not in previous_ids]
+                matched = self._match_supply_lines(new_products, created, {}, created=True)
+                by_group = {key: created[i] for i, key in matched.items()}
+                for key, group in new_marked.items():
+                    row = by_group.get(key)
                     if not row or not row.get("id"):
                         raise ValueError("Не удалось найти созданную позицию МойСклад. Повторите отправку.")
                     codes = self._tracking_batch(group, self._moysklad_tracking_type_from_position(row), seen, doc_id)

@@ -151,6 +151,7 @@ def _build_moysklad_scans_data(
                 )
                 rows.append({
                     "code": child_code,
+                    **({"source_code": getattr(scan, "original_code", None) or scan.code} if kind == "supply" else {}),
                     "gtin": child_gtin,
                     "product_id": (
                         scan.moysklad_product_id
@@ -163,6 +164,7 @@ def _build_moysklad_scans_data(
         else:
             rows.append({
                 "code": scan.code,
+                **({"source_code": scan.original_code} if kind == "supply" and getattr(scan, "original_code", None) else {}),
                 "gtin": scan.gtin,
                 "product_id": pid_default,
                 "is_box": scan.is_box,

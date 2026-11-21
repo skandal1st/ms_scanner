@@ -9,7 +9,8 @@ from app.services.chestnyznak import normalize_gtin_key, parse_gs1_km_gtin_seria
 def acceptance_plan(plan):
     result = []
     for index, value in enumerate(plan or []):
-        row = dict(value)
+        # The terminal needs the count plan; XML write details include every mark.
+        row = {k: v for k, v in value.items() if k not in ('items', 'price', 'vat')} if 'items' in value else dict(value)
         row['key'] = str(value.get('key') or value.get('product_id') or value.get('gtin') or index)
         row['expected_qty'] = float(value.get('expected_qty') or 0)
         row['base_qty'] = row['expected_qty']

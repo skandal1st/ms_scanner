@@ -60,6 +60,7 @@ async def confirm_scan_gtin(body: ConfirmScanGtinRequest,
 
 class LinkUpdPositionRequest(BaseModel):
     document_id: UUID
+    xml_index: Optional[int] = None
     line_number: Optional[int] = None
     position_name: str
     article: Optional[str] = None
@@ -283,9 +284,21 @@ async def _link_gtin_core(
 
     # Цена/НДС/кол-во из УПД для привязанного товара в план документа.
     if matched:
+        meta = doc.upd_meta or {}
+        physical = []
+        for line in meta.get('physical_plan') or []:
+            items = line.get('items', [])
+            if any(i['codes'] and normalize_gtin_key(i.get('gtin')) == target_key for i in items):
+                items = [{**i, 'product_id': pid}
+                         if i['codes'] and normalize_gtin_key(i.get('gtin')) == target_key else i for i in items]
+                pids = {i.get('product_id') for i in items}
+                line = {**line, 'items': items, 'product_id': next(iter(pids)) if len(pids) == 1 else None}
+            physical.append(line)
+        if physical:
+            doc.upd_meta = {**meta, 'physical_plan': physical}
         upd_pos = ((doc.upd_meta or {}).get("positions") or {}).get(target_key) or {}
         plan = [
-            p
+            dict(p) if isinstance(p, dict) else p
             for p in (doc.plan or [])
             if not (
                 isinstance(p, dict)
@@ -370,7 +383,7 @@ def _upd_position_key(
     """Стабильный ключ строки УПД, в том числе когда у неё нет GTIN."""
     if line_number is not None:
         return f"line:{line_number}"
-    article_key = _norm_article(article)
+    article_key = (article or '').strip().upper()
     if article_key:
         return f"article:{article_key}"
     return f"name:{_norm_name(position_name)}"
@@ -435,6 +448,11 @@ async def link_upd_position_to_product(
 
     key = _upd_position_key(body.line_number, position_name, body.article)
     meta = dict(doc.upd_meta or {})
+    physical_plan = [dict(p) for p in meta.get('physical_plan', [])]
+    if body.xml_index is not None:
+        if not 0 <= body.xml_index < len(physical_plan):
+            raise HTTPException(409, 'Строка УПД изменилась. Загрузите документ повторно.')
+        key = physical_plan[body.xml_index]['position_key']
     links = dict(meta.get("manual_position_links") or {})
     old_pid = (links.get(key) or {}).get('product_id')
     links[key] = {
@@ -444,11 +462,13 @@ async def link_upd_position_to_product(
         "article": (body.article or "").strip() or None,
     }
     meta["manual_position_links"] = links
-    physical_plan = [dict(p) for p in meta.get('physical_plan', [])]
     legacy_matches = [p for p in physical_plan if not p.get('position_key') and p.get('product_name') == position_name]
     for p in physical_plan:
         if p.get('position_key') == key or (len(legacy_matches) == 1 and p is legacy_matches[0]):
+            old_pid = old_pid or p.get('product_id')
             p['product_id'] = pid
+            if 'items' in p:
+                p['items'] = [{**item, 'product_id': pid} for item in p['items']]
     if physical_plan:
         meta['physical_plan'] = physical_plan
     doc.upd_meta = meta
@@ -456,7 +476,9 @@ async def link_upd_position_to_product(
     # Добавляем/обновляем товар в плане. Для уже существующей позиции поступления
     # это только уточняет отображение; для пустого поступления сохраняет реквизиты УПД.
     plan = [dict(p) for p in (doc.plan or []) if isinstance(p, dict)]
-    if old_pid and old_pid != pid and old_pid not in {p.get('product_id') for p in links.values()}:
+    retained_ids = {p.get('product_id') for p in links.values()}
+    retained_ids.update(item.get('product_id') for line in physical_plan for item in line.get('items', []))
+    if old_pid and old_pid != pid and old_pid not in retained_ids:
         plan = [p for p in plan if p.get('product_id') != old_pid or p.get('marked') is not False]
     entry = next((p for p in plan if p.get("product_id") == pid), None)
     if entry is None:
