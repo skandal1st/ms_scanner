@@ -64,14 +64,18 @@ async def test_link_accessory_with_numeric_article_without_scans(monkeypatch):
 
 @pytest.mark.parametrize('without_cz', [False, True])
 @pytest.mark.parametrize('existing_prices', [[], [12500], [12500, 10000]])
-async def test_two_upd_prices_survive_import_write_and_retry(monkeypatch, without_cz, existing_prices):
+@pytest.mark.parametrize('pooled', [False, True])
+async def test_two_upd_prices_survive_import_write_and_retry(monkeypatch, without_cz, existing_prices, pooled):
     gtin = '04660321205858'
     a, b, c = [f'01{gtin}21{i:07}' for i in (1, 2, 3)]
+    first, second = ([a, b, c], []) if pooled else ([a, b], [c])
+    def identification(codes):
+        return '<НомСредИдентТов>' + ''.join(f'<КИЗ>{code}</КИЗ>' for code in codes) + '</НомСредИдентТов>'
     xml = f'''<Файл><ТаблСчФакт>
       <СведТов НомСтр="1" НаимТов="Товар" КолТов="2" СтТовУчНал="200" НалСт="10%">
-        <НомСредИдентТов><КИЗ>{a}</КИЗ><КИЗ>{b}</КИЗ></НомСредИдентТов></СведТов>
+        {identification(first)}</СведТов>
       <СведТов НомСтр="2" НаимТов="Товар" КолТов="1" СтТовУчНал="125" НалСт="22%">
-        <НомСредИдентТов><КИЗ>{c}</КИЗ></НомСредИдентТов></СведТов>
+        {identification(second)}</СведТов>
       </ТаблСчФакт></Файл>'''
     doc = NS(id=uuid4(), plan=[], upd_meta={}, organization_profile_id=uuid4())
     scans = []
@@ -81,7 +85,7 @@ async def test_two_upd_prices_survive_import_write_and_retry(monkeypatch, withou
     monkeypatch.setattr(acceptance, '_enrich_unmatched_names_nk', AsyncMock())
     monkeypatch.setattr(acceptance, '_resolve_product', AsyncMock(return_value=('p', 'Товар')))
     imported = await acceptance._import_upd_bytes_traced(doc.id, doc, xml.encode(), NS(id=uuid4()), db)
-    assert [(p.price, p.source_codes) for p in imported.positions] == [(100, [a, b]), (125, [c])]
+    assert [(p.price, p.source_codes) for p in imported.positions] == [(100, first), (125, second)]
     if without_cz:
         rows = prepare_supply_without_cz(doc.plan, doc.upd_meta)
     else:
@@ -129,6 +133,32 @@ def test_expanded_box_and_verified_mark_keep_their_xml_line():
             {'product_id': 'p', 'code': 'unit2', 'source_code': 'box'}]
     prepared = prepare_supply_rows(rows, [], {'physical_plan': lines})
     assert [(r['code'], r['price']) for r in prepared] == [('unit1', 80), ('unit2', 80), ('full', 95)]
+
+
+def test_spare_slots_preserve_other_lines_marks_and_do_not_cross_products():
+    lines = [{'items': [{'product_id': pid, 'codes': codes, 'quantity': qty}]}
+             for pid, codes, qty in [('p', [], 2), ('other', [], 5), ('p', ['a', 'b', 'c'], 1),
+                                     ('p', ['d'], 1)]]
+    def prepare(codes):
+        return prepare_supply_rows([{'product_id': 'p', 'code': c} for c in codes], [], {'physical_plan': lines})
+    rows = prepare(['c', 'd', 'b', 'a', 'b'])
+    assert [(r['upd_line'], r['code']) for r in rows if r['code']] == [(0, 'b'), (0, 'c'), (2, 'a'), (3, 'd')]
+    assert [(r['product_id'], r['quantity']) for r in rows if not r['code']] == [('other', 5)]
+    assert prepare(['a', 'b', 'c', 'd']) == rows
+    with pytest.raises(ValueError, match='Количество марок товара'):
+        prepare(['a', 'b', 'c', 'd', 'extra'])
+
+
+def test_mixed_xml_line_and_late_resolved_package_use_the_financial_quantity():
+    lines = [
+        {'expected_qty': 3, 'items': [{'product_id': 'a', 'quantity': 3, 'codes': ['a1']},
+                                      {'product_id': 'b', 'quantity': None, 'codes': ['b1']}]},
+        {'expected_qty': 4, 'items': [{'product_id': None, 'quantity': 4, 'codes': ['box']}]},
+    ]
+    rows = [{'product_id': 'a', 'code': 'a1'}, {'product_id': 'b', 'code': 'b1'},
+            {'product_id': 'resolved', 'source_code': 'box', 'code': 'child'}]
+    result = prepare_supply_rows(rows, [], {'physical_plan': lines})
+    assert [(r['product_id'], r['expected_qty']) for r in result] == [('a', 2), ('b', 1), ('resolved', 4)]
 
 
 def test_unmarked_lines_with_one_product_keep_fractional_quantities_and_zero_price():

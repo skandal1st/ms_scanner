@@ -2,6 +2,7 @@
 from collections import defaultdict
 
 from app.services.chestnyznak import normalize_gtin_key
+from app.services.moysklad import MoySkladService
 from app.services.plan_matching import unique_plan_product
 
 
@@ -80,50 +81,121 @@ def _prepare_product_rows(rows, plan, meta, include_marked):
 
 
 def _prepare_xml_rows(rows, plan, meta, lines, include_marked):
-    """Route each mark (including units of an expanded box) to its source XML row."""
+    """Keep XML quantities and prices; use spare slots only within the same product."""
     by_code = {}
-    product_lines = defaultdict(set)
-    quantities = defaultdict(float)
+    product_lines = defaultdict(list)
+    quantities = {}
     unmarked = set()
+    line_products = [[] for _ in lines]
     for index, line in enumerate(lines):
         for item in line['items']:
             pid = item.get('product_id')
             if pid:
-                product_lines[pid].add(index)
-                quantities[index, pid] += item.get('quantity') or 0
+                key = (index, pid)
+                if key not in quantities:
+                    line_products[index].append(pid)
+                    product_lines[pid].append(key)
+                    quantities[key] = None
+                if item.get('quantity') is not None:
+                    quantities[key] = (quantities[key] or 0) + item['quantity']
                 if not item['codes']:
-                    unmarked.add((index, pid))
+                    unmarked.add(key)
             for code in item['codes']:
-                by_code.setdefault(code, index)
+                by_code.setdefault(code, (index, len(by_code)))
 
     buckets = defaultdict(list)
+    overflow = defaultdict(list)
     extra = []
-    for row in rows:
-        pid = row.get('product_id')
-        index = by_code.get(row.get('source_code'), by_code.get(row.get('code')))
-        if index is None and pid in product_lines:
-            candidates = product_lines[pid]
-            if len(candidates) > 1:
-                raise ValueError('Дополнительная марка относится к товару из нескольких строк УПД. Проверьте исходный УПД и список марок.')
-            index = next(iter(candidates))
-        if index is None:
-            extra.append(row)
-        else:
-            buckets[index, pid].append(row)
 
-    if include_marked:
-        unmarked.update(quantities)
-    for key in sorted(unmarked):
-        if not buckets[key] and quantities[key] > 0:
+    def source(row):
+        return by_code.get(row.get('code')) or by_code.get(row.get('source_code')) or (len(lines), len(by_code))
+
+    seen = set()
+    for row in sorted(rows, key=lambda r: (source(r), r.get('code') or '')):
+        pid = row.get('product_id')
+        index, _ = source(row)
+        if index == len(lines) and pid not in product_lines:
+            extra.append(row)
+            continue
+        if row.get('code') and not row.get('is_barcode'):
+            mark = MoySkladService._cis_dedup_key(row['code'])
+            if mark in seen:
+                continue
+            seen.add(mark)
+        if index == len(lines):
+            overflow[pid].append(row)
+            continue
+        if (index, pid) not in quantities and pid:
+            # A previously unmatched box can resolve to a product in the worker.
+            line_products[index].append(pid)
+            product_lines[pid].append((index, pid))
+            quantities[index, pid] = None
+        buckets[index, pid].append(row)
+
+    _apply_xml_line_quantities(lines, line_products, buckets, quantities)
+    _distribute_product_marks(buckets, quantities, product_lines, overflow)
+    for key, quantity in quantities.items():
+        if quantity and not buckets[key] and (rows or include_marked or key in unmarked):
             buckets[key].append({'product_id': key[1], 'code': '', 'is_barcode': True,
-                                 'is_box': False, 'quantity': quantities[key]})
+                                 'is_box': False, 'quantity': quantity})
 
     result = []
     for (index, pid), group in sorted(buckets.items(), key=lambda pair: pair[0][0]):
         line = lines[index]
         for row in group:
             result.append({**row, 'upd_line': index, 'price': line.get('price'),
-                           'vat': line.get('vat'), 'expected_qty': quantities[index, pid]})
+                           'vat': line.get('vat'), 'expected_qty': quantities.get((index, pid))})
     remaining_plan = [p for p in plan if p.get('product_id') not in product_lines]
     result.extend(_prepare_product_rows(extra, remaining_plan, meta, include_marked))
     return result
+
+
+def _apply_xml_line_quantities(lines, line_products, buckets, quantities):
+    # КолТов is the financial total even when a box expands into multiple products.
+    for index, products in enumerate(line_products):
+        total = lines[index].get('expected_qty')
+        if not products or total is None:
+            continue
+        if total == 0 and all(i.get('quantity') is None for i in lines[index]['items']):
+            continue  # Older imports also stored a missing КолТов as zero.
+        for pid in products[1:]:
+            if quantities[index, pid] is None:
+                quantities[index, pid] = sum(MoySkladService._scan_units(s) for s in buckets[index, pid])
+        remainder = total - sum(quantities[index, pid] for pid in products[1:])
+        if remainder < 0:
+            raise ValueError('Количество вложенных товаров превышает количество в строке УПД.')
+        quantities[index, products[0]] = remainder
+
+
+def _distribute_product_marks(buckets, quantities, product_lines, overflow):
+    remaining = quantities.copy()
+    for key, group in list(buckets.items()):
+        if remaining.get(key) is None:
+            continue
+        kept = []
+        for row in group:
+            if row.get('is_barcode'):
+                continue  # Financial quantity already comes from КолТов.
+            units = MoySkladService._scan_units(row)
+            if units <= remaining[key]:
+                kept.append(row)
+                remaining[key] -= units
+            else:
+                overflow[key[1]].append(row)
+        buckets[key] = kept
+
+    # Reserve explicitly assigned marks first. Move only the excess, in XML
+    # order, so a retry with a different database scan order yields the same CIS.
+    for pid, group in overflow.items():
+        slots = sorted(key for key in product_lines[pid] if remaining[key] is not None and remaining[key] > 0)
+        for row in group:
+            if row.get('is_barcode'):
+                continue
+            units = MoySkladService._scan_units(row)
+            key = next((k for k in slots if remaining[k] >= units), None)
+            if key is None:
+                raise ValueError('Количество марок товара превышает доступное количество в строках УПД. Проверьте марки и количество товара.')
+            buckets[key].append(row)
+            remaining[key] -= units
+            if remaining[key] == 0:
+                slots.remove(key)

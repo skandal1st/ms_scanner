@@ -894,11 +894,6 @@ class MoySkladService:
                 if created:
                     pending.append((key, candidates))
                 continue
-            if not created and group_count[pid] == 1:
-                # A single source line can already occupy several MS rows.
-                matches.update((i, key) for i in candidates)
-                candidates.clear()
-                continue
             item = group[0]
             price = item.get('price')
             cents = round(price * 100) if price is not None else None
@@ -906,7 +901,9 @@ class MoySkladService:
                         if (cents is None or rows[i].get('price') == cents)
                         and (item.get('vat') is None or rows[i].get('vat') == item['vat'])]
             if matching:
-                quantity = max(item.get('expected_qty') or 0, sum(self._scan_units(s) for s in group))
+                quantity = item.get('expected_qty')
+                if quantity is None:
+                    quantity = sum(self._scan_units(s) for s in group)
                 index = min(matching, key=lambda i: (rows[i].get('quantity') != quantity, rows[i].get('id') or ''))
                 candidates.remove(index)
                 matches[index] = key
@@ -915,6 +912,8 @@ class MoySkladService:
         for key, candidates in pending:
             if candidates:
                 matches[candidates.pop(0)] = key
+        if not created and any(available.get(key[0]) for key in groups if isinstance(key, tuple)):
+            raise ValueError('В поступлении МойСклад больше строк товара, чем в УПД. Сверьте существующие позиции перед отправкой.')
         return matches
 
     async def get_shipment_states(self) -> list[dict]:
@@ -1047,7 +1046,6 @@ class MoySkladService:
         pending = {key: deque(group) for key, group in groups.items()}
         row_keys = [line_matches.get(i, self._product_id_from_position(row)) for i, row in enumerate(ms_rows)]
         last_row = {key: i for i, key in enumerate(row_keys)}
-        row_count = Counter(row_keys)
         ordered_positions = []
         allocated = []
         for i, row in enumerate(ms_rows):
@@ -1065,7 +1063,8 @@ class MoySkladService:
                     item = remaining.popleft()
                     take.append(item)
                     units += self._scan_units(item)
-                payload["quantity"] = max(units, take[0].get('expected_qty') or 0) if row_count[key] == 1 else units
+                xml_quantity = take[0].get('expected_qty') if isinstance(key, tuple) else None
+                payload["quantity"] = xml_quantity if xml_quantity is not None else units
             ordered_positions.append((key, payload))
             allocated.append((row, take))
 
@@ -1076,7 +1075,8 @@ class MoySkladService:
             group = list(remaining)
             pid = group[0]['product_id']
             units = sum(self._scan_units(item) for item in group)
-            qty = max(units, quantities.get(key) or 0)
+            planned = quantities.get(key)
+            qty = planned if isinstance(key, tuple) and planned is not None else max(units, planned or 0)
             payload = {"assortment": {"meta": {
                 "href": f"{self.base_url}/entity/product/{pid}",
                 "type": "product", "mediaType": "application/json",
