@@ -6,18 +6,30 @@ from app.services.moysklad import MoySkladService
 from app.services.plan_matching import unique_plan_product
 
 
+def scan_code_filter(codes):
+    from sqlalchemy import Text, any_, literal, or_
+    from sqlalchemy.dialects.postgresql import ARRAY
+    from app.db.models import Scan
+    values = literal(list(codes), type_=ARRAY(Text()))
+    return or_(Scan.code == any_(values), Scan.original_code == any_(values))
+
+
+def xml_scan_scope(meta):
+    lines = (meta or {}).get('physical_plan') or []
+    if not lines or 'xml_index' not in lines[0]:
+        return ()
+    codes = {code for line in lines for item in line['items'] for code in item['codes']}
+    codes.update(meta.get('supplemental_codes') or [])
+    return (scan_code_filter(codes),)
+
+
 def prepare_supply_without_cz(plan, meta):
     """Use document quantities, never aggregate/code counts, in the no-CZ flow."""
     plan = plan or []
-    for line in (meta or {}).get('physical_plan') or []:
-        if 'items' in line:
-            items = line['items']
-            products = {item.get('product_id') for item in items}
-            if None in products:
-                raise ValueError('Сопоставьте все позиции УПД с товарами МойСклад перед приёмкой без ЧЗ.')
-            if products - {item['product_id'] for item in items if item.get('quantity') is not None}:
-                raise ValueError('В строке УПД не указано количество для каждого товара. Проверьте количества перед приёмкой без ЧЗ.')
-            continue
+    lines = (meta or {}).get('physical_plan') or []
+    if lines and 'items' in lines[0]:
+        return _prepare_xml_rows([], lines, include_marked=True, preflight=False)
+    for line in lines:
         if line.get('product_id'):
             continue
         matches = {p['product_id'] for gtin in line.get('gtins', [])
@@ -32,12 +44,12 @@ def prepare_supply_without_cz(plan, meta):
     return rows
 
 
-def prepare_supply_rows(rows, plan, meta, *, include_marked=False):
+def prepare_supply_rows(rows, plan, meta, *, include_marked=False, preflight=False):
     plan = [p for p in (plan or []) if isinstance(p, dict)]
     meta = meta or {}
     lines = meta.get('physical_plan') or []
     if lines and 'items' in lines[0]:
-        return _prepare_xml_rows(rows, plan, meta, lines, include_marked)
+        return _prepare_xml_rows(rows, lines, include_marked, preflight, meta.get('supplemental_codes', ()))
 
     # Older XML imports retained per-line quantities but only one price per product.
     seen_products = set()
@@ -80,92 +92,75 @@ def _prepare_product_rows(rows, plan, meta, include_marked):
     return sorted(result, key=lambda row: order.get(row.get('product_id'), len(order)))
 
 
-def _prepare_xml_rows(rows, plan, meta, lines, include_marked):
-    """Keep XML quantities and prices; use spare slots only within the same product."""
+def _prepare_xml_rows(rows, lines, include_marked, preflight, supplemental_codes=()):
+    """One financial position per source line, even when marking GTINs differ."""
     by_code = {}
-    product_lines = defaultdict(list)
-    quantities = {}
-    unmarked = set()
-    line_products = [[] for _ in lines]
     for index, line in enumerate(lines):
         for item in line['items']:
-            pid = item.get('product_id')
-            if pid:
-                key = (index, pid)
-                if key not in quantities:
-                    line_products[index].append(pid)
-                    product_lines[pid].append(key)
-                    quantities[key] = None
-                if item.get('quantity') is not None:
-                    quantities[key] = (quantities[key] or 0) + item['quantity']
-                if not item['codes']:
-                    unmarked.add(key)
             for code in item['codes']:
                 by_code.setdefault(code, (index, len(by_code)))
-
-    buckets = defaultdict(list)
-    overflow = defaultdict(list)
-    extra = []
 
     def source(row):
         return by_code.get(row.get('code')) or by_code.get(row.get('source_code')) or (len(lines), len(by_code))
 
+    by_line = defaultdict(list)
+    supplemental = []
+    supplemental_codes = set(supplemental_codes)
     seen = set()
     for row in sorted(rows, key=lambda r: (source(r), r.get('code') or '')):
-        pid = row.get('product_id')
         index, _ = source(row)
-        if index == len(lines) and pid not in product_lines:
-            extra.append(row)
-            continue
         if row.get('code') and not row.get('is_barcode'):
             mark = MoySkladService._cis_dedup_key(row['code'])
             if mark in seen:
                 continue
             seen.add(mark)
-        if index == len(lines):
-            overflow[pid].append(row)
-            continue
-        if (index, pid) not in quantities and pid:
-            # A previously unmatched box can resolve to a product in the worker.
-            line_products[index].append(pid)
-            product_lines[pid].append((index, pid))
-            quantities[index, pid] = None
-        buckets[index, pid].append(row)
+        if index < len(lines):
+            by_line[index].append(row)
+        elif ('xml_index' not in lines[0] or row.get('code') in supplemental_codes
+              or row.get('source_code') in supplemental_codes):
+            supplemental.append(row)
 
-    _apply_xml_line_quantities(lines, line_products, buckets, quantities)
+    product_lines = defaultdict(list)
+    quantities = {}
+    buckets = {}
+    for index, line in enumerate(lines):
+        items = line['items']
+        group = by_line[index]
+        marked = any(item['codes'] for item in items)
+        if preflight and marked and not include_marked:
+            continue  # Only count rows eligible for quantity-only submission here.
+        products = {pid for pid in [line.get('product_id'), *(i.get('product_id') for i in items),
+                                    *(r.get('product_id') for r in group)] if pid}
+        number = line.get('line_number') or index + 1
+        if len(products) != 1 or (line.get('link_by_line') and not line.get('product_id')):
+            raise ValueError(f'Выберите один товар МойСклад для строки УПД {number}.')
+        pid = next(iter(products))
+        qty = line.get('expected_qty')
+        if qty is None and all(i.get('quantity') is not None for i in items):
+            qty = sum(i['quantity'] for i in items)
+        if qty is None or qty <= 0:
+            raise ValueError(f'Проверьте количество товара в строке УПД {number}.')
+        key = index, pid
+        quantities[key] = qty
+        product_lines[pid].append(key)
+        buckets[key] = group
+
+    overflow = defaultdict(list)
+    for row in supplemental:
+        if row.get('product_id') in product_lines:
+            overflow[row['product_id']].append(row)
+        elif supplemental_codes:
+            raise ValueError('Добавленная марка не соответствует ни одной позиции УПД. Проверьте выбранный товар.')
     _distribute_product_marks(buckets, quantities, product_lines, overflow)
-    for key, quantity in quantities.items():
-        if quantity and not buckets[key] and (rows or include_marked or key in unmarked):
-            buckets[key].append({'product_id': key[1], 'code': '', 'is_barcode': True,
-                                 'is_box': False, 'quantity': quantity})
-
     result = []
-    for (index, pid), group in sorted(buckets.items(), key=lambda pair: pair[0][0]):
-        line = lines[index]
+    for (index, pid), group in buckets.items():
+        qty = quantities[index, pid]
+        if not group:
+            group = [{'product_id': pid, 'code': '', 'is_barcode': True, 'is_box': False, 'quantity': qty}]
         for row in group:
-            result.append({**row, 'upd_line': index, 'price': line.get('price'),
-                           'vat': line.get('vat'), 'expected_qty': quantities.get((index, pid))})
-    remaining_plan = [p for p in plan if p.get('product_id') not in product_lines]
-    result.extend(_prepare_product_rows(extra, remaining_plan, meta, include_marked))
+            result.append({**row, 'product_id': pid, 'upd_line': index, 'expected_qty': qty,
+                           'price': lines[index].get('price'), 'vat': lines[index].get('vat')})
     return result
-
-
-def _apply_xml_line_quantities(lines, line_products, buckets, quantities):
-    # КолТов is the financial total even when a box expands into multiple products.
-    for index, products in enumerate(line_products):
-        total = lines[index].get('expected_qty')
-        if not products or total is None:
-            continue
-        if total == 0 and all(i.get('quantity') is None for i in lines[index]['items']):
-            continue  # Older imports also stored a missing КолТов as zero.
-        for pid in products[1:]:
-            if quantities[index, pid] is None:
-                quantities[index, pid] = sum(MoySkladService._scan_units(s) for s in buckets[index, pid])
-        remainder = total - sum(quantities[index, pid] for pid in products[1:])
-        if remainder < 0:
-            raise ValueError('Количество вложенных товаров превышает количество в строке УПД.')
-        quantities[index, products[0]] = remainder
-
 
 def _distribute_product_marks(buckets, quantities, product_lines, overflow):
     remaining = quantities.copy()

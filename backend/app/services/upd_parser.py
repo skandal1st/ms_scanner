@@ -93,26 +93,20 @@ def _localname(tag: str) -> str:
     return tag
 
 
-def _iter_by_localname(root: ET.Element, name: str):
-    """Все потомки (на любой глубине) с указанным локальным именем тега."""
-    for el in root.iter():
-        if _localname(el.tag) == name:
-            yield el
+def _children(node: ET.Element, name: str):
+    return (child for child in node if _localname(child.tag) == name)
 
 
 def _first_child(el: ET.Element, name: str) -> Optional[ET.Element]:
-    for child in el:
-        if _localname(child.tag) == name:
-            return child
-    return None
+    return next(_children(el, name), None)
 
 
 def _text_codes(node: Optional[ET.Element], names: tuple[str, ...]) -> list[str]:
-    """Собрать тексты потомков node с локальными именами из names (рекурсивно)."""
+    """Прочитать коды из полей данного блока идентификации."""
     out: list[str] = []
     if node is None:
         return out
-    for el in node.iter():
+    for el in node:
         if _localname(el.tag) in names:
             val = (el.text or "").strip()
             if val:
@@ -181,7 +175,7 @@ def _unit_price_with_vat(tov: ET.Element) -> Optional[float]:
 
 def _info_gtin(tov: ET.Element) -> Optional[str]:
     """GTIN из ``<ИнфПолФХЖ2 Идентиф="GTIN" Значен="…"/>`` (прямой потомок СведТов)."""
-    for el in _iter_by_localname(tov, "ИнфПолФХЖ2"):
+    for el in _children(tov, "ИнфПолФХЖ2"):
         if (el.get("Идентиф") or "").strip().upper() == "GTIN":
             val = (el.get("Значен") or "").strip()
             if val:
@@ -229,13 +223,17 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
     # Реквизиты счёта-фактуры из шапки (СвСчФакт): номер и дата документа.
     invoice_number: Optional[str] = None
     invoice_date: Optional[str] = None
-    schf = next(_iter_by_localname(root, "СвСчФакт"), None)
+    document = _first_child(root, "Документ")
+    if document is None:
+        document = root
+    table = document if _localname(document.tag) == "ТаблСчФакт" else _first_child(document, "ТаблСчФакт")
+    schf = _first_child(document, "СвСчФакт")
     if schf is not None:
         invoice_number = (schf.get("НомерДок") or "").strip() or None
         invoice_date = (schf.get("ДатаДок") or "").strip() or None
 
     positions: list[ParsedPosition] = []
-    for tov in _iter_by_localname(root, "СведТов"):
+    for tov in _children(table, "СведТов") if table is not None else ():
         name = (tov.get("НаимТов") or "").strip()
 
         # Артикул/код товара из ДопСведТов/@КодТов (в 5.03 — артикул, не GTIN).
@@ -249,7 +247,8 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
         # — короб SSCC). КИЗ → штучные, НомУпак/ИдентТрансУпак → агрегаты/короба.
         codes: list[str] = []
         packages: list[str] = []
-        for ident in _iter_by_localname(tov, "НомСредИдентТов"):
+        for ident in (node for parent in [tov, *_children(tov, "ДопСведТов")]
+                      for node in _children(parent, "НомСредИдентТов")):
             codes.extend(_text_codes(ident, ("КИЗ",)))
             packages.extend(_text_codes(ident, ("НомУпак",)))
             kiz_attr = (ident.get("КИЗ") or "").strip()
@@ -260,8 +259,6 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
                 if v:
                     packages.append(v)
 
-        # Позиции без маркировки (КИЗ/НомУпак) для приёмки нам неинтересны, но
-        # позицию всё равно отдаём — фронт покажет «без марок».
         quantity = _quantity(tov.get("КолТов"))
         gtin = _gtin_for_position(codes, _info_gtin(tov), article)
 
@@ -289,7 +286,7 @@ def parse_upd_503(xml_bytes: bytes) -> ParsedUpd:
     # <БезНДС> вместо <СумНал> → total_vat остаётся None (фронт покажет отсутствие).
     total_amount: Optional[float] = None
     total_vat: Optional[float] = None
-    vsego = next(_iter_by_localname(root, "ВсегоОпл"), None)
+    vsego = _first_child(table, "ВсегоОпл")
     if vsego is not None:
         total_amount = _quantity(vsego.get("СтТовУчНалВсего"))
         sumnal_vsego = _first_child(vsego, "СумНалВсего")

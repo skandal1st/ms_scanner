@@ -915,6 +915,7 @@ export interface ImportPositionResult {
   name: string
   xml_index?: number | null
   source_codes?: string[] | null
+  link_by_line?: boolean
   gtin: string | null
   article: string | null
   quantity: number | null

@@ -982,6 +982,9 @@ async def _verify_document_async(document_id: str, user_id: str, recheck_all: bo
             filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
                        Scan.status.in_([ScanStatus.scanned, *SHIPMENT_STATUSES, ScanStatus.invalid, ScanStatus.unknown_product])
                        if recheck_all else Scan.status == ScanStatus.scanned]
+            if getattr(getattr(doc, 'kind', None), 'value', None) == 'supply':
+                from app.services.supply_positions import xml_scan_scope
+                filters.extend(xml_scan_scope(getattr(doc, 'upd_meta', None)))
             if baseline_ids:
                 filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
             res = await db.execute(
@@ -1488,9 +1491,11 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
         # через ЧЗ (ниже) s.gtin становится unit-GTIN пачки и резолвится в каталоге МС.
         # Без этого исключения такие короба тихо выпадали из приёмки. Единичные КМ со
         # статусом unknown_product НЕ рескьюим — их GTIN действительно неизвестен.
+        from app.services.supply_positions import xml_scan_scope
+        scope = xml_scan_scope(getattr(doc, 'upd_meta', None)) if kind == 'supply' else ()
         result = await db.execute(
             select(Scan).where(
-                Scan.document_id == document_id,
+                Scan.document_id == document_id, *scope,
                 or_(
                     Scan.status.in_(SHIPMENT_STATUSES if kind == 'demand' else (ScanStatus.valid, ScanStatus.overflow)),
                     and_(
@@ -1504,11 +1509,11 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
 
         from app.services.supply_positions import prepare_supply_rows, prepare_supply_without_cz
         quantity_only = (prepare_supply_without_cz(doc.plan, getattr(doc, 'upd_meta', None)) if skip_acceptance_cz
-                         else prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None)) if kind == 'supply' else [])
+                         else prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), preflight=True) if kind == 'supply' else [])
         if not valid_scans and not quantity_only:
             raise ValueError("Нет проверенных марок или товаров для отправки")
         unresolved = (await db.execute(select(Scan.id).where(
-            Scan.document_id == document_id,
+            Scan.document_id == document_id, *scope,
             Scan.status.in_([ScanStatus.pending, ScanStatus.scanned]),
         ).limit(1))).first()
         if unresolved and not skip_acceptance_cz:

@@ -230,13 +230,23 @@ async def _link_gtin_core(
             ),
         )
     )
+    meta = doc.upd_meta or {}
+    physical = meta.get('physical_plan') or []
+    indexed = any('xml_index' in line for line in physical)
+    indices = {i for i, line in enumerate(physical) if not line.get('link_by_line')
+               and any(item['codes'] and normalize_gtin_key(item.get('gtin')) == target_key
+                       for item in line.get('items', []))}
+    codes = {code for i in indices for item in physical[i]['items'] for code in item['codes']}
     matched: List[Scan] = [
         s for s in scans_q.scalars().all()
         if normalize_gtin_key(s.gtin) == target_key
+        and (not indexed or s.code in codes or s.original_code in codes)
     ]
 
     expected_qty: Optional[int] = None
-    if doc.plan:
+    if indexed:
+        expected_qty = sum(physical[i].get('expected_qty') or 0 for i in indices)
+    elif doc.plan:
         for p in doc.plan:
             if isinstance(p, dict) and normalize_gtin_key(p.get("gtin")) == target_key:
                 try:
@@ -281,6 +291,14 @@ async def _link_gtin_core(
                 product_name=name,
             )
         )
+
+    if indexed:
+        doc.upd_meta = {**meta, 'physical_plan': [
+            {**line, 'product_id': pid, 'items': [{**item, 'product_id': pid} for item in line['items']]}
+            if i in indices else line for i, line in enumerate(physical)]}
+        doc.plan = [{**p, 'product_id': pid, 'product_name': name or p['product_name']}
+                    if p.get('xml_index') in indices else p for p in doc.plan or []]
+        return matched
 
     # Цена/НДС/кол-во из УПД для привязанного товара в план документа.
     if matched:
@@ -426,12 +444,7 @@ async def link_upd_position_to_product(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Привязать строку УПД без GTIN/КМ к товару МойСклад.
-
-    Такая строка не создаёт Scan, поэтому обычная GTIN-привязка к ней неприменима.
-    Сохраняем выбор в метаданных документа и плане: UI сразу показывает выбранный
-    товар, а повторный импорт того же УПД сможет использовать эту связь.
-    """
+    """Привязать отдельную строку УПД и её марки к выбранному товару."""
     doc = await _get_document_owned(db, body.document_id, current_user.id)
     if str(doc.kind.value if hasattr(doc.kind, "value") else doc.kind) != "supply":
         raise HTTPException(status_code=400, detail="Документ не является приёмкой")
@@ -472,6 +485,28 @@ async def link_upd_position_to_product(
     if physical_plan:
         meta['physical_plan'] = physical_plan
     doc.upd_meta = meta
+
+    if any('xml_index' in p for p in physical_plan):
+        indices = {i for i, p in enumerate(physical_plan) if p.get('position_key') == key}
+        if len(indices) != 1:
+            raise HTTPException(409, 'Строка УПД изменилась. Загрузите документ повторно.')
+        line = physical_plan[next(iter(indices))]
+        line['link_by_line'] = True
+        codes = {code for item in line['items'] for code in item['codes']}
+        if codes:
+            from app.services.supply_positions import scan_code_filter
+            scans = (await db.execute(select(Scan).where(
+                Scan.document_id == doc.id, scan_code_filter(codes)))).scalars().all()
+            for scan in scans:
+                scan.moysklad_product_id = pid
+                scan.product_name = product_name
+                if scan.status == ScanStatus.unknown_product:
+                    scan.status = ScanStatus.valid
+                    scan.error_message = None
+        doc.plan = [{**p, 'product_id': pid, 'product_name': product_name or p['product_name'], 'link_by_line': True}
+                    if p.get('xml_index') in indices else p for p in doc.plan or []]
+        await db.commit()
+        return LinkUpdPositionResponse(position_key=key, product_id=pid, product_name=product_name)
 
     # Добавляем/обновляем товар в плане. Для уже существующей позиции поступления
     # это только уточняет отображение; для пустого поступления сохраняет реквизиты УПД.

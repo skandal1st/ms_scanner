@@ -33,7 +33,7 @@ class PlanItem(BaseModel):
     product_name: str
     folder_id: Optional[str] = None
     folder_name: Optional[str] = None
-    expected_qty: int
+    expected_qty: float
     marked: Optional[bool] = None
 
 
@@ -555,6 +555,8 @@ async def refresh_plan(
     _ensure_supported_kind(doc.kind.value)
     if not doc.moysklad_id:
         raise HTTPException(400, "Документ не привязан к МойСклад")
+    if doc.kind == DocumentKind.supply and (doc.upd_meta or {}).get('physical_plan'):
+        return _doc_to_response(doc, await _scan_count(db, doc.id))
     ms = await _get_ms_service(current_user, db)
     if doc.kind == DocumentKind.demand:
         from app.services.shipment_plan_refresh import refresh
@@ -967,6 +969,9 @@ async def verify_document(
     filters = [Scan.document_id == document_id, Scan.is_barcode.is_(False),
                Scan.status.in_([ScanStatus.scanned, *SHIPMENT_STATUSES, ScanStatus.invalid, ScanStatus.unknown_product])
                if recheck_all else Scan.status == ScanStatus.scanned]
+    if getattr(doc, 'kind', None) == DocumentKind.supply:
+        from app.services.supply_positions import xml_scan_scope
+        filters.extend(xml_scan_scope(getattr(doc, 'upd_meta', None)))
     if baseline_ids:
         filters.append(Scan.id.not_in([UUID(value) for value in baseline_ids]))
     pending_q = await db.execute(
@@ -1041,16 +1046,18 @@ async def process_document(
     from app.db.models import Scan, ScanStatus
 
     # Не отправляем в МС непроверенные марки: сначала «Проверить марки».
+    from app.services.supply_positions import xml_scan_scope
+    scope = xml_scan_scope(getattr(doc, 'upd_meta', None)) if doc.kind == DocumentKind.supply else ()
     scanned_q = await db.execute(
         select(func.count(Scan.id)).where(
-            Scan.document_id == document_id,
+            Scan.document_id == document_id, *scope,
             Scan.status.in_([ScanStatus.scanned, ScanStatus.pending]),
         )
     )
     scanned_count = scanned_q.scalar_one()
     if scanned_count and skip_cz:
         resolving_boxes = (await db.execute(select(Scan.id).where(
-            Scan.document_id == document_id, Scan.status == ScanStatus.pending,
+            Scan.document_id == document_id, *scope, Scan.status == ScanStatus.pending,
             or_(and_(Scan.is_box.is_(True), Scan.box_quantity.is_(None)),
                 Scan.verification['source'].astext == 'packaging_recheck'),
         ).limit(1))).scalar_one_or_none()
@@ -1069,7 +1076,7 @@ async def process_document(
     # их нельзя отправить в МС без сопоставления товара.
     unknown_q = await db.execute(
         select(func.count(Scan.id)).where(
-            Scan.document_id == document_id,
+            Scan.document_id == document_id, *scope,
             Scan.status == ScanStatus.unknown_product,
         )
     )
@@ -1085,12 +1092,12 @@ async def process_document(
 
     from app.worker.tasks import process_document_task
     count = (await db.execute(select(func.count(Scan.id)).where(
-        Scan.document_id == document_id,
+        Scan.document_id == document_id, *scope,
         Scan.status.in_(SHIPMENT_STATUSES if doc.kind == DocumentKind.demand else (ScanStatus.valid, ScanStatus.overflow))
     ))).scalar_one()
     from app.services.supply_positions import prepare_supply_rows
     try:
-        quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz) if doc.kind == DocumentKind.supply else []
+        quantity_only = prepare_supply_rows([], doc.plan, getattr(doc, 'upd_meta', None), include_marked=skip_cz, preflight=True) if doc.kind == DocumentKind.supply else []
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     if not count and not quantity_only:

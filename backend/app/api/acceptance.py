@@ -10,6 +10,7 @@
 """
 
 from collections import Counter
+from hashlib import sha256
 from datetime import datetime, timezone
 from typing import Optional, List
 from uuid import UUID
@@ -86,6 +87,7 @@ class ImportPositionResult(BaseModel):
     name: str
     xml_index: Optional[int] = None
     source_codes: Optional[List[str]] = None
+    link_by_line: bool = False
     gtin: Optional[str] = None
     article: Optional[str] = None
     quantity: Optional[float] = None
@@ -621,7 +623,7 @@ async def _resolve_product(
 
     Резолв по артикулу нужен для коробных (SSCC/ИдентТрансУпак) позиций без штучных
     КМ: собственного GTIN у них нет, единственный надёжный идентификатор — КодТов."""
-    cache_key = gtin or (f"art:{_norm_article(article)}" if article else None)
+    cache_key = f"{gtin or ''}|{_norm_article(article) or ''}" if gtin or article else None
     if cache_key and cache_key in cache:
         return cache[cache_key]
 
@@ -815,58 +817,19 @@ async def _import_upd_bytes_traced(
     key_counts = Counter(legacy_keys)
     position_keys = [key if key_counts[key] == 1 else f'xml:{i}' for i, key in enumerate(legacy_keys)]
 
-    # Цена/НДС/кол-во из УПД по GTIN позиции — сохраняем НЕЗАВИСИМО от того,
-    # сопоставился ли товар. Нужны при ручной привязке GTIN (link-gtin), чтобы
-    # перенести их в план и записать в поступление МС: для пустых поступлений
-    # GTIN'ы часто резолвятся вручную, а на этом этапе цена/НДС из плана уже нет.
-    upd_positions: dict[str, dict] = {}
-
-    def _record_upd_price(pos: ParsedPosition, gkey: Optional[str], *, with_qty: bool):
-        if not gkey:
-            return
-        info: dict = {}
-        # Имя позиции из УПД — нужно для авто-подсказок сопоставления GTIN↔товар
-        # (match-suggestions ищет товар в МС по этому имени, когда у скана его нет).
-        if pos.name:
-            info["name"] = pos.name
-        if pos.price is not None:
-            info["price"] = pos.price
-        if pos.vat is not None:
-            info["vat"] = pos.vat
-        # Кол-во (КолТов) относится к строке позиции в целом — сохраняем только
-        # под GTIN строки, не под GTIN отдельных упаковок набора.
-        if with_qty and pos.quantity is not None:
-            try:
-                info["quantity"] = int(pos.quantity)
-            except (TypeError, ValueError):
-                pass
-        if info:
-            upd_positions.setdefault(gkey, info)
-
-    for pos in positions:
-        # GTIN строки позиции — с кол-вом.
-        _record_upd_price(pos, normalize_gtin_key(pos.gtin), with_qty=True)
-        # GTIN каждого кода/упаковки набора — та же цена/НДС (без кол-ва). Нужно,
-        # чтобы ручная привязка НомУпак-GTIN к товару подхватила закупочную цену.
-        for code in pos.codes:
-            _record_upd_price(pos, _code_gtin(code, None), with_qty=False)
-        for pkg in pos.packages:
-            _record_upd_price(pos, _package_gtin(pkg, None), with_qty=False)
+    # GTIN index is only for suggesting product names. Financials belong to XML rows.
+    upd_positions = {}
 
     # Реквизиты счёта-фактуры из шапки УПД → для комментария поступления МС.
     meta: dict = dict(doc.upd_meta or {})
-    if parsed.invoice_number or parsed.invoice_date:
-        meta["invoice_number"] = parsed.invoice_number
-        meta["invoice_date"] = parsed.invoice_date
-    if upd_positions:
-        meta["positions"] = {**(meta.get("positions") or {}), **upd_positions}
-    if meta:
-        doc.upd_meta = meta
+    digest = sha256(raw).hexdigest()
+    if meta.get('xml_digest') not in (None, digest):
+        meta.pop('manual_position_links', None)
+        meta.pop('supplemental_codes', None)
+    meta.update(xml_digest=digest, invoice_number=parsed.invoice_number,
+                invoice_date=parsed.invoice_date, positions=upd_positions)
 
     ms = await _maybe_ms_service(current_user, db)
-    # ЧЗ для разворота коробов (AI-02 и пр. агрегаты) на импорте — best-effort:
-    # без валидного токена короба останутся unknown_product и определятся при отправке.
-    cz = await _maybe_cz_service(current_user, db, doc.organization_profile_id)
 
     # План привязанного поступления МС: gtin → (product_id, product_name) и
     # КодТов/артикул → (product_id, product_name). Позиции УПД сопоставляются с
@@ -874,7 +837,7 @@ async def _import_upd_bytes_traced(
     plan_map: dict[str, tuple[str, Optional[str]]] = {}
     article_map: dict[str, tuple[str, Optional[str]]] = {}
     for p in doc.plan or []:
-        if not isinstance(p, dict):
+        if not isinstance(p, dict) or p.get('link_by_line'):
             continue
         pid = p.get("product_id")
         if not (pid and isinstance(pid, str)):
@@ -895,343 +858,114 @@ async def _import_upd_bytes_traced(
             if a:
                 article_map.setdefault(a, (pid, name))
 
-    # Уже имеющиеся коды документа — чтобы не плодить дубли при повторной загрузке.
-    stored_scans = (await db.execute(
-        select(Scan.code, Scan.original_code, Scan.is_box, Scan.gtin, Scan.moysklad_product_id,
-               Scan.product_name, Scan.box_quantity).where(Scan.document_id == document_id)
-    )).all()
-    existing_codes = {code for s in stored_scans for code in (s.code, s.original_code) if code}
-    existing_boxes = {s.code: s for s in stored_scans if s.is_box}
-
-    resolve_cache: dict[str, tuple[Optional[str], Optional[str]]] = {}
-    results: list[ImportPositionResult] = []
-    unmatched: set[str] = set()
-    created = 0
-    skipped = 0
-    # Накопление товарных позиций для плана: product_id → {gtin, product_name,
-    # expected_qty}. expected_qty = сумма КолТов (УПД) по «основной» группе позиции.
-    # Сводка нужна для сопоставления GTIN. Цена и марки для записи в МС
-    # сохраняются ниже по исходным строкам, даже когда product_id совпадает.
-    plan_acc: dict[str, dict] = {}
-
-    for xml_index, pos in enumerate(positions):
-        # Группируем коды позиции по их СОБСТВЕННОМУ GTIN (01+GTIN внутри кода).
-        # Блочные/смешанные позиции содержат коды с разными GTIN — каждый код
-        # резолвится в свой товар, а не в один GTIN на всю позицию (вариант B).
-        groups: dict[Optional[str], dict[str, list[str]]] = {}
-        order: list[Optional[str]] = []
-
-        def _bucket(g: Optional[str]) -> dict[str, list[str]]:
-            if g not in groups:
-                groups[g] = {"codes": [], "packages": []}
-                order.append(g)
-            return groups[g]
-
-        for code in pos.codes:
-            code = code.strip()
-            if code:
-                _bucket(_code_gtin(code, pos.gtin))["codes"].append(code)
-        # Агрегаты/упаковки — сохраняем целиком (без разворота). Блок (НомУпак)
-        # несёт свой 01+GTIN, отличный от GTIN единиц. НО если в этой же строке УПД
-        # (один НомСтр = один товар) есть штучные КИЗ, блок — просто групповая
-        # упаковка тех же банок: относим его к GTIN единиц позиции, чтобы товар не
-        # двоился на «банку» и «блок» при сопоставлении. При отправке блок всё равно
-        # разворачивается в ЧЗ на штучные КМ и пишется в тот же товар МС. В блок-онли
-        # позиции (штучных КИЗ нет) блок несёт единственный идентификатор товара —
-        # берём его собственный GTIN. Транспортная упаковка (ИдентТрансУпак, SSCC)
-        # GTIN не несёт → её первые 14 цифр НЕ GTIN, относим к товару позиции.
-        has_leaf_codes = any(c.strip() for c in pos.codes)
-        for pkg in pos.packages:
-            pkg = pkg.strip()
-            if pkg:
-                pkg_gtin = pos.gtin if has_leaf_codes else _package_gtin(pkg, pos.gtin)
-                _bucket(pkg_gtin)["packages"].append(pkg)
-
-        # Позиция без кодов — показываем строку «без марок» (как раньше).
-        if not order:
-            manual_link = ((doc.upd_meta or {}).get("manual_position_links") or {}).get(
-                position_keys[xml_index]
-            ) or {}
-            product_id = manual_link.get("product_id")
-            product_name = manual_link.get("product_name")
-            if not product_id:
-                product_id, product_name = await _resolve_product(
-                    pos.gtin,
-                    pos.article,
-                    current_user.id,
-                    ms,
-                    db,
-                    resolve_cache,
-                    plan_map,
-                    article_map,
-                )
-            matched = product_id is not None
-            if product_id:
-                entry = plan_acc.setdefault(
-                    product_id,
-                    {
-                        "gtin": normalize_gtin_key(pos.gtin),
-                        "product_id": product_id,
-                        "product_name": product_name,
-                        "expected_qty": 0,
-                        "marked": False,
-                    },
-                )
-                if pos.quantity is not None:
-                    try:
-                        entry["expected_qty"] += float(pos.quantity)
-                    except (TypeError, ValueError):
-                        pass
-                if pos.price is not None:
-                    entry["price"] = pos.price
-                if pos.vat is not None:
-                    entry["vat"] = pos.vat
-            results.append(
-                ImportPositionResult(
-                    name=pos.name,
-                    xml_index=xml_index,
-                    source_codes=[],
-                    gtin=pos.gtin,
-                    article=pos.article,
-                    quantity=pos.quantity,
-                    codes_count=0,
-                    packages_count=0,
-                    product_id=product_id,
-                    product_name=product_name,
-                    matched=matched,
-                    line_number=pos.line_number,
-                    price=pos.price,
-                    vat=pos.vat,
-                )
-            )
-            continue
-
-        for g in order:
-            bucket = groups[g]
-            product_id, product_name = await _resolve_product(
-                g, pos.article, current_user.id, ms, db, resolve_cache, plan_map, article_map
-            )
-            matched = product_id is not None
-            if g and not matched:
-                unmatched.add(g)
-            status = ScanStatus.valid if matched else ScanStatus.unknown_product
-
-            # КолТов позиции относим к товару «основной» (первой) группы — она же
-            # несёт GTIN единиц/строки УПД. Накапливаем по товару для плана.
-            if product_id:
-                entry = plan_acc.setdefault(
-                    product_id,
-                    {
-                        "gtin": g,
-                        "product_id": product_id,
-                        "product_name": product_name,
-                        "expected_qty": 0,
-                    },
-                )
-                # Цена/НДС из атрибутов СведТов относятся ко всему «набору» —
-                # проставляем их КАЖДОЙ товарной позиции (каждому НомУпак/GTIN
-                # внутри позиции), а не только «основной» группе. Иначе у всех
-                # товаров набора, кроме первого, закупочная цена в поступлении
-                # МС остаётся пустой.
-                if pos.price is not None:
-                    entry["price"] = pos.price
-                if pos.vat is not None:
-                    entry["vat"] = pos.vat
-                # КолТов относим к «основной» (первой) группе — она несёт GTIN
-                # строки/единиц УПД; для остальных групп кол-во неоднозначно.
-                if g == order[0] and pos.quantity:
-                    try:
-                        entry["expected_qty"] += int(pos.quantity)
-                    except (TypeError, ValueError):
-                        pass
-
-            for code in bucket["codes"]:
-                if code in existing_codes:
-                    skipped += 1
-                    continue
-                existing_codes.add(code)
-                db.add(
-                    Scan(
-                        document_id=document_id,
-                        code=code,
-                        gtin=g,
-                        moysklad_product_id=product_id,
-                        product_name=product_name,
-                        status=status,
-                    )
-                )
-                created += 1
-
-            # Короба/агрегаты. Если группа не сопоставилась по GTIN/артикулу, но есть
-            # агрегатные упаковки — разворачиваем КАЖДУЮ через ЧЗ, берём unit-GTIN
-            # вложенной пачки и резолвим товар по нему. Так короб с GTIN под AI 02
-            # (собственный GTIN ≠ unit-GTIN) корректно сопоставляется уже на импорте,
-            # а не только при отправке. child_codes/box_quantity сохраняем — воркер не
-            # разворачивает повторно. Резолв индивидуален: короба одной блок-позиции
-            # могут относиться к разным товарам. box_rows группирует упаковки по товару
-            # для строк таблицы (ключ None — не развёрнутые, идут в «основную» строку).
-            box_rows: dict[Optional[str], dict] = {}
-            for sscc in bucket["packages"]:
-                if sscc in existing_codes:
-                    skipped += 1
-                b_gtin, b_pid, b_name, b_status = g, product_id, product_name, status
-                b_children: Optional[list] = None
-                b_qty: Optional[int] = None
-                if sscc in existing_boxes:
-                    previous = existing_boxes[sscc]
-                    b_pid = previous.moysklad_product_id or product_id
-                    b_gtin = previous.gtin or g
-                    b_name = previous.product_name or product_name
-                    b_qty = previous.box_quantity
-                elif sscc not in existing_codes and cz is not None and b_pid is None:
-                    exp = await _expand_box_via_cz(sscc, cz)
-                    if exp and exp.get("gtin"):
-                        u_pid, u_name = await _resolve_product(
-                            exp["gtin"], pos.article, current_user.id, ms, db,
-                            resolve_cache, plan_map, article_map,
-                        )
-                        if u_pid:
-                            b_gtin = exp["gtin"]
-                            b_pid = u_pid
-                            b_name = u_name or exp.get("product_name")
-                            b_status = ScanStatus.valid
-                            b_children = exp["children"]
-                            b_qty = exp["qty"]
-                if sscc not in existing_codes:
-                    existing_codes.add(sscc)
-                    db.add(Scan(
-                        document_id=document_id,
-                        code=sscc,
-                        gtin=b_gtin,
-                        moysklad_product_id=b_pid,
-                        product_name=b_name,
-                        status=b_status,
-                        is_box=True,
-                        child_codes=b_children,
-                        box_quantity=b_qty,
-                    ))
-                    created += 1
-                # Развёрнутый короб добавляет свой товар и единицы в план, чтобы
-                # update_document создал позицию поступления с ценой/НДС из УПД.
-                if b_pid and b_pid != product_id:
-                    e = plan_acc.setdefault(
-                        b_pid,
-                        {
-                            "gtin": b_gtin,
-                            "product_id": b_pid,
-                            "product_name": b_name,
-                            "expected_qty": 0,
-                        },
-                    )
-                    if pos.price is not None:
-                        e["price"] = pos.price
-                    if pos.vat is not None:
-                        e["vat"] = pos.vat
-                    if b_qty:
-                        e["expected_qty"] += int(b_qty)
-                # Ключ для строки таблицы: развёрнутый через ЧЗ товар (≠ товара группы)
-                # выносим отдельной строкой; иначе относим к «основной» строке (None).
-                key = b_pid if (b_pid and b_pid != product_id) else None
-                row = box_rows.setdefault(
-                    key,
-                    {
-                        "product_id": b_pid if key else product_id,
-                        "product_name": b_name if key else product_name,
-                        "gtin": b_gtin if key else g,
-                        "codes": [],
-                        "quantity": 0,
-                    },
-                )
-                row["codes"].append(sscc)
-                row["quantity"] += b_qty or 0
-
-            # «Основная» строка группы: листовые коды + не развёрнутые короба. Если
-            # листовых кодов нет и ВСЕ короба развернулись в товары — пустую строку не
-            # добавляем (иначе показала бы ложное «не сопоставлен»).
-            base_pkgs = box_rows.get(None, {}).get("codes", [])
-            has_expanded = any(k is not None for k in box_rows)
-            if len(bucket["codes"]) or base_pkgs or not has_expanded:
-                results.append(
-                    ImportPositionResult(
-                        name=pos.name,
-                        xml_index=xml_index,
-                        source_codes=[*bucket["codes"], *base_pkgs],
-                        gtin=g,
-                        article=pos.article,
-                        # Кол-во (КолТов) — на «основную» строку позиции (GTIN единиц);
-                        # для отделившихся блочных GTIN кол-во неоднозначно → не показываем.
-                        quantity=pos.quantity if g == order[0] else None,
-                        codes_count=len(bucket["codes"]),
-                        packages_count=len(base_pkgs),
-                        product_id=product_id,
-                        product_name=product_name,
-                        matched=matched,
-                        line_number=pos.line_number,
-                        price=pos.price,
-                        vat=pos.vat,
-                    )
-                )
-            # Отдельные строки на каждый развёрнутый через ЧЗ товар.
-            for key, row in box_rows.items():
-                if key is None:
-                    continue
-                results.append(
-                    ImportPositionResult(
-                        name=pos.name,
-                        xml_index=xml_index,
-                        source_codes=row["codes"],
-                        gtin=row["gtin"],
-                        article=pos.article,
-                        quantity=row["quantity"] or None,
-                        codes_count=0,
-                        packages_count=len(row["codes"]),
-                        product_id=row["product_id"],
-                        product_name=row["product_name"],
-                        matched=True,
-                        line_number=pos.line_number,
-                        price=pos.price,
-                        vat=pos.vat,
-                    )
-                )
-
-    # Обновляем план документа позициями из УПД (товар + КолТов). Сохраняем
-    # pack_gtins из прежнего плана (если поступление МС уже имело позиции), КолТов
-    # УПД имеет приоритет по количеству.
-    existing_by_pid = {
-        p["product_id"]: p
-        for p in (doc.plan or [])
-        if isinstance(p, dict) and p.get("product_id")
-    }
-    new_plan: list[dict] = []
-    for pid, entry in plan_acc.items():
-        old = existing_by_pid.get(pid, {})
-        new_plan.append({**old, **entry, "pack_gtins": old.get("pack_gtins", [])})
-    # Сохраняем позиции прежнего плана, для которых в этом УПД не было кодов.
-    for pid, old in existing_by_pid.items():
-        if pid not in plan_acc:
-            new_plan.append(old)
-    doc.plan = new_plan
-    # Keep the source lines for physical verification and for the financial MS write.
+    stored = (await db.execute(select(Scan).where(Scan.document_id == document_id))).scalars().all()
+    existing = {code: scan for scan in stored for code in (scan.code, scan.original_code) if code}
+    previous_products = {p['product_id']: p for p in doc.plan or [] if p.get('product_id')}
+    manual_links = meta.get('manual_position_links') or {}
+    resolve_cache = {}
+    results = []
+    new_plan = []
     physical_plan = []
-    by_xml_index: dict[int, list[ImportPositionResult]] = {}
-    for result in results:
-        by_xml_index.setdefault(result.xml_index, []).append(result)
+    unmatched = set()
+    imported_codes = set()
+    created = skipped = 0
+    cz_loaded = False
+    cz = None
+
     for index, pos in enumerate(positions):
-        matching = by_xml_index[index]
-        aliases = set(filter(None, [normalize_gtin_key(pos.gtin), *[_code_gtin(c, None) for c in pos.codes]]))
-        product_ids = {v.product_id for v in matching if v.product_id}
-        pid = next(iter(product_ids)) if len(product_ids) == 1 else None
-        old = existing_by_pid.get(pid, {}) if pid else {}
-        physical_plan.append({'key': f'xml:{index}', 'product_id': pid,
-            'position_key': position_keys[index],
-            'product_name': pos.name or (next((v.product_name for v in matching if v.product_name), None)) or f'Позиция {index + 1}',
-            'gtins': sorted(aliases), 'expected_qty': float(pos.quantity or 0),
-            'price': pos.price, 'vat': pos.vat,
-            'items': [{'product_id': v.product_id, 'gtin': v.gtin, 'quantity': v.quantity,
-                       'codes': v.source_codes} for v in matching],
-            'pack_gtins': old.get('pack_gtins', []), 'pack_quantities': old.get('pack_quantities', {}),
-            'package_codes': list(pos.packages)})
-    doc.upd_meta = {**(doc.upd_meta or {}), 'physical_plan': physical_plan}
+        sources = [(code, _code_gtin(code, pos.gtin), False) for code in pos.codes]
+        sources.extend((code, pos.gtin if pos.codes else _package_gtin(code, pos.gtin), True)
+                       for code in pos.packages)
+        manual = manual_links.get(position_keys[index]) or {}
+        candidates = {}
+        observations = []
+        for code, gtin, is_box in sources or [(None, pos.gtin, False)]:
+            pid, name = manual.get('product_id'), manual.get('product_name')
+            if not pid:
+                pid, name = await _resolve_product(gtin, pos.article, current_user.id, ms, db,
+                                                   resolve_cache, plan_map, article_map)
+            expansion = None
+            previous = existing.get(code)
+            if is_box and not pid:
+                if previous and previous.moysklad_product_id:
+                    gtin, pid, name = previous.gtin, previous.moysklad_product_id, previous.product_name
+                else:
+                    if not cz_loaded:
+                        cz = await _maybe_cz_service(current_user, db, doc.organization_profile_id)
+                        cz_loaded = True
+                    if cz:
+                        expansion = await _expand_box_via_cz(code, cz)
+                        if expansion and expansion.get('gtin'):
+                            gtin = expansion['gtin']
+                            pid, name = await _resolve_product(gtin, pos.article, current_user.id, ms, db,
+                                                               resolve_cache, plan_map, article_map)
+            candidates[pid] = name
+            if code:
+                observations.append((code, gtin, is_box, expansion))
+
+        # A position in MS has one assortment. Several marking GTINs can be
+        # aliases of that assortment; different matches require a line-level choice.
+        pid = next(iter(candidates)) if len(candidates) == 1 else None
+        name = candidates.get(pid) if pid else None
+        aliases = list(dict.fromkeys(g for _, g, _, _ in observations if g))
+        for lookup_gtin in aliases or [pos.gtin]:
+            if lookup_gtin:
+                upd_positions.setdefault(lookup_gtin, {'name': pos.name})
+        line_link = bool(manual) or len({g for _, g, _, _ in observations}) > 1 or (bool(sources) and not aliases)
+        gtin = aliases[0] if len(aliases) == 1 else pos.gtin
+        codes = [code for code, _, _, _ in observations]
+        if not pid and codes and gtin and not line_link:
+            unmatched.add(gtin)
+        for code, g, is_box, expansion in observations:
+            if code in imported_codes:
+                skipped += 1
+                continue
+            imported_codes.add(code)
+            scan = existing.get(code)
+            if scan is None:
+                scan = Scan(document_id=document_id, code=code, is_box=is_box)
+                db.add(scan)
+                created += 1
+            else:
+                skipped += 1
+            scan.gtin, scan.moysklad_product_id, scan.product_name = g, pid, name
+            if scan.status in (None, ScanStatus.valid, ScanStatus.unknown_product, ScanStatus.overflow):
+                scan.status = ScanStatus.valid if pid else ScanStatus.unknown_product
+            if expansion and expansion.get('children'):
+                scan.child_codes = expansion['children']
+                scan.box_quantity = expansion['qty']
+
+        result = ImportPositionResult(name=pos.name, xml_index=index, line_number=pos.line_number,
+            article=pos.article, gtin=gtin, quantity=pos.quantity, price=pos.price, vat=pos.vat,
+            product_id=pid, product_name=name, matched=bool(pid), codes_count=len(pos.codes),
+            packages_count=len(pos.packages), source_codes=codes, link_by_line=line_link)
+        results.append(result)
+        old = previous_products.get(pid, {})
+        plan_row = {'xml_index': index, 'product_id': pid, 'product_name': name or pos.name,
+                    'gtin': gtin, 'gtins': aliases, 'article': pos.article, 'expected_qty': pos.quantity or 0,
+                    'price': pos.price, 'vat': pos.vat, 'marked': bool(codes), 'link_by_line': line_link,
+                    'pack_gtins': old.get('pack_gtins', []), 'pack_quantities': old.get('pack_quantities', {})}
+        new_plan.append(plan_row)
+        physical_plan.append({**plan_row, 'key': f'xml:{index}', 'position_key': position_keys[index],
+            'product_name': pos.name, 'line_number': pos.line_number,
+            'items': [{'product_id': pid, 'gtin': gtin, 'quantity': pos.quantity, 'codes': codes}],
+            'package_codes': pos.packages})
+    # A supplier can put every mark on one price line. A second line without
+    # marks can use the same article even when the selected MS receipt is empty.
+    products_by_article = {}
+    for row in new_plan:
+        article = _norm_article(row['article'])
+        if article and row['product_id']:
+            products_by_article.setdefault(article, {})[row['product_id']] = row['product_name']
+    for row, line, result in zip(new_plan, physical_plan, results):
+        matches = products_by_article.get(_norm_article(row['article']), {})
+        if not row['marked'] and not row['product_id'] and len(matches) == 1:
+            pid, name = next(iter(matches.items()))
+            row.update(product_id=pid, product_name=name)
+            line['product_id'] = line['items'][0]['product_id'] = pid
+            result.product_id, result.product_name, result.matched = pid, name, True
+    doc.plan = new_plan
+    doc.upd_meta = {**meta, 'physical_plan': physical_plan}
 
     await db.commit()
     await _enrich_unmatched_names_nk(db, document_id, unmatched, results)
@@ -1463,6 +1197,16 @@ async def import_marks(
                 )
             )
 
+    meta = doc.upd_meta or {}
+    lines = meta.get('physical_plan') or []
+    if lines and 'xml_index' in lines[0]:
+        source_codes = {code for line in lines for item in line['items'] for code in item['codes']}
+        extra = {normalize_sscc(code) for code in codes} - source_codes
+        if extra:
+            products = {line['product_id'] for line in lines if line.get('product_id')}
+            if any(r.product_id not in products for r in results):
+                raise HTTPException(409, 'Добавлять марки можно только для товаров, сопоставленных со строками УПД.')
+            doc.upd_meta = {**meta, 'supplemental_codes': sorted(extra.union(meta.get('supplemental_codes') or []))}
     await db.commit()
     await _enrich_unmatched_names_nk(db, document_id, unmatched, results)
     logger.info(

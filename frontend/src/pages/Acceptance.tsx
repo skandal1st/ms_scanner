@@ -31,6 +31,10 @@ function positionRowKey(p: ImportPositionResult) {
   return JSON.stringify([p.xml_index ?? p.line_number, p.gtin, p.name, p.source_codes?.[0]])
 }
 
+function linkGtin(p: ImportPositionResult) {
+  return !p.link_by_line && (p.codes_count || p.packages_count) ? p.gtin ?? undefined : undefined
+}
+
 interface AcceptancePageProps {
   /** Попап МС: поступление задано заранее (кнопка на документе Поступление);
    *  после успешной отправки в МС вызывается onSent (попап закрывает окно). */
@@ -121,7 +125,10 @@ export function AcceptancePage({
       }
       const { data: imp } = await acceptanceApi.importMarks(target.id, codes)
       setDoc(target)
-      setResult(imp)
+      setResult(previous => previous?.positions.some(p => p.xml_index != null)
+        ? { ...previous, created_scans: previous.created_scans + imp.created_scans,
+            skipped_duplicates: previous.skipped_duplicates + imp.skipped_duplicates }
+        : imp)
       reachGoal('acceptance_started')
       const { data: sc } = await scansApi.list(target.id)
       setScans(sc)
@@ -186,9 +193,10 @@ export function AcceptancePage({
         ? {
             ...r,
             positions: r.positions.map((p) => {
-              if (!p.codes_count && !p.packages_count) return p
+              if (!linkGtin(p)) return p
               const linked = sc.find(
-                (s) => s.gtin === p.gtin && s.moysklad_product_id,
+                (s) => s.gtin === p.gtin && s.moysklad_product_id &&
+                  (!p.source_codes || p.source_codes.includes(s.original_code ?? s.code) || p.source_codes.includes(s.code)),
               )
               return linked
                 ? {
@@ -208,7 +216,7 @@ export function AcceptancePage({
   // В панель сопоставления включаем ВСЕ строки, в том числе позиции УПД без
   // GTIN/КМ. Раньше они показывались как «нужен товар», но выбрать товар было негде.
   const unmatched = positions.filter((p) => !p.matched)
-  const unmatchedWithGtin = unmatched.filter((p) => Boolean(p.gtin) && (p.codes_count > 0 || p.packages_count > 0))
+  const unmatchedWithGtin = unmatched.filter(linkGtin)
   const blockingUnmatched = unmatched
 
   // Авто-подсказки сопоставления GTIN↔товар (МС-поиск по имени из УПД/ЧЗ).
@@ -538,13 +546,13 @@ export function AcceptancePage({
                   {docId && (
                     <InlineProductPicker
                       documentId={docId}
-                      gtin={p.codes_count || p.packages_count ? p.gtin ?? undefined : undefined}
-                      position={p.codes_count || p.packages_count ? undefined : p}
+                      gtin={linkGtin(p)}
+                      position={p}
                       onLinked={(product) => {
-                        if (p.codes_count || p.packages_count) void refreshAfterLink()
+                        if (linkGtin(p)) void refreshAfterLink()
                         else markPositionLinked(p, product)
                       }}
-                      suggestion={sugFor(p.gtin)}
+                      suggestion={sugFor(linkGtin(p))}
                     />
                   )}
                 </div>
@@ -572,12 +580,13 @@ export function AcceptancePage({
                 <ExpandedPosition
                   codes={p.source_codes ?? (p.gtin ? codesByGtin.get(p.gtin) ?? [] : [])}
                   documentId={docId}
-                  gtin={p.gtin}
+                  gtin={linkGtin(p)}
+                  position={p}
                   currentProductName={p.product_name}
                   // Перепривязка (link-gtin, чинит и GtinProductMap) не требует
                   // выбранного поступления МС — доступна и в режиме «только проверка».
                   canRelink={!alreadyAccepted}
-                  onLinked={refreshAfterLink}
+                  onLinked={product => linkGtin(p) ? void refreshAfterLink() : markPositionLinked(p, product)}
                 />
               )}
             />
@@ -652,24 +661,26 @@ function ExpandedPosition({
   codes,
   documentId,
   gtin,
+  position,
   currentProductName,
   canRelink,
   onLinked,
 }: {
   codes: string[]
   documentId: string | null
-  gtin?: string | null
+  gtin?: string
+  position: ImportPositionResult
   currentProductName?: string | null
   canRelink: boolean
-  onLinked: () => void
+  onLinked: (product: ProductSearchItem) => void
 }) {
   const shown = codes.slice(0, 50)
   return (
     <div>
-      {canRelink && documentId && gtin && (
+      {canRelink && documentId && (
         <div style={{ marginBottom: 12 }}>
           <div className="field-label" style={{ marginBottom: 4 }}>
-            Изменить товар МойСклад для GTIN {gtin}
+            {gtin ? `Изменить товар МойСклад для GTIN ${gtin}` : 'Изменить товар МойСклад для строки УПД'}
             {currentProductName && (
               <span className="text-muted" style={{ fontWeight: 400 }}>
                 {' '}(сейчас: {currentProductName})
@@ -679,6 +690,7 @@ function ExpandedPosition({
           <InlineProductPicker
             documentId={documentId}
             gtin={gtin}
+            position={position}
             onLinked={onLinked}
           />
         </div>

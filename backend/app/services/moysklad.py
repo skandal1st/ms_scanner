@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections import Counter, deque
+from collections import deque
 from typing import Awaitable, Callable
 import httpx
 from typing import List, Dict, Any, Optional
@@ -864,13 +864,12 @@ class MoySkladService:
         for index, row in enumerate(rows):
             available.setdefault(self._product_id_from_position(row), []).append(index)
         matches = {}
-        group_count = Counter(group[0]['product_id'] for group in groups.values())
         index_by_id = {row.get('id'): i for i, row in enumerate(rows)}
         reserved = set()
         if saved_marks:
             for key, group in groups.items():
                 pid = group[0]['product_id']
-                if not isinstance(key, tuple) or group_count[pid] == 1:
+                if not isinstance(key, tuple):
                     continue
                 owners = {saved_marks[mark] for s in group if s.get('code') and not s.get('is_barcode')
                           if (mark := self._cis_dedup_key(s['code'])) in saved_marks}
@@ -882,38 +881,44 @@ class MoySkladService:
                 matches[index] = key
                 available[pid].remove(index)
                 reserved.add(key)
-        # A retry may read the same rows in a different order. In particular,
-        # reserve the second XML price even if the first price has no match.
-        pending = []
-        for key, group in groups.items():
-            if key in reserved:
-                continue
-            pid = group[0]['product_id']
-            candidates = available.get(pid, [])
-            if not isinstance(key, tuple):
-                if created:
-                    pending.append((key, candidates))
-                continue
-            item = group[0]
-            price = item.get('price')
-            cents = round(price * 100) if price is not None else None
-            matching = [i for i in candidates
-                        if (cents is None or rows[i].get('price') == cents)
-                        and (item.get('vat') is None or rows[i].get('vat') == item['vat'])]
-            if matching:
-                quantity = item.get('expected_qty')
-                if quantity is None:
-                    quantity = sum(self._scan_units(s) for s in group)
-                index = min(matching, key=lambda i: (rows[i].get('quantity') != quantity, rows[i].get('id') or ''))
-                candidates.remove(index)
-                matches[index] = key
-            elif not created:
-                pending.append((key, candidates))
-        for key, candidates in pending:
-            if candidates:
-                matches[candidates.pop(0)] = key
-        if not created and any(available.get(key[0]) for key in groups if isinstance(key, tuple)):
-            raise ValueError('В поступлении МойСклад больше строк товара, чем в УПД. Сверьте существующие позиции перед отправкой.')
+        # Reserve exact rows across the whole document before considering stale quantities or VAT.
+        pending = [key for key in groups if key not in reserved and (isinstance(key, tuple) or created)]
+        for price_only in (False, True):
+            for key in list(pending):
+                if not isinstance(key, tuple):
+                    continue
+                item = groups[key][0]
+                candidates = available.get(item['product_id'], [])
+                if item.get('price') is None and price_only:
+                    continue
+                price = round(item['price'] * 100) if item.get('price') is not None else None
+                qty = item.get('expected_qty')
+                if qty is None:
+                    qty = sum(self._scan_units(scan) for scan in groups[key])
+                matching = [i for i in candidates if (price is None or rows[i].get('price') == price)
+                            and (price_only or rows[i].get('quantity') == qty)]
+                if matching:
+                    index = min(matching, key=lambda i: item.get('vat') is not None and rows[i].get('vat') != item['vat'])
+                    candidates.remove(index)
+                    matches[index] = key
+                    pending.remove(key)
+
+        for pid, candidates in available.items():
+            missing = [key for key in pending if groups[key][0]['product_id'] == pid
+                       and (not created or not isinstance(key, tuple))]
+            if len(candidates) > len(missing):
+                # Several existing prices could be the extra row. Only reuse an
+                # unambiguous quantity, otherwise create the missing XML line.
+                for key in missing:
+                    qty = groups[key][0].get('expected_qty')
+                    same_qty = [i for i in candidates if rows[i].get('quantity') == qty]
+                    if len(same_qty) == 1 and sum(groups[k][0].get('expected_qty') == qty for k in missing) == 1:
+                        index = same_qty[0]
+                        matches[index] = key
+                        candidates.remove(index)
+            else:
+                matches.update(zip(candidates, missing))
+
         return matches
 
     async def get_shipment_states(self) -> list[dict]:
@@ -1031,7 +1036,10 @@ class MoySkladService:
         if not groups:
             raise ValueError("Нет товаров для отправки в МойСклад")
 
-        prices = dict(position_prices or {})
+        xml_supply = kind == 'supply' and all(isinstance(key, tuple) for key in groups)
+        if xml_supply and not any(s.get('code') and not s.get('is_barcode') for s in scans):
+            write_codes = False
+        prices = {} if xml_supply else dict(position_prices or {})
         quantities = dict(position_quantities or {})
         for key, group in groups.items():
             if isinstance(key, tuple):
@@ -1089,12 +1097,19 @@ class MoySkladService:
         if kind == 'supply':
             # Quantity-only lines and marked lines follow the same UPD order.
             order = {key: index for index, key in enumerate(groups)}
-            ordered_positions.sort(key=lambda pair: order.get(pair[0], len(order)))
+            if xml_supply:
+                # Leave existing unrelated positions in their slots.
+                imported = iter(sorted((p for p in ordered_positions if p[0] in order), key=lambda p: order[p[0]]))
+                ordered_positions = [next(imported) if p[0] in order else p for p in ordered_positions]
+            else:
+                ordered_positions.sort(key=lambda pair: order.get(pair[0], len(order)))
         positions = []
         for key, payload in ordered_positions:
             financials = prices.get(key) or {}
             if financials.get('price') is not None:
                 payload['price'] = round(float(financials['price']) * 100)
+                if xml_supply and payload.get('discount'):
+                    payload['discount'] = 0  # The XML gross unit price already includes discounts.
             if financials.get('vat') is not None:
                 payload.update(vat=int(financials['vat']), vatEnabled=True)
             positions.append(payload)
