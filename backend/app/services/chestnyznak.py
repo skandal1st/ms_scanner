@@ -1524,7 +1524,7 @@ class ChestnyZnakService:
             "products": [{"cis": c} for c in cises],
         }
         if fias_id:
-            doc["fiasId"] = fias_id
+            doc["fias_id"] = fias_id
         if kpp:
             doc["kpp"] = kpp
         if custom_name:

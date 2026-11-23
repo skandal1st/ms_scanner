@@ -560,7 +560,8 @@ async def cz_writeoff_prepare(
         elif places:
             raise HTTPException(400, "Выберите место осуществления деятельности для списания")
         elif (groups.keys() & {"beer", "alcohol"} or
-              (reason["action"] == "UTILIZATION" and groups.keys() & {"otp", "tobacco", "ncp"})):
+              (reason["action"] in {"OWN_USE", "PRODUCTION_USE", "UTILIZATION"} and
+               groups.keys() & {"otp", "tobacco", "ncp"})):
             raise HTTPException(400, "Нет доступного МОД. Проверьте адрес точки в профиле Честного Знака.")
         if selected and selected["productGroups"] and set(groups) - set(selected["productGroups"]):
             raise HTTPException(400, "Выбранное МОД не зарегистрировано для всех товарных групп списания")

@@ -43,7 +43,7 @@ async def test_587_marks_with_explicit_group_have_zero_discovery_requests(monkey
         document_id=doc.id,reason='own_use',product_group=' OTP ',basis_number='QA-1'),user,db)
     assert len(result.parts)==1 and result.parts[0].pg=='otp' and not result.unresolved
     payload=json.loads(base64.b64decode(result.parts[0].product_document_b64))
-    assert payload['fiasId'] == 'address-1' and 'kpp' not in payload
+    assert payload['fias_id'] == 'address-1' and 'fiasId' not in payload and 'kpp' not in payload
     assert [r['cis'] for r in payload['products']]==codes
     assert payload['action']=='OWN_USE' and payload['document_number']=='QA-1'
     stored=json.loads(cache.set.await_args.args[1])
@@ -95,7 +95,21 @@ async def test_multiple_places_require_registered_choice_in_each_signed_part(mon
     assert len(result.parts) == 2
     for part in result.parts:
         payload = json.loads(base64.b64decode(part.product_document_b64))
-        assert payload["fiasId"] == choice and payload["kpp"] == "123456789"
+        assert payload["fias_id"] == choice and payload["kpp"] == "123456789"
+
+
+@pytest.mark.parametrize(("group", "reason"), [
+    ("otp", "own_use"), ("tobacco", "production"), ("ncp", "spoilage"),
+])
+async def test_tobacco_writeoff_requires_registered_place_before_signing(monkeypatch, group, reason):
+    doc, user, _, db, cache, cz = setup(monkeypatch, 1)
+    cz.writeoff_places.return_value = []
+    request = integrations.WriteoffPrepareRequest(document_id=doc.id, reason=reason, product_group=group)
+    with pytest.raises(HTTPException) as error:
+        await integrations.cz_writeoff_prepare(request, user, db)
+    assert error.value.status_code == 400 and "МОД" in error.value.detail
+    cache.set.assert_not_awaited()
+    db.commit.assert_not_awaited()
 
 async def test_places_read_every_page_for_document_inn_and_group(monkeypatch):
     from app.services import cz_logger
