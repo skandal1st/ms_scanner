@@ -419,7 +419,11 @@ def _gate_gsless_serial(serial_and_tail: str, serial_len: Optional[int]) -> tupl
     if len(serial_and_tail) <= serial_len:
         return serial_and_tail, "exact"
     rest = serial_and_tail[serial_len:]
-    if any(rest.startswith(ai) for ai in KNOWN_AI_AFTER_SERIAL):
+    # Some scanners print %C1 for GS. Only interpret it at the expected
+    # boundary before a known AI: the same three characters are legal serial data.
+    if rest[:3].lower() == "%c1":
+        rest = rest[3:]
+    if rest.startswith(KNOWN_AI_AFTER_SERIAL):
         return serial_and_tail[:serial_len], "reconstructed"
     return serial_and_tail, "ambiguous"
 
@@ -449,7 +453,7 @@ def cis_string_for_moysklad_api(
     - Строка **«14 цифр GTIN + хвост»** без префиксов ``01``/``21`` приводится к виду
       ``01``+GTIN+``21``+хвост (частый вывод сканера по табаку).
     - Регистр после ``21`` не меняем.
-    - ``%c1`` / ``%C1`` в серийной части удаляем.
+    - Печатные символы ``%C1`` внутри серии сохраняем.
 
     Если задан ``assortment.trackingType`` из МС, в ``cis`` может уходить **укороченный
     код идентификации**: для напитков, воды, молока, БАД, антисептиков — **24** символа
@@ -477,7 +481,6 @@ def cis_string_for_moysklad_api(
     serial_len = MOYSKLAD_CIS_DOCUMENT_SERIAL_LEN_BY_TRACKING_TYPE.get(tt)
 
     def _trim_serial(serial: str, had_gs: bool) -> str:
-        serial = re.sub(r"(?i)%c1", "", serial)
         # Серия отделена GS → точная граница, длину не трогаем.
         if had_gs:
             return serial
@@ -540,9 +543,9 @@ def _cis_confidence(s: str, serial_len: Optional[int]) -> str:
     ):
         return "exact"
     if s.startswith("01") and len(s) >= 18 and s[2:16].isdigit() and s[16:18] == "21":
-        tail = re.sub(r"(?i)%c1", "", s[18:])
+        tail = s[18:]
     elif len(s) >= 15 and s[:14].isdigit():
-        tail = re.sub(r"(?i)%c1", "", s[14:])
+        tail = s[14:]
     else:
         return "exact"  # не наш формат — не реконструируем
     _serial, conf = _gate_gsless_serial(tail, serial_len)
