@@ -68,7 +68,7 @@ async def test_no_cz_receipt_keeps_all_raw_marks_and_sends_only_goods_to_ms(monk
     monkeypatch.setattr(tasks, 'monitoring_emit', AsyncMock())
     cz_calls = AsyncMock(side_effect=AssertionError('No CZ requests'))
     monkeypatch.setattr(tasks, '_get_cz_token', cz_calls)
-    monkeypatch.setattr(tasks, '_expand_aggregate_for_processing', cz_calls)
+    monkeypatch.setattr(tasks, '_resolve_receipt_package', cz_calls)
     try:
         async with factory() as db:
             await documents.process_document(doc_id, await db.get(User, user_id), db)

@@ -89,22 +89,29 @@ async def _prepare_physical_count_async(session_id):
         await db.commit()
 
 
-async def _expand_aggregate_for_processing(cz, code: str) -> tuple[list[str], Optional[str]]:
-    """Раскрыть упаковку перед записью приёмки в МС.
-
-    SSCC нельзя пропускать через ``get_code_info``: нормализатор обычного КИ
-    воспринимает 20 цифр как ``GTIN + serial`` и превращает ``00…`` в ``01…21…``.
-    True API закономерно отвечает 404 на изменённый код. Для SSCC сразу используем
-    ``aggregated/list`` через ``unpack_box``; AI-02/прочие агрегаты по-прежнему
-    раскрываем через ``cises/info`` с последующим ``aggregated/list``.
-    """
-    if is_sscc(code):
-        return list(await cz.unpack_box(normalize_sscc(code))), None
-
-    info = await cz.get_code_info(code)
-    if not (info and info.is_aggregate and info.children):
-        return [], None
-    return list(info.children), info.product_name
+async def _resolve_receipt_package(cz, scan):
+    """Уточнить тип кода упаковки из УПД перед записью марок в МС."""
+    if is_sscc(scan.code):
+        children = await cz.unpack_box(normalize_sscc(scan.code))
+    else:
+        info = await cz.get_code_info(scan.code)
+        if not info:
+            return
+        if info.confirmed_unit:
+            scan.is_box = scan.box_expanded = scan.keep_aggregate = False
+            scan.package_type = "UNIT"
+            scan.child_codes = scan.box_quantity = None
+            scan.gtin = normalize_gtin_key(info.gtin) or scan.gtin
+            logger.info("process_document.unit_confirmed", scan_id=str(scan.id))
+            return
+        children = info.children
+        if children and info.product_name:
+            scan.product_name = info.product_name
+    if children:
+        scan.child_codes = list(children)
+        scan.box_quantity = len(children)
+        scan.gtin = normalize_gtin_key(extract_gtin(children[0])) or scan.gtin
+        logger.info("process_document.box_expanded", scan_id=str(scan.id), units=len(children), gtin=scan.gtin)
 
 
 def _build_moysklad_scans_data(
@@ -1577,33 +1584,12 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 )
                 for s in boxes_to_expand:
                     try:
-                        children, product_name = await _expand_aggregate_for_processing(
-                            cz, s.code
-                        )
+                        await _resolve_receipt_package(cz, s)
                     except Exception as exc:
                         logger.warning(
                             "process_document.expand_box_failed",
                             scan_id=str(s.id),
                             error=str(exc),
-                        )
-                        continue
-                    if children:
-                        s.child_codes = children
-                        s.box_quantity = len(children)
-                        # GTIN агрегата ≠ GTIN пачки — берём GTIN вложенной пачки,
-                        # чтобы скан матчился с планом и считался как N единиц.
-                        child_gtin = extract_gtin(children[0])
-                        if child_gtin:
-                            gk = normalize_gtin_key(child_gtin)
-                            if gk:
-                                s.gtin = gk
-                        if product_name:
-                            s.product_name = product_name
-                        logger.info(
-                            "process_document.box_expanded",
-                            scan_id=str(s.id),
-                            units=s.box_quantity,
-                            gtin=s.gtin,
                         )
                 await db.flush()
 
@@ -1612,7 +1598,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
             # как агрегат). Слать сырой код короба в МС нельзя: в поступление уйдёт код
             # упаковки вместо марок пачек. Для supply прерываем с понятной ошибкой,
             # не помечая документ accepted (см. guard на отсутствие токена выше).
-            unexpanded = [s for s in boxes_to_expand if not s.child_codes]
+            unexpanded = [s for s in boxes_to_expand if s.is_box and not s.child_codes]
             if kind == "supply" and unexpanded:
                 doc.error_message = (
                     f"Не удалось развернуть {len(unexpanded)} коробов в марки маркировки: "

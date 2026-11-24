@@ -1,10 +1,13 @@
 from dataclasses import dataclass
+from unittest.mock import AsyncMock
 
 import pytest
 
+from app.db.models import Scan
+from app.services.chestnyznak import ChestnyZnakService
 from app.worker.tasks import (
     _build_moysklad_scans_data,
-    _expand_aggregate_for_processing,
+    _resolve_receipt_package,
 )
 
 
@@ -29,10 +32,7 @@ class FakeCz:
 class FakeInfo:
     children: list[str]
     product_name: str | None = None
-
-    @property
-    def is_aggregate(self):
-        return bool(self.children)
+    confirmed_unit: bool = False
 
 
 @pytest.mark.asyncio
@@ -40,10 +40,11 @@ async def test_sscc_goes_directly_to_aggregated_list():
     cz = FakeCz()
     sscc = "00946603212000743418"
 
-    children, product_name = await _expand_aggregate_for_processing(cz, sscc)
+    scan = Scan(code=sscc, is_box=True)
+    await _resolve_receipt_package(cz, scan)
 
-    assert len(children) == 2
-    assert product_name is None
+    assert len(scan.child_codes) == scan.box_quantity == 2
+    assert scan.product_name is None and scan.is_box
     assert cz.unpack_calls == [sscc]
     assert cz.info_calls == []
 
@@ -53,12 +54,44 @@ async def test_non_sscc_aggregate_uses_code_info():
     cz = FakeCz()
     code = "02046603212058583710"
 
-    children, product_name = await _expand_aggregate_for_processing(cz, code)
+    scan = Scan(code=code, is_box=True)
+    await _resolve_receipt_package(cz, scan)
 
-    assert children == ["010466032120585821UNIT003"]
-    assert product_name == "Тестовый товар"
+    assert scan.child_codes == ["010466032120585821UNIT003"]
+    assert scan.product_name == "Тестовый товар" and scan.is_box
     assert cz.unpack_calls == []
     assert cz.info_calls == [code]
+
+
+@pytest.mark.parametrize('overrides', [
+    {}, {'generalPackageType': 'GROUP'}, {'generalPackageType': None}, {'status': 'RETIRED'},
+    {'markWithdraw': True}, {'child': ['unresolved-block']}, {'cis': 'different-mark'},
+    {'requestedCis': 'different-request'},
+])
+async def test_upd_package_field_requires_exact_cz_confirmation_for_single_unit(monkeypatch, overrides):
+    from app.services import cz_pg_cache
+    from app.services.supply_positions import prepare_supply_rows
+    code = '010464049917118621Example'
+    gtin = code[2:16]
+    scan = Scan(code=code, is_box=True, is_barcode=False, gtin=gtin, moysklad_product_id='product')
+    info = {'cis': code, 'requestedCis': code, 'gtin': gtin, 'generalPackageType': 'UNIT',
+            'status': 'INTRODUCED', 'child': [], **overrides}
+    cz = ChestnyZnakService(token='fixture', mock=False, product_groups=['otp'])
+    monkeypatch.setattr(cz_pg_cache, 'get_cached_pg', AsyncMock(return_value=None))
+    monkeypatch.setattr(cz_pg_cache, 'set_cached_pg', AsyncMock())
+    monkeypatch.setattr(cz, '_read_composition', AsyncMock(
+        side_effect=[(200, [{'cisInfo': info}]), (404, {})]))
+
+    await _resolve_receipt_package(cz, scan)
+    if overrides:
+        assert scan.is_box and not scan.child_codes
+        return
+    assert scan.package_type == 'UNIT' and not scan.is_box
+    assert scan.box_quantity is None and not scan.child_codes
+    rows = _build_moysklad_scans_data([scan], 'supply', {})
+    line = {'product_id': 'product', 'expected_qty': 1, 'items': [{'codes': [code]}]}
+    row, = prepare_supply_rows(rows, [], {'physical_plan': [line]})
+    assert (row['code'], row['quantity'], row['upd_line'], row['is_box']) == (code, 1, 0, False)
 
 
 @dataclass

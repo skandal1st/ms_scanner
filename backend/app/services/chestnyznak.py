@@ -139,6 +139,7 @@ class CodeInfo:
     # Марка выведена из оборота / заблокирована (ЧЗ markWithdraw) + причина (withdrawReason).
     mark_withdraw: bool = False
     withdraw_reason: Optional[str] = None
+    confirmed_unit: bool = False  # Exact, in-circulation unit returned by cises/info.
 
     @property
     def is_aggregate(self) -> bool:
@@ -979,20 +980,21 @@ class ChestnyZnakService:
                 continue  # не та группа → следующая
             ci = entry.get("cisInfo") or {}
             first_layer = [c for c in (ci.get("child") or []) if isinstance(c, str)]
+            kind = ci.get("generalPackageType") or ci.get("packageType")
 
             # Для агрегата (есть вложения) забираем ВСЕ листовые КМ рекурсивно.
             children: list[str] = []
-            if first_layer or (ci.get("generalPackageType") or ci.get("packageType")) in {"GROUP", "LEVEL1", "BOX", "LEVEL2"}:
+            if first_layer or kind in {"GROUP", "LEVEL1", "BOX", "LEVEL2"}:
                 status, abody = await self._read_composition(agg_url, pg, cis, code, headers, timeout=15)
                 if status == 200 and isinstance(abody, dict) and abody.get(cis):
                     children = _flatten_aggregate_leaves(abody[cis])
-                    self.aggregate_trees[code] = {"code": code, "kind": ci.get("generalPackageType") or ci.get("packageType"), "raw": abody[cis]}
+                    self.aggregate_trees[code] = {"code": code, "kind": kind, "raw": abody[cis]}
                 # A box's first layer may contain blocks, not individual marks.
                 # Never replace a complete composition with that partial layer.
 
             info = CodeInfo(
                 cis=ci.get("cis") or cis,
-                package_type=ci.get("generalPackageType") or ci.get("packageType"),
+                package_type=kind,
                 children=children,
                 gtin=_digits_gtin14_from_value(ci.get("gtin")),
                 product_name=(ci.get("productName") or None),
@@ -1002,6 +1004,11 @@ class ChestnyZnakService:
                 owner_inn=(ci.get("ownerInn") or None),
                 mark_withdraw=bool(ci.get("markWithdraw")),
                 withdraw_reason=(ci.get("withdrawReason") or None),
+                confirmed_unit=(
+                    kind == "UNIT" and ci.get("cis") == cis and ci.get("requestedCis", cis) == cis
+                    and ci.get("status") == "INTRODUCED" and not ci.get("markWithdraw")
+                    and ci.get("child") in (None, [])
+                ),
             )
             self.aggregate_kinds[code] = info.package_type
             await set_cached_pg(gtin_key, pg)
