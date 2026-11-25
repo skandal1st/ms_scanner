@@ -777,7 +777,7 @@ class Incident(Base):
 class MonitoringDelivery(Base):
     __tablename__ = 'monitoring_deliveries'
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    incident_id = Column(UUID(as_uuid=True), ForeignKey('incidents.id', ondelete='CASCADE'), nullable=False)
+    incident_id = Column(UUID(as_uuid=True), ForeignKey('incidents.id', ondelete='CASCADE'), nullable=True)
     payload = Column(JSONB, nullable=False)
     attempts = Column(Integer, nullable=False, default=0)
     next_attempt_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, index=True)

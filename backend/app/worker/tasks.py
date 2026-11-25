@@ -8,6 +8,7 @@ from typing import Optional
 from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
+from app.services.widget_analytics import enqueue as enqueue_widget_fact
 from app.services.cz_status import cz_status_error, localize_cz_error, localize_cz_verification
 from app.services.applied_shipment import SHIPMENT_STATUSES, approved_cz_statuses, shipment_inclusion_reason
 from app.services.chestnyznak import (
@@ -1781,6 +1782,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 scan.error_message = None
 
         # Финальный статус документа
+        enqueue_widget_fact(db, integration, "result", document_id)
         doc.status = DocumentStatus.accepted
         # Успешный прогон (в т.ч. повторный после входа в ЧЗ) — снимаем прошлую ошибку.
         doc.error_message = None

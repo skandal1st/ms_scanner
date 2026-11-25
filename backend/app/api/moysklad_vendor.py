@@ -16,7 +16,8 @@ from app.core.security import encrypt_token
 from app.db.models import Integration, User
 from app.db.session import get_db
 from app.services.ms_installations import PRIMARY_APP_ID, installation_query, signing_key, vendor_uid
-from app.services.subscriptions import update_subscription
+from app.services.subscriptions import subscription_state, update_subscription
+from app.services.widget_analytics import enqueue
 
 
 router = APIRouter(prefix="/moysklad/vendor/1.0/apps", tags=["moysklad-vendor"])
@@ -225,9 +226,16 @@ async def activate(
         if access_token:
             integration.moysklad_token = encrypt_token(access_token)
 
+    was_trial = integration.subscription_trial is True
     integration.subscription_managed = True
     if body.subscription is not None:
         update_subscription(integration, body.subscription)
+    if not (body.subscription and body.subscription.notForResale):
+        if body.cause == "Install":
+            enqueue(db, integration, "install", x_lognex_request_id)
+        elif (was_trial and body.subscription and body.subscription.trial is False
+              and subscription_state(integration, 0).price_monthly):
+            enqueue(db, integration, "paid", x_lognex_request_id)
     # TariffChanged/Autoprolongation may omit access; preserve existing API token.
     await db.commit()
 
