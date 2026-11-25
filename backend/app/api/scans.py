@@ -36,7 +36,9 @@ from app.services.chestnyznak import (
 from app.services.gtin_cz_group import get_cached_pg
 from app.services.scan_input import decode_base64_mark
 from app.services import serial_diagnostics
-from app.services.applied_shipment import can_include_applied, include_applied, reserves_mark
+from app.services.applied_shipment import (
+    ShipmentInclusionReason, can_include_applied, include_shipment_marks, reserves_mark, shipment_inclusion_reason,
+)
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -79,6 +81,11 @@ class ScanResponse(BaseModel):
     @property
     def can_include_in_shipment(self) -> bool:
         return can_include_applied(self)
+
+    @computed_field
+    @property
+    def inclusion_reason(self) -> ShipmentInclusionReason | None:
+        return shipment_inclusion_reason(self)
 
     @field_serializer('error_message')
     def russian_error(self, value):
@@ -140,16 +147,16 @@ class PackModeRequest(BaseModel):
     unpack: bool
 
 
-class IncludeAppliedRequest(BaseModel):
+class IncludeShipmentMarksRequest(BaseModel):
     scan_ids: set[UUID]
 
 
-@router.post('/{document_id}/include-applied', response_model=list[ScanResponse])
-async def include_applied_in_shipment(document_id: UUID, body: IncludeAppliedRequest,
+@router.post('/{document_id}/include-{reason}', response_model=list[ScanResponse])
+async def include_marks_in_shipment(document_id: UUID, reason: ShipmentInclusionReason, body: IncludeShipmentMarksRequest,
                                       current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     doc = await editable_document(db, document_id, current_user.id)
     require_collection_started(doc)
-    scans = await include_applied(db, doc, body.scan_ids)
+    scans = await include_shipment_marks(db, doc, body.scan_ids, reason)
     await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(doc.id)})
     return [ScanResponse.model_validate(s) for s in scans]
 

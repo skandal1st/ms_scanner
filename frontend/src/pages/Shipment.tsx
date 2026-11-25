@@ -8,7 +8,7 @@ import { ScanInput } from '../components/ScanInput'
 import { CodesTable } from '../components/CodesTable'
 import { isProblemScan } from '../lib/shipmentProblems'
 import { StatsPanel } from '../components/StatsPanel'
-import { IncludeAppliedMarks } from '../components/IncludeAppliedMarks'
+import { IncludeShipmentMarks } from '../components/IncludeShipmentMarks'
 import { DocumentSelector } from '../components/DocumentSelector'
 import { CustomerOrderPicker } from '../components/CustomerOrderPicker'
 import { ProgressTable } from '../components/ProgressTable'
@@ -65,7 +65,9 @@ export function ShipmentPage({
     ? `${progress.total.addedTotal}/${progress.total.expected}`
     : progress.total.addedTotal
   const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
-  const appliedIds = scans.filter(scan => scan.status === 'invalid' && scan.can_include_in_shipment).map(scan => scan.id)
+  const appliedIds = scans.filter(scan => scan.status === 'invalid' && scan.inclusion_reason === 'applied').map(scan => scan.id)
+  const withdrawnIds = scans.filter(scan => scan.status === 'invalid' && scan.inclusion_reason === 'withdrawn').map(scan => scan.id)
+  const approvedApplied = stats.ms_approved - stats.approved_withdrawn
   const shipmentUnits = progress.total.addedTotal + progress.offPlanRows.reduce((sum, row) => sum + row.addedTotal, 0)
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
@@ -564,16 +566,16 @@ export function ShipmentPage({
         </div>}
       </div>
 
-      {document && collectionReady && scans.length > 0 && <footer className="acc-footer">
+      {document && collectionReady && scans.length > 0 && <footer className="acc-footer acc-footer--shipment">
         <div className="acc-footer__spacer" />
         {UPD_EXPORT_VISIBLE && document?.moysklad_id && document.status === 'accepted' && <button type="button" className="button"
           onClick={() => setUpdOpen(true)}>XML УПД</button>}
         {withdrawnCount > 0 && (
           <span
             style={{ marginRight: 12, fontSize: 12, color: 'var(--st-err-fg)', whiteSpace: 'nowrap', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}
-            title="Эти марки выведены из оборота / заблокированы. Отгрузку это не блокирует, но требует подтверждения."
+            title="Честный Знак вернул признак выбытия или блокировки. Подробности доступны в строке марки."
           >
-            <Icon name="warning" size={14} /> {withdrawnCount} выведены из оборота
+            <Icon name="warning" size={14} /> Выбытие или блокировка ({withdrawnCount})
           </span>
         )}
         {(ownerWarnings.mismatch > 0 || ownerWarnings.unknown > 0) && (
@@ -596,8 +598,10 @@ export function ShipmentPage({
             Повторно проверить все марки в ЧЗ
           </button>
         )}
-        {document.kind === 'demand' && document.status === 'draft' && appliedIds.length > 0 &&
-          <IncludeAppliedMarks documentId={document.id} scanIds={appliedIds} disabled={sending || bulkBusy || verifying} />}
+        {document.kind === 'demand' && document.moysklad_id && document.status === 'draft' && <>
+          {appliedIds.length > 0 && <IncludeShipmentMarks documentId={document.id} scanIds={appliedIds} reason="applied" disabled={sending || bulkBusy || verifying} />}
+          {withdrawnIds.length > 0 && <IncludeShipmentMarks documentId={document.id} scanIds={withdrawnIds} reason="withdrawn" disabled={sending || bulkBusy || verifying} />}
+        </>}
         {waitingForCheck || stats.scanned > 0 ? (
           <button type="button" className="button button--success"
             disabled={document.status !== 'draft' || sending || bulkBusy || waitingForCheck}
@@ -703,12 +707,15 @@ export function ShipmentPage({
                   </span>
                 </div>
               </div>
-              {stats.ms_approved > 0 && <p className="alert alert--warn">
-                В отгрузку включены марки до ввода в оборот ({stats.ms_approved}).
+              {approvedApplied > 0 && <p className="alert alert--warn">
+                В отгрузку включены марки до ввода в оборот ({approvedApplied}).
+              </p>}
+              {stats.approved_withdrawn > 0 && <p className="alert alert--error">
+                В МойСклад будут отправлены выбывшие марки ({stats.approved_withdrawn}). В Честном Знаке они останутся выведенными из оборота.
               </p>}
               {withdrawnToSend > 0 && (
                 <div className="alert alert--error" style={{ marginTop: 10, fontWeight: 600 }}>
-                  В отгрузку попадают марки, выведенные из оборота ({withdrawnToSend}). Всё равно отгрузить?
+                  В отгрузку попадают марки с признаком выбытия или блокировки ({withdrawnToSend}). Всё равно отгрузить?
                 </div>
               )}
               {(hasErrors || stats.overflow > 0) && (

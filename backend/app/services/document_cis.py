@@ -7,19 +7,20 @@ import httpx
 from app.core.diagnostics import response_body
 from app.core.logging import logger
 from app.services.cz_logger import log_cz_request
+from app.services.cz_status import WITHDRAWN_STATUSES
 
 
 def needs_cis_confirmation(code: str) -> bool:
     return bool(re.fullmatch(r"[0-9]{14}[!-~]{7}AAAA", code))
 
 
-async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None, approved_applied=()) -> list[dict]:
+async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None, approved_statuses=None) -> list[dict]:
     """Use only the matching UNIT CIS returned by CZ; preserve original rows.
 
     AAAA can also belong to a legitimate serial. Never trim it without an
     official response. requestedCis binds each answer to its original input.
     Supply imports may record APPLIED marks in MS; this does not introduce them
-    into circulation in CZ. A demand can include a specifically approved APPLIED unit.
+    into circulation in CZ. A demand may include explicitly approved units in their checked status.
     """
     pending = dict.fromkeys(
         row['code'] for row in rows
@@ -72,10 +73,15 @@ async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None,
                     if original in duplicates or entry.get('errorCode') or ci.get('errorCode'):
                         continue
                     canonical = ci.get('cis')
-                    applied_allowed = kind == 'supply' or (kind == 'demand' and original in approved_applied)
+                    status = ci.get('status')
+                    approved = kind == 'demand' and (approved_statuses or {}).get(original) == status
+                    if status in WITHDRAWN_STATUSES:
+                        allowed = approved
+                    else:
+                        allowed = not ci.get('markWithdraw') and (
+                            status == 'INTRODUCED' or (status == 'APPLIED' and (kind == 'supply' or approved)))
                     if (canonical != original[:21]
-                            or not (ci.get('status') == 'INTRODUCED' or (ci.get('status') == 'APPLIED' and applied_allowed))
-                            or ci.get('markWithdraw')
+                            or not allowed
                             or ci.get('generalPackageType') != 'UNIT'
                             or ci.get('child')):
                         continue

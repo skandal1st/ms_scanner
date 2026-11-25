@@ -9,7 +9,7 @@ import httpx
 from app.core.config import settings
 from app.services.chestnyznak import cis_for_cz_info, normalize_km_ai_prefix, is_sscc
 from app.services.cz_logger import log_cz_request
-from app.services.cz_status import STATUS_ERRORS
+from app.services.cz_status import STATUS_ERRORS, WITHDRAWN_STATUSES
 from app.services.mark_search import mark_key
 from app.services.scan_input import decode_base64_mark
 
@@ -70,7 +70,7 @@ def current_info(ci):
             'status': status, 'status_label': STATUS_ERRORS.get(status, 'Статус не распознан' if status else 'Статус не передан'),
             'owner_name': clean(ci.get('ownerName')), 'owner_inn': clean(ci.get('ownerInn'), 12),
             'owner_address': address, 'region': region, 'region_source': region_source,
-            'withdrawn': status in {'WITHDRAWN', 'RETIRED', 'WRITTEN_OFF'} or ci.get('markWithdraw') is True,
+            'withdrawn': status in WITHDRAWN_STATUSES or ci.get('markWithdraw') is True,
             'withdraw_reason': reason, 'withdraw_reason_label': REASONS.get(reason, 'Иная причина' if reason else None)}
 
 

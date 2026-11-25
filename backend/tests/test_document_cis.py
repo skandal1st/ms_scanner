@@ -51,13 +51,17 @@ async def test_confirmed_aliases_keep_source_and_order_and_log_request(install):
     assert log.await_args.args[2] == [RAW, OTHER]
 
 
-async def test_applied_demand_permission_covers_only_the_approved_code(install):
+@pytest.mark.parametrize('status,flag', [('APPLIED', False), ('WITHDRAWN', True), ('RETIRED', False), ('WRITTEN_OFF', False)])
+async def test_demand_permission_covers_only_the_approved_code_and_status(install, status, flag):
     install(lambda request: httpx.Response(200, json=[
-        answer(raw, status='APPLIED') for raw in json.loads(request.content)]))
-    result = await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind='demand', approved_applied={RAW})
+        answer(raw, status=status, markWithdraw=flag) for raw in json.loads(request.content)]))
+    result = await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind='demand', approved_statuses={RAW: status})
     assert result == [{'code': RAW[:21]}]
     with pytest.raises(ValueError, match='не подтвердил'):
-        await document_cis.confirm_document_cis([{'code': RAW}, {'code': OTHER}], cz(), kind='demand', approved_applied={RAW})
+        await document_cis.confirm_document_cis([{'code': RAW}, {'code': OTHER}], cz(), kind='demand', approved_statuses={RAW: status})
+    with pytest.raises(ValueError, match='не подтвердил'):
+        different_status = 'WITHDRAWN' if status == 'APPLIED' else 'APPLIED'
+        await document_cis.confirm_document_cis([{'code': RAW}], cz(), kind='demand', approved_statuses={RAW: different_status})
 
 
 @pytest.mark.parametrize('change', [

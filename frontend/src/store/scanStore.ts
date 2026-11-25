@@ -5,6 +5,7 @@ interface Stats {
   valid: number
   invalid: number
   ms_approved: number
+  approved_withdrawn: number
   duplicate: number
   pending: number
   scanned: number
@@ -114,13 +115,17 @@ interface ScanStore {
   getProgress: () => PlanProgress
 }
 
+const emptyStats: Stats = { valid: 0, invalid: 0, ms_approved: 0, approved_withdrawn: 0, duplicate: 0,
+  pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 }
+
 function calcStats(scans: Scan[]): Stats {
   return scans.reduce(
     (acc, s) => {
       acc[s.status] = (acc[s.status] || 0) + 1
+      if (s.status === 'ms_approved' && s.inclusion_reason === 'withdrawn') acc.approved_withdrawn++
       return acc
     },
-    { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 } as Stats
+    { ...emptyStats }
   )
 }
 
@@ -380,7 +385,7 @@ export function buildProgress(plan: PlanItem[] | undefined, scans: Scan[]): Plan
 export const useScanStore = create<ScanStore>((set, get) => ({
   document: null,
   scans: [],
-  stats: { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+  stats: { ...emptyStats },
   targetProductId: null,
   selection: null,
   deleteMode: false,
@@ -442,7 +447,7 @@ export const useScanStore = create<ScanStore>((set, get) => ({
     set({
       document: null,
       scans: [],
-      stats: { valid: 0, invalid: 0, ms_approved: 0, duplicate: 0, pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 },
+      stats: { ...emptyStats },
       targetProductId: null,
       selection: null,
       deleteMode: false,

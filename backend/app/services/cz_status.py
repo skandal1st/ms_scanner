@@ -1,6 +1,8 @@
 """Russian explanations of CZ statuses; technical values remain in diagnostics."""
 import re
 
+WITHDRAWN_STATUSES = ('WITHDRAWN', 'RETIRED', 'WRITTEN_OFF')
+WITHDRAW_FLAG_MESSAGE = 'Марка выведена из оборота или заблокирована'
 
 STATUS_ERRORS = {
     'INTRODUCED': 'Марка в обороте',

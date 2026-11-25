@@ -46,15 +46,16 @@ async def test_advisory_lock_is_exclusive_and_released(monkeypatch):
     await engine.dispose()
 
 
-async def test_only_explicitly_included_applied_units_reach_moysklad(monkeypatch):
+@pytest.mark.parametrize('status,reason', [('APPLIED', 'applied'), ('WRITTEN_OFF', 'withdrawn')])
+async def test_only_explicitly_included_units_reach_moysklad(monkeypatch, status, reason):
     from datetime import datetime, timezone
     from sqlalchemy import select
-    from app.api.scans import IncludeAppliedRequest, include_applied_in_shipment
+    from app.api.scans import IncludeShipmentMarksRequest, include_marks_in_shipment
     from app.core import security
     from app.db.models import DocumentKind
     from app.services import moysklad
     from app.services.applied_shipment import reserves_mark
-    from app.services.cz_status import cz_status_error
+    from app.services.cz_status import WITHDRAW_FLAG_MESSAGE, cz_status_error
 
     engine = create_async_engine(settings.DATABASE_URL, poolclass=NullPool)
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -75,17 +76,24 @@ async def test_only_explicitly_included_applied_units_reach_moysklad(monkeypatch
             now = datetime.now(timezone.utc)
             marks = [Scan(document_id=doc.id, code=f'010464027597268621ABCD{i:03d}',
                           status=ScanStatus.invalid, package_type='UNIT', verified_at=now,
-                          moysklad_product_id='p1', error_message=cz_status_error(status),
-                          verification={'source': 'cz_info', 'checked_at': now.isoformat(), 'cz_status': status})
-                     for i, status in enumerate(['APPLIED', 'APPLIED', 'RETIRED'])]
+                          moysklad_product_id='p1', error_message=cz_status_error(raw_status),
+                          verification={'source': 'cz_info', 'checked_at': now.isoformat(), 'cz_status': raw_status})
+                     for i, raw_status in enumerate([status, 'APPLIED', 'RETIRED', 'BLOCKED'])]
+            for mark in (marks[2], marks[3]):
+                mark.withdrawn = True
+                mark.withdraw_reason = 'RETAIL'
+                mark.error_message = WITHDRAW_FLAG_MESSAGE + ': RETAIL'
             db.add_all(marks)
             await db.commit()
+            reserved = await db.scalars(select(Scan.id).join(Document).where(Scan.document_id == doc.id, reserves_mark()))
+            assert set(reserved) == {mark.id for mark in marks[:3]}
             with pytest.raises(HTTPException, match='Нет проверенных марок'):
                 await documents.process_document(doc.id, user, db)
             queued_before = len(queued)
-            request = IncludeAppliedRequest(scan_ids={marks[0].id})
-            approved, = await include_applied_in_shipment(doc.id, request, user, db)
+            request = IncludeShipmentMarksRequest(scan_ids={marks[0].id})
+            approved, = await include_marks_in_shipment(doc.id, reason, request, user, db)
             assert approved.status == ScanStatus.ms_approved
+            assert approved.verification['cz_status'] == status
             assert len(queued) == queued_before == 0
             await documents.process_document(doc.id, user, db)
             assert len(queued) == 1
@@ -201,12 +209,12 @@ async def test_worker_confirms_upd_cis_before_any_ms_write_and_preserves_raw(mon
             scan.moysklad_product_id = 'p1'
             await db.commit()
         update = AsyncMock(return_value={})
-        async def confirm(rows, cz, *, kind=None, approved_applied=()):
+        async def confirm(rows, cz, *, kind=None, approved_statuses=None):
             update.assert_not_awaited()
             assert rows[0]['code'] == raw
             assert cz.token == 'fake-cz'
             assert kind == 'supply'
-            assert not approved_applied
+            assert not approved_statuses
             if not confirmed:
                 raise ValueError('Честный Знак не подтвердил КИ')
             return [{**row, 'code': raw[:21]} for row in rows]

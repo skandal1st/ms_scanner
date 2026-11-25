@@ -329,7 +329,7 @@ async def process(document_id, user_id, job_id):
                 source_scans = (await db.execute(select(Scan).where(Scan.document_id == doc.id))).scalars().all()
                 if any(s.status in {ScanStatus.pending, ScanStatus.scanned, ScanStatus.unknown_product} for s in source_scans if not s.is_barcode):
                     raise ValueError('В сборке есть непроверенные или несопоставленные марки.')
-                from app.services.applied_shipment import SHIPMENT_STATUSES
+                from app.services.applied_shipment import SHIPMENT_STATUSES, approved_cz_statuses
                 valid = [s for s in source_scans if not s.is_barcode and s.status in SHIPMENT_STATUSES]
                 aliases = {g: match['product_id'] for p in doc.plan or [] for g in plan_gtin_keys(p)
                            if (match := unique_plan_product(doc.plan, g))}
@@ -341,7 +341,7 @@ async def process(document_id, user_id, job_id):
                     token = await _get_cz_token(db, user_id, document_id)
                     groups = await _get_cz_product_groups(db, user_id, document_id)
                     desired = await confirm_document_cis(desired, ChestnyZnakService(token=token, mock=False, product_groups=groups),
-                        kind='demand', approved_applied={s.code for s in valid if s.status == ScanStatus.ms_approved})
+                        kind='demand', approved_statuses=approved_cz_statuses(valid))
                 ms = await _get_ms_service(await db.get(User, doc.user_id), db)
                 after = await restore(ms, doc, desired, job, lambda: save(db, doc, job))
                 for sibling, scans in drafts:

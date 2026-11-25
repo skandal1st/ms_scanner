@@ -395,6 +395,7 @@ html, body, #root { height: 100%; }
   flex-shrink: 0;
 }
 .acc-footer__spacer { flex: 1; }
+.acc-footer--shipment { flex-wrap: wrap; }
 
 /* ---------- Таблица с изменяемой шириной столбцов ---------- */
 .resizable-table { table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }

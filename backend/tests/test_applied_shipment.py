@@ -8,8 +8,8 @@ from fastapi import HTTPException
 
 from app.api.scans import ScanResponse
 from app.db.models import DocumentKind, Scan, ScanStatus
-from app.services.applied_shipment import can_include_applied, include_applied
-from app.services.cz_status import cz_status_error
+from app.services.applied_shipment import can_include_applied, include_shipment_marks, shipment_inclusion_reason
+from app.services.cz_status import WITHDRAWN_STATUSES, WITHDRAW_FLAG_MESSAGE, cz_status_error
 from app.services.scan_verification import evidence
 from app.services.chestnyznak import CisCheck
 
@@ -50,23 +50,54 @@ def test_only_checked_applied_units_qualify(scan_fields, check_fields):
     assert not can_include_applied(scan)
 
 
-async def test_approval_is_scoped_atomic_and_idempotent(monkeypatch):
+@pytest.mark.parametrize('status', WITHDRAWN_STATUSES)
+def test_withdrawn_units_keep_exact_status_and_require_confirmed_evidence(status):
+    scan = applied_scan()
+    scan.verification['cz_status'] = status
+    scan.error_message = cz_status_error(status)
+    assert ScanResponse.model_validate(scan).inclusion_reason == 'withdrawn'
+    assert not can_include_applied(scan)
+    del scan.verification['cz_status']
+    assert shipment_inclusion_reason(scan) == 'withdrawn'
+    scan.withdrawn = True
+    scan.withdraw_reason = 'RETAIL'
+    scan.error_message = WITHDRAW_FLAG_MESSAGE + ': RETAIL'
+    for raw_status in (None, 'BLOCKED', 'INTRODUCED', 'APPLIED'):
+        scan.verification['cz_status'] = raw_status
+        assert shipment_inclusion_reason(scan) is None
+    scan.verification['cz_status'] = status
+    assert shipment_inclusion_reason(scan) == 'withdrawn'
+    scan.verification['child_issues'] = [{'code': 'child'}]
+    assert shipment_inclusion_reason(scan) is None
+
+
+@pytest.mark.parametrize('status,reason,other_reason', [('APPLIED', 'applied', 'withdrawn'), ('RETIRED', 'withdrawn', 'applied')])
+async def test_approval_is_scoped_atomic_and_idempotent(monkeypatch, status, reason, other_reason):
     good, bad = applied_scan(), applied_scan()
+    good.verification['cz_status'] = status
+    good.error_message = cz_status_error(status)
     bad.withdrawn = True
     doc = SimpleNamespace(id=good.document_id, kind=DocumentKind.demand, moysklad_id='ms', upd_meta={}, user_id=uuid4())
     db = SimpleNamespace(scalars=AsyncMock(return_value=Mock(all=lambda: [good, bad])), commit=AsyncMock())
     monkeypatch.setattr('app.services.mixed_import.conflicts_elsewhere', AsyncMock(return_value={}))
     for ids in ({good.id, bad.id}, {uuid4()}):
         with pytest.raises(HTTPException):
-            await include_applied(db, doc, ids)
+            await include_shipment_marks(db, doc, ids, reason)
         assert good.status == ScanStatus.invalid
         db.commit.assert_not_awaited()
-    await include_applied(db, doc, {good.id})
-    await include_applied(db, doc, {good.id})
+    with pytest.raises(HTTPException):
+        await include_shipment_marks(db, doc, {good.id}, other_reason)
+    await include_shipment_marks(db, doc, {good.id}, reason)
+    await include_shipment_marks(db, doc, {good.id}, reason)
+    with pytest.raises(HTTPException):
+        await include_shipment_marks(db, doc, {good.id}, other_reason)
     db.commit.assert_awaited_once()
     assert good.status == ScanStatus.ms_approved
     assert good.verification['owner_result'] == 'mismatch'
-    assert good.error_message == cz_status_error('APPLIED')
+    assert good.verification['ms_approved_by'] == str(doc.user_id)
+    assert good.verification['ms_approved_at']
+    assert good.verification['cz_status'] == status
+    assert good.error_message == cz_status_error(status)
     doc.kind = DocumentKind.supply
     with pytest.raises(HTTPException):
-        await include_applied(db, doc, {good.id})
+        await include_shipment_marks(db, doc, {good.id}, reason)

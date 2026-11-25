@@ -14,14 +14,14 @@ import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from
 import { isProblemScan, numberedScans } from '../lib/shipmentProblems'
 import { useMarksPanelVisible } from './FlowWorkspaceTabs'
 import { PackagingRecheck } from './PackagingRecheck'
-import { IncludeAppliedMarks } from './IncludeAppliedMarks'
+import { IncludeShipmentMarks } from './IncludeShipmentMarks'
 
 const STATUS_CONFIG = {
   pending:           { label: 'Проверяется',       cls: 'badge--pending' },
   scanned:           { label: 'Отсканирован',      cls: 'badge--pending' },
   valid:             { label: 'Валиден',           cls: 'badge--ok' },
   invalid:           { label: 'Ошибка',            cls: 'badge--error' },
-  ms_approved:       { label: 'Включена до ввода в оборот', cls: 'badge--warn' },
+  ms_approved:       { label: 'Включена в отгрузку', cls: 'badge--warn' },
   duplicate:         { label: 'Дубль',             cls: 'badge--warn' },
   overflow:          { label: 'Сверх плана',       cls: 'badge--error' },
   unknown_product:   { label: 'Нет товара',        cls: 'badge--warn' },
@@ -182,7 +182,8 @@ function ScanRow({
   onDelete: () => void
 }) {
   const originalCfg = STATUS_CONFIG[scan.status]
-  const cfg = !scan.is_barcode && ['valid', 'scanned', 'overflow'].includes(scan.status)
+  const withdrawalLabel = scan.inclusion_reason === 'withdrawn' ? 'Выведена из оборота' : 'Выбытие или блокировка'
+  const cfg = !scan.is_barcode && ['valid', 'scanned', 'overflow', 'ms_approved'].includes(scan.status)
     ? { label: verificationLabel(scan), cls: scan.verification?.ms_error ? 'badge--error' : scan.verification?.checked_at ? originalCfg.cls : 'badge--pending' }
     : originalCfg
   const [changingPack, setChangingPack] = useState(false)
@@ -260,17 +261,13 @@ function ScanRow({
         <td>
           {isFlash && <span role="status" className="badge badge--warn scan-repeat-badge">Повторный скан</span>}
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
-          {scan.withdrawn && (
+          {(scan.withdrawn || (scan.status === 'invalid' && scan.inclusion_reason === 'withdrawn')) && (
             <span
               className="badge badge--error"
               style={{ marginLeft: 4 }}
-              title={
-                scan.withdraw_reason
-                  ? `Выведена из оборота (${scan.withdraw_reason})`
-                  : 'Марка выведена из оборота / заблокирована'
-              }
+              title={scan.withdraw_reason ? `${withdrawalLabel} (${scan.withdraw_reason})` : withdrawalLabel}
             >
-              Выведена из оборота
+              {withdrawalLabel}
             </span>
           )}
           {owner === 'mismatch' && (
@@ -306,8 +303,8 @@ function ScanRow({
       {isExpanded && (
         <tr>
           <td colSpan={number !== undefined ? 5 : 4} className="scans-expanded">
-            {document?.kind === 'demand' && document.status === 'draft' && scan.status === 'invalid' && scan.can_include_in_shipment &&
-              <IncludeAppliedMarks documentId={document.id} scanIds={[scan.id]} single />}
+            {document?.kind === 'demand' && document.moysklad_id && document.status === 'draft' && scan.status === 'invalid' && scan.inclusion_reason &&
+              <IncludeShipmentMarks documentId={document.id} scanIds={[scan.id]} reason={scan.inclusion_reason} single />}
             <PackagingRecheck key={scan.id} scan={scan} disabled={document?.status !== 'draft'}
               onQueued={data => {
                 const current = useScanStore.getState().scans.find(item => item.id === scan.id)
@@ -349,7 +346,7 @@ function ScanRow({
             )}
             {scan.withdrawn && (
               <div className="scans-expanded__row">
-                <span className="scans-expanded__label">Выведена из оборота:</span>
+                <span className="scans-expanded__label">{withdrawalLabel}:</span>
                 <span className="error">
                   да{scan.withdraw_reason ? ` · ${scan.withdraw_reason}` : ''}
                 </span>

@@ -598,7 +598,10 @@ export type ScanStatus =
   | 'unknown_product'
   | 'used_in_other_doc'
 
+export type ShipmentInclusionReason = 'applied' | 'withdrawn'
+
 export interface Scan {
+  inclusion_reason?: ShipmentInclusionReason | null
   can_include_in_shipment?: boolean
   id: string
   document_id: string
@@ -765,8 +768,8 @@ export interface MixedImportJob {
 }
 
 export const scansApi = {
-  includeApplied: (documentId: string, scanIds: string[]) =>
-    api.post<Scan[]>(`/scans/${documentId}/include-applied`, { scan_ids: scanIds }),
+  includeShipmentMarks: (documentId: string, scanIds: string[], reason: ShipmentInclusionReason) =>
+    api.post<Scan[]>(`/scans/${documentId}/include-${reason}`, { scan_ids: scanIds }),
   composition: (document_id: string) => api.get<PackagingCompositionData>(`/scans/composition/${document_id}`),
   refreshComposition: (document_id: string, code?: string) => api.post(`/scans/composition/${document_id}`, { code }),
   serialAttempts: (documentId: string, code: string) =>

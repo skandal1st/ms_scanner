@@ -9,7 +9,7 @@ from app.worker.celery_app import celery_app
 from app.core.logging import logger
 from app.core.monitoring import emit as monitoring_emit
 from app.services.cz_status import cz_status_error, localize_cz_error, localize_cz_verification
-from app.services.applied_shipment import SHIPMENT_STATUSES, can_include_applied
+from app.services.applied_shipment import SHIPMENT_STATUSES, approved_cz_statuses, shipment_inclusion_reason
 from app.services.chestnyznak import (
     ChestnyZnakService,
     cis_compare_forms_for_ms,
@@ -932,7 +932,7 @@ async def _verify_code_async(scan_id: str, user_id: str, precheck=None):
             withdraw_reason=scan.withdraw_reason,
             child_codes=scan.child_codes,
             verification=getattr(scan, 'verification', None), verified_at=scan.verified_at,
-            can_include_in_shipment=can_include_applied(scan),
+            inclusion_reason=shipment_inclusion_reason(scan),
         )
 
 
@@ -1243,7 +1243,7 @@ async def _push_ws_update(
     box_expanded: Optional[bool] = None,
     verification: Optional[dict] = None,
     verified_at=None,
-    can_include_in_shipment: bool = False,
+    inclusion_reason=None,
 ):
     import redis.asyncio as aioredis
     import json
@@ -1272,7 +1272,8 @@ async def _push_ws_update(
         "box_expanded": box_expanded,
         "verification": localize_cz_verification(verification),
         "verified_at": verified_at.isoformat() if verified_at else None,
-        "can_include_in_shipment": can_include_in_shipment,
+        "can_include_in_shipment": status == 'invalid' and inclusion_reason == 'applied',
+        "inclusion_reason": inclusion_reason,
     })
     await r.publish(f"ws:{user_id}", message)
     await r.aclose()
@@ -1728,7 +1729,7 @@ async def _process_document_unlocked_async(document_id: str, user_id: str):
                 cis_groups = await _get_cz_product_groups(db, user_id, document_id)
                 scans_data = await confirm_document_cis(scans_data, ChestnyZnakService(
                     token=cis_token, mock=False, product_groups=cis_groups,
-                ), kind=kind, approved_applied={s.code for s in valid_scans if s.status == ScanStatus.ms_approved})
+                ), kind=kind, approved_statuses=approved_cz_statuses(valid_scans))
                 if operation:
                     operation.stage = 'moysklad.write_document'
 

@@ -5,7 +5,7 @@ import time
 from app.core.logging import logger
 from app.services.chestnyznak import CisCheck, verify_code_local_gs1
 from app.services.chestnyznak import cis_compare_forms_for_ms
-from app.services.cz_status import cz_status_error
+from app.services.cz_status import WITHDRAW_FLAG_MESSAGE, cz_status_error
 
 
 def acceptable(check):
@@ -121,7 +121,7 @@ async def check_scans(cz, scans, signature_inn=None):
             check.verification['checked_at'] = None
         if check.mark_withdraw:
             check.status = 'WITHDRAWN'
-            check.error = 'Марка выведена из оборота или заблокирована' + (f': {check.withdraw_reason}' if check.withdraw_reason else '')
+            check.error = WITHDRAW_FLAG_MESSAGE + (f': {check.withdraw_reason}' if check.withdraw_reason else '')
         aggregate = bool(scan.child_codes or check.child_count or str(check.package_type or '').upper() in {'GROUP', 'BOX', 'LEVEL1', 'LEVEL2'})
         if acceptable(check) and aggregate:
             try:
