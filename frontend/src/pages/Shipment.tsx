@@ -67,7 +67,8 @@ export function ShipmentPage({
   const waitingForCheck = verifying || (stats.pending > 0 && stats.scanned === 0)
   const appliedIds = scans.filter(scan => scan.status === 'invalid' && scan.inclusion_reason === 'applied').map(scan => scan.id)
   const withdrawnIds = scans.filter(scan => scan.status === 'invalid' && scan.inclusion_reason === 'withdrawn').map(scan => scan.id)
-  const approvedApplied = stats.ms_approved - stats.approved_withdrawn
+  const flaggedIds = scans.filter(scan => scan.status === 'invalid' && scan.inclusion_reason === 'flagged').map(scan => scan.id)
+  const approvedApplied = stats.ms_approved - stats.approved_withdrawn - stats.approved_flagged
   const shipmentUnits = progress.total.addedTotal + progress.offPlanRows.reduce((sum, row) => sum + row.addedTotal, 0)
   // Не закрываем вкладку после отгрузки — иначе закрылся бы и COM-порт
   // (churn open/close на каждую отгрузку «залипляет» виртуальный порт). Держим
@@ -601,6 +602,7 @@ export function ShipmentPage({
         {document.kind === 'demand' && document.moysklad_id && document.status === 'draft' && <>
           {appliedIds.length > 0 && <IncludeShipmentMarks documentId={document.id} scanIds={appliedIds} reason="applied" disabled={sending || bulkBusy || verifying} />}
           {withdrawnIds.length > 0 && <IncludeShipmentMarks documentId={document.id} scanIds={withdrawnIds} reason="withdrawn" disabled={sending || bulkBusy || verifying} />}
+          {flaggedIds.length > 0 && <IncludeShipmentMarks documentId={document.id} scanIds={flaggedIds} reason="flagged" disabled={sending || bulkBusy || verifying} />}
         </>}
         {waitingForCheck || stats.scanned > 0 ? (
           <button type="button" className="button button--success"
@@ -712,6 +714,9 @@ export function ShipmentPage({
               </p>}
               {stats.approved_withdrawn > 0 && <p className="alert alert--error">
                 В МойСклад будут отправлены выбывшие марки ({stats.approved_withdrawn}). В Честном Знаке они останутся выведенными из оборота.
+              </p>}
+              {stats.approved_flagged > 0 && <p className="alert alert--error">
+                В МойСклад будут отправлены марки с признаком «Выбытие или блокировка» ({stats.approved_flagged}). Марки могут быть заблокированы.
               </p>}
               {withdrawnToSend > 0 && (
                 <div className="alert alert--error" style={{ marginTop: 10, fontWeight: 600 }}>

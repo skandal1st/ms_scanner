@@ -62,7 +62,7 @@ def test_withdrawn_units_keep_exact_status_and_require_confirmed_evidence(status
     scan.withdrawn = True
     scan.withdraw_reason = 'RETAIL'
     scan.error_message = WITHDRAW_FLAG_MESSAGE + ': RETAIL'
-    for raw_status in (None, 'BLOCKED', 'INTRODUCED', 'APPLIED'):
+    for raw_status in (None, 'BLOCKED', 'APPLIED'):
         scan.verification['cz_status'] = raw_status
         assert shipment_inclusion_reason(scan) is None
     scan.verification['cz_status'] = status
@@ -71,11 +71,33 @@ def test_withdrawn_units_keep_exact_status_and_require_confirmed_evidence(status
     assert shipment_inclusion_reason(scan) is None
 
 
-@pytest.mark.parametrize('status,reason,other_reason', [('APPLIED', 'applied', 'withdrawn'), ('RETIRED', 'withdrawn', 'applied')])
+@pytest.mark.parametrize('fields,verification', [
+    ({'withdrawn': False}, {}), ({'error_message': 'Другая ошибка'}, {}),
+    ({'package_type': 'BOX', 'child_codes': ['child']}, {}),
+    ({'verified_at': None}, {}), ({}, {'cz_status': None}), ({}, {'checked_at': None}),
+    ({}, {'source': 'format'}), ({}, {'ms_error': 'Ошибка МС'}), ({}, {'cz_child_count': 1}),
+])
+def test_flagged_exception_requires_checked_individual_unit(fields, verification):
+    scan = applied_scan()
+    scan.verification['cz_status'] = 'INTRODUCED'
+    scan.withdrawn = True
+    scan.error_message = WITHDRAW_FLAG_MESSAGE
+    assert ScanResponse.model_validate(scan).inclusion_reason == 'flagged'
+    assert not can_include_applied(scan)
+    for key, value in fields.items():
+        setattr(scan, key, value)
+    scan.verification.update(verification)
+    assert shipment_inclusion_reason(scan) is None
+
+
+@pytest.mark.parametrize('status,reason,other_reason', [
+    ('APPLIED', 'applied', 'withdrawn'), ('RETIRED', 'withdrawn', 'applied'), ('INTRODUCED', 'flagged', 'withdrawn')])
 async def test_approval_is_scoped_atomic_and_idempotent(monkeypatch, status, reason, other_reason):
     good, bad = applied_scan(), applied_scan()
     good.verification['cz_status'] = status
-    good.error_message = cz_status_error(status)
+    good.withdrawn = reason == 'flagged'
+    error = WITHDRAW_FLAG_MESSAGE if good.withdrawn else cz_status_error(status)
+    good.error_message = error
     bad.withdrawn = True
     doc = SimpleNamespace(id=good.document_id, kind=DocumentKind.demand, moysklad_id='ms', upd_meta={}, user_id=uuid4())
     db = SimpleNamespace(scalars=AsyncMock(return_value=Mock(all=lambda: [good, bad])), commit=AsyncMock())
@@ -97,7 +119,8 @@ async def test_approval_is_scoped_atomic_and_idempotent(monkeypatch, status, rea
     assert good.verification['ms_approved_by'] == str(doc.user_id)
     assert good.verification['ms_approved_at']
     assert good.verification['cz_status'] == status
-    assert good.error_message == cz_status_error(status)
+    assert good.verification['ms_approval_reason'] == reason
+    assert good.error_message == error
     doc.kind = DocumentKind.supply
     with pytest.raises(HTTPException):
         await include_shipment_marks(db, doc, {good.id}, reason)

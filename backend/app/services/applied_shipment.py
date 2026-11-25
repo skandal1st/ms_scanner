@@ -10,7 +10,7 @@ from app.services.cz_status import STATUS_ERRORS, WITHDRAWN_STATUSES, WITHDRAW_F
 from app.services.mark_search import mark_key
 
 
-ShipmentInclusionReason = Literal['applied', 'withdrawn']
+ShipmentInclusionReason = Literal['applied', 'withdrawn', 'flagged']
 # Older CZ checks stored the status only in these exact server-generated messages.
 STATUS_MESSAGES = {status: (STATUS_ERRORS[status], f'Статус в ЧЗ: {status}', f'Статус: {status}')
                    for status in ('APPLIED', *WITHDRAWN_STATUSES)}
@@ -28,10 +28,17 @@ def shipment_inclusion_reason(scan) -> ShipmentInclusionReason | None:
         return None
     check = scan.verification or {}
     status = checked_status(scan)
-    if status not in STATUS_MESSAGES:
+    if status == 'INTRODUCED' and scan.withdrawn:
+        reason = 'flagged'
+    elif status == 'APPLIED':
+        reason = 'applied'
+    elif status in WITHDRAWN_STATUSES:
+        reason = 'withdrawn'
+    else:
         return None
-    reason = 'applied' if status == 'APPLIED' else 'withdrawn'
     if scan.status == ScanStatus.ms_approved:
+        if reason == 'flagged' and check.get('ms_approval_reason') != reason:
+            return None
         return reason
     if (not scan.verified_at or not check.get('checked_at') or check.get('source') != 'cz_info'
             or check.get('ms_error') or check.get('child_issues') or check.get('cz_child_count')
@@ -40,13 +47,12 @@ def shipment_inclusion_reason(scan) -> ShipmentInclusionReason | None:
             or not (scan.gtin or scan.moysklad_product_id)):
         return None
     if scan.withdrawn:
-        if reason != 'withdrawn':
+        if reason == 'applied':
             return None
-        # markWithdraw also covers blocked codes. Only the original CZ status proves withdrawal.
         flagged_error = WITHDRAW_FLAG_MESSAGE + (f': {scan.withdraw_reason}' if scan.withdraw_reason else '')
         if scan.error_message == flagged_error:
             return reason
-    return reason if scan.error_message in STATUS_MESSAGES[status] else None
+    return reason if scan.error_message in STATUS_MESSAGES.get(status, ()) else None
 
 
 def can_include_applied(scan):
@@ -54,7 +60,8 @@ def can_include_applied(scan):
 
 
 def approved_cz_statuses(scans):
-    return {s.code: checked_status(s) for s in scans if s.status == ScanStatus.ms_approved}
+    return {s.code: checked_status(s) for s in scans
+            if s.status == ScanStatus.ms_approved and shipment_inclusion_reason(s)}
 
 
 def reserves_mark():
@@ -68,7 +75,7 @@ def reserves_mark():
         if value == 'APPLIED':
             match = and_(match, Scan.withdrawn.is_(False))
         matches.append(match)
-    flagged_withdrawal = and_(Scan.withdrawn.is_(True), status.in_(WITHDRAWN_STATUSES),
+    flagged_withdrawal = and_(Scan.withdrawn.is_(True), status.in_(('INTRODUCED', *WITHDRAWN_STATUSES)),
                               or_(Scan.error_message == WITHDRAW_FLAG_MESSAGE,
                                   Scan.error_message == WITHDRAW_FLAG_MESSAGE + ': ' + Scan.withdraw_reason))
     approvable_draft = and_(
@@ -107,7 +114,7 @@ async def include_shipment_marks(db, doc, scan_ids, reason: ShipmentInclusionRea
     now = datetime.now(timezone.utc).isoformat()
     for scan in newly_approved:
         scan.verification = {**scan.verification, 'cz_status': checked_status(scan), 'ms_approved_at': now,
-                             'ms_approved_by': str(doc.user_id)}
+                             'ms_approved_by': str(doc.user_id), 'ms_approval_reason': reason}
         scan.status = ScanStatus.ms_approved
     await db.commit()
     return selected

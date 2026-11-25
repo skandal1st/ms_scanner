@@ -46,7 +46,7 @@ async def test_advisory_lock_is_exclusive_and_released(monkeypatch):
     await engine.dispose()
 
 
-@pytest.mark.parametrize('status,reason', [('APPLIED', 'applied'), ('WRITTEN_OFF', 'withdrawn')])
+@pytest.mark.parametrize('status,reason', [('APPLIED', 'applied'), ('WRITTEN_OFF', 'withdrawn'), ('INTRODUCED', 'flagged')])
 async def test_only_explicitly_included_units_reach_moysklad(monkeypatch, status, reason):
     from datetime import datetime, timezone
     from sqlalchemy import select
@@ -83,6 +83,9 @@ async def test_only_explicitly_included_units_reach_moysklad(monkeypatch, status
                 mark.withdrawn = True
                 mark.withdraw_reason = 'RETAIL'
                 mark.error_message = WITHDRAW_FLAG_MESSAGE + ': RETAIL'
+            if reason == 'flagged':
+                marks[0].withdrawn = True
+                marks[0].error_message = WITHDRAW_FLAG_MESSAGE
             db.add_all(marks)
             await db.commit()
             reserved = await db.scalars(select(Scan.id).join(Document).where(Scan.document_id == doc.id, reserves_mark()))
@@ -91,6 +94,11 @@ async def test_only_explicitly_included_units_reach_moysklad(monkeypatch, status
                 await documents.process_document(doc.id, user, db)
             queued_before = len(queued)
             request = IncludeShipmentMarksRequest(scan_ids={marks[0].id})
+            if reason == 'flagged':
+                with pytest.raises(HTTPException, match='возможной блокировке'):
+                    await include_marks_in_shipment(doc.id, reason, request, user, db)
+                assert marks[0].status == ScanStatus.invalid
+                request.acknowledge_possible_block = True
             approved, = await include_marks_in_shipment(doc.id, reason, request, user, db)
             assert approved.status == ScanStatus.ms_approved
             assert approved.verification['cz_status'] == status

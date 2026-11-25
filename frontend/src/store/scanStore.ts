@@ -6,6 +6,7 @@ interface Stats {
   invalid: number
   ms_approved: number
   approved_withdrawn: number
+  approved_flagged: number
   duplicate: number
   pending: number
   scanned: number
@@ -115,7 +116,7 @@ interface ScanStore {
   getProgress: () => PlanProgress
 }
 
-const emptyStats: Stats = { valid: 0, invalid: 0, ms_approved: 0, approved_withdrawn: 0, duplicate: 0,
+const emptyStats: Stats = { valid: 0, invalid: 0, ms_approved: 0, approved_withdrawn: 0, approved_flagged: 0, duplicate: 0,
   pending: 0, scanned: 0, overflow: 0, unknown_product: 0, used_in_other_doc: 0 }
 
 function calcStats(scans: Scan[]): Stats {
@@ -123,6 +124,7 @@ function calcStats(scans: Scan[]): Stats {
     (acc, s) => {
       acc[s.status] = (acc[s.status] || 0) + 1
       if (s.status === 'ms_approved' && s.inclusion_reason === 'withdrawn') acc.approved_withdrawn++
+      if (s.status === 'ms_approved' && s.inclusion_reason === 'flagged') acc.approved_flagged++
       return acc
     },
     { ...emptyStats }

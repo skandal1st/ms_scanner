@@ -3,7 +3,10 @@ import type { Scan } from '../api/client'
 export function verificationLabel(scan: Scan): string {
   if (scan.is_barcode) return 'Штрихкод'
   if (scan.verification?.ms_error) return 'Отклонена МойСкладом'
-  if (scan.status === 'ms_approved') return scan.inclusion_reason === 'withdrawn' ? 'Включена после выбытия' : 'Включена до ввода в оборот'
+  if (scan.status === 'ms_approved') {
+    if (scan.inclusion_reason === 'flagged') return 'Включена с предупреждением ЧЗ'
+    return scan.inclusion_reason === 'withdrawn' ? 'Включена после выбытия' : 'Включена до ввода в оборот'
+  }
   if (scan.status === 'invalid') return 'Есть проблема'
   if (scan.verification?.source === 'pending') return 'Проверяется в ЧЗ'
   if (scan.verification?.source === 'ms') return 'Загружена из МС'

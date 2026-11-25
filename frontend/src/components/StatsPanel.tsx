@@ -2,7 +2,7 @@ import { useScanStore } from '../store/scanStore'
 
 export function StatsPanel() {
   const { stats } = useScanStore()
-  const approvedApplied = stats.ms_approved - stats.approved_withdrawn
+  const approvedApplied = stats.ms_approved - stats.approved_withdrawn - stats.approved_flagged
   const total =
     stats.valid +
     stats.invalid +
@@ -21,6 +21,7 @@ export function StatsPanel() {
       {stats.valid > 0 && <Row label="Проверено" value={stats.valid} variant="ok" />}
       {approvedApplied > 0 && <Row label="Включено до ввода в оборот" value={approvedApplied} variant="warn" />}
       {stats.approved_withdrawn > 0 && <Row label="Включено после выбытия" value={stats.approved_withdrawn} variant="warn" />}
+      {stats.approved_flagged > 0 && <Row label="Включено с признаком выбытия или блокировки" value={stats.approved_flagged} variant="warn" />}
       {stats.overflow > 0 && <Row label="Сверх плана" value={stats.overflow} variant="error" />}
       {stats.unknown_product > 0 && (
         <Row label="Без товара" value={stats.unknown_product} variant="warn" />

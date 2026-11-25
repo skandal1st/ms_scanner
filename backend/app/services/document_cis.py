@@ -75,11 +75,12 @@ async def confirm_document_cis(rows: list[dict], cz, *, kind: str | None = None,
                     canonical = ci.get('cis')
                     status = ci.get('status')
                     approved = kind == 'demand' and (approved_statuses or {}).get(original) == status
-                    if status in WITHDRAWN_STATUSES:
+                    if status == 'INTRODUCED':
+                        allowed = not ci.get('markWithdraw') or approved
+                    elif status in WITHDRAWN_STATUSES:
                         allowed = approved
                     else:
-                        allowed = not ci.get('markWithdraw') and (
-                            status == 'INTRODUCED' or (status == 'APPLIED' and (kind == 'supply' or approved)))
+                        allowed = status == 'APPLIED' and not ci.get('markWithdraw') and (kind == 'supply' or approved)
                     if (canonical != original[:21]
                             or not allowed
                             or ci.get('generalPackageType') != 'UNIT'

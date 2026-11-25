@@ -149,6 +149,7 @@ class PackModeRequest(BaseModel):
 
 class IncludeShipmentMarksRequest(BaseModel):
     scan_ids: set[UUID]
+    acknowledge_possible_block: bool = False
 
 
 @router.post('/{document_id}/include-{reason}', response_model=list[ScanResponse])
@@ -156,6 +157,8 @@ async def include_marks_in_shipment(document_id: UUID, reason: ShipmentInclusion
                                       current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     doc = await editable_document(db, document_id, current_user.id)
     require_collection_started(doc)
+    if reason == 'flagged' and not body.acknowledge_possible_block:
+        raise HTTPException(409, 'Обновите страницу и подтвердите предупреждение о возможной блокировке марок.')
     scans = await include_shipment_marks(db, doc, body.scan_ids, reason)
     await publish_event(current_user.id, {'type': 'scans_changed', 'document_id': str(doc.id)})
     return [ScanResponse.model_validate(s) for s in scans]

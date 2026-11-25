@@ -51,7 +51,7 @@ async def test_confirmed_aliases_keep_source_and_order_and_log_request(install):
     assert log.await_args.args[2] == [RAW, OTHER]
 
 
-@pytest.mark.parametrize('status,flag', [('APPLIED', False), ('WITHDRAWN', True), ('RETIRED', False), ('WRITTEN_OFF', False)])
+@pytest.mark.parametrize('status,flag', [('APPLIED', False), ('WITHDRAWN', True), ('RETIRED', False), ('WRITTEN_OFF', False), ('INTRODUCED', True)])
 async def test_demand_permission_covers_only_the_approved_code_and_status(install, status, flag):
     install(lambda request: httpx.Response(200, json=[
         answer(raw, status=status, markWithdraw=flag) for raw in json.loads(request.content)]))

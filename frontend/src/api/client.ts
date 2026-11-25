@@ -598,7 +598,7 @@ export type ScanStatus =
   | 'unknown_product'
   | 'used_in_other_doc'
 
-export type ShipmentInclusionReason = 'applied' | 'withdrawn'
+export type ShipmentInclusionReason = 'applied' | 'withdrawn' | 'flagged'
 
 export interface Scan {
   inclusion_reason?: ShipmentInclusionReason | null
@@ -769,7 +769,7 @@ export interface MixedImportJob {
 
 export const scansApi = {
   includeShipmentMarks: (documentId: string, scanIds: string[], reason: ShipmentInclusionReason) =>
-    api.post<Scan[]>(`/scans/${documentId}/include-${reason}`, { scan_ids: scanIds }),
+    api.post<Scan[]>(`/scans/${documentId}/include-${reason}`, { scan_ids: scanIds, acknowledge_possible_block: reason === 'flagged' }),
   composition: (document_id: string) => api.get<PackagingCompositionData>(`/scans/composition/${document_id}`),
   refreshComposition: (document_id: string, code?: string) => api.post(`/scans/composition/${document_id}`, { code }),
   serialAttempts: (documentId: string, code: string) =>
