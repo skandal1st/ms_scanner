@@ -12,13 +12,22 @@ const store=load('src/store/scanStore.ts');
 const {isProblemScan,numberedScans,problemPositionRows}=load('src/lib/shipmentProblems.ts',{'../store/scanStore':store});
 const scan=(id,status='valid',extra={})=>({id,status,code:'code'+id,gtin:'04620543080527',scanned_at:`2026-10-23T10:00:0${id}Z`,...extra});
 
-test('warnings include rejected, withdrawn, MS and child errors, ownership and visible repeat',()=>{
+test('warnings include rejected, withdrawn, MS and child errors, ownership and off-plan marks',()=>{
   for(const status of ['invalid','duplicate','overflow','unknown_product','used_in_other_doc']) assert(isProblemScan(scan('1',status)));
   for(const extra of [{withdrawn:true},{verification:{ms_error:'error'}},{verification:{child_issues:[{}]}},{verification:{owner_result:'unknown'}}]) assert(isProblemScan(scan('1','valid',extra)));
   assert(isProblemScan(scan('1','valid',{owner_inn:'other'}),'ours'));
-  assert(isProblemScan(scan('1'),null,'1'));
   for(const status of ['valid','pending','scanned']) assert.equal(isProblemScan(scan('1',status)),false);
-  assert(isProblemScan(scan('1'),null,null,[{gtin:'00000000000002',product_id:'other'}]));
+  assert(isProblemScan(scan('1'),null,[{gtin:'00000000000002',product_id:'other'}]));
+});
+test('a repeat on desktop reveals a healthy position without adding an issue, while genuine conflicts remain visible', () => {
+  const repeated = scan('1', 'valid', {duplicate: true, moysklad_product_id: 'healthy'});
+  const conflict = scan('2', 'used_in_other_doc', {duplicate: true, moysklad_product_id: 'blocked'});
+  const rows = ['healthy', 'blocked'].map(product_id => ({product_id, gtin: repeated.gtin, expected: 1, addedTotal: 1}));
+  const progress = {hasPlan: true, rows, offPlanRows: []};
+  assert.equal(isProblemScan(repeated, null, rows), false);
+  assert.equal(isProblemScan(conflict, null, rows), true);
+  assert.equal(problemPositionRows(progress, [repeated, conflict]).map(row => row.product_id).join(), 'blocked');
+  assert.equal(problemPositionRows(progress, [repeated, conflict], null, repeated.id).length, 2);
 });
 test('numbering survives input reorder, status update and filtering without mutating scans',()=>{
   const scans=[scan('3'),scan('1'),scan('2','invalid')];

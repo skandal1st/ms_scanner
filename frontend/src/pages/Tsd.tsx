@@ -377,7 +377,7 @@ function TsdPicking({ initial, onBack }: { initial: TsdDocumentDetail; onBack: (
       const row = positionFilter === 'all' ? undefined : findProgressRowForScan(item.scan, progress.rows)
       if (positionFilter !== 'all'
           && (positionFilter === 'other' ? Boolean(row) : row !== progress.rows[positionFilter])) continue
-      const problem = isProblemScan(item.scan, null, repeatedId, progress.hasPlan ? progress.rows : undefined)
+      const problem = item.scan.id === repeatedId || isProblemScan(item.scan, null, progress.hasPlan ? progress.rows : undefined)
         || Boolean(verificationResult && needsVerificationReview(item.scan, progress.hasPlan ? progress.rows : undefined))
       if (problem) problemCount++
       if (!onlyProblemMarks || problem) filteredScans.push(item)

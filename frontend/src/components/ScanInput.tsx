@@ -65,8 +65,8 @@ export function ScanInput({ documentId, inactiveHint = 'Выберите док�
   const current = documentId && outcome?.documentId === documentId ? outcome : undefined
   const scan = current?.scan && scans.find(item => item.id === current.scan?.id)
   const row = scan && findProgressRowForScan(scan, useScanStore.getState().getProgress().rows)
-  const resultText = (current?.scan?.duplicate || scan?.status === 'duplicate') ? 'Уже сканировали · количество прежнее'
-    : scan?.status === 'invalid' || scan?.status === 'used_in_other_doc' ? scan.error_message || 'Код отклонён'
+  const resultText = scan?.status === 'invalid' || scan?.status === 'used_in_other_doc' ? scan.error_message || 'Код отклонён'
+    : (current?.scan?.duplicate || scan?.status === 'duplicate') ? 'Уже сканировали · количество прежнее'
     : scan?.status === 'unknown_product' ? 'Нужно сопоставить товар'
     : scan?.status === 'pending' ? 'Идёт проверка'
     : scan?.status === 'overflow' ? 'Сверх плана'

@@ -255,7 +255,7 @@ function sameSelection(a: PositionSelection | null, b: PositionSelection): boole
   return byPid || byGtin
 }
 
-function groupKey(scan: Scan): string {
+export function groupKey(scan: Scan): string {
   return scan.gtin || scan.code.slice(0, 32) || 'unknown'
 }
 
@@ -411,7 +411,15 @@ export const useScanStore = create<ScanStore>((set, get) => ({
   setDeleteMode: (v) => set({ deleteMode: v }),
   setUnpackBox: (v) => set({ unpackBox: v }),
   setCzTokenExpired: (v) => set({ czTokenExpired: v }),
-  flashScan: (id) => set(state => ({ flashScanId: id, flashScanVersion: state.flashScanVersion + 1, selection: null })),
+  flashScan: (id) => set(state => {
+    const selection = state.selection
+    const matchesFilter = selection && state.scans.some(scan => scan.id === id && selectionMatchesScan(selection, scan))
+    return {
+      flashScanId: id,
+      flashScanVersion: state.flashScanVersion + 1,
+      selection: matchesFilter ? selection : null,
+    }
+  }),
 
   setDocument: (doc) => set({ document: doc, targetProductId: null, selection: null, deleteMode: false, flashScanId: null }),
 

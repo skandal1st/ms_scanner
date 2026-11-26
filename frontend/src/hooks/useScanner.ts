@@ -3,6 +3,7 @@ import { useCallback } from 'react'
 import { scansApi, isSscc, type Scan } from '../api/client'
 import { useScanStore } from '../store/scanStore'
 import { useScanUpdates } from './useScanUpdates'
+import { preferResolvedScan } from '../lib/scanEvents'
 import { createConflictSound } from '../lib/tsdSound'
 
 const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -93,32 +94,23 @@ export function useScanner(documentId: string | null) {
             rawHex,
           )
           if (useScanStore.getState().document?.id !== documentId) return
-          let hadError = false
-          let hadConflict = false
-          let repeatedId: string | null = null
           boxScans.forEach((s) => {
             if (state.document?.kind === 'demand') recordMarkScan(s)
-            addScan(s)
-            if (s.status === 'used_in_other_doc') hadConflict = true
-            if (s.duplicate) {
-              repeatedId = s.id
-              hadError = true
-            } else {
-              if (s.status === 'used_in_other_doc') hadError = true
-            }
+            addScan(preferResolvedScan(useScanStore.getState().scans.find(item => item.id === s.id), s))
           })
-          if (repeatedId) flashScan(repeatedId)
-          if (hadConflict) playBeep('used_in_other_doc')
-          else if (hadError) playBeep('error')
-          else playBeep('ok')
+          const duplicates = boxScans.filter(s => s.duplicate)
+          const conflicts = boxScans.filter(s => s.status === 'used_in_other_doc').length
+          const added = boxScans.filter(s => !s.duplicate)
+          if (duplicates.length) flashScan(duplicates[duplicates.length - 1].id)
+          if (conflicts) playBeep('used_in_other_doc')
+          else if (added.some(s => s.status === 'invalid')) playBeep('error')
+          else if (added.length) playBeep('ok')
           if (boxScans.length === 1) {
             const scan = boxScans[0]
             return { documentId, scan, undoIds: scan.duplicate ? undefined : [scan.id] }
           }
-          const duplicates = boxScans.filter(s => s.duplicate).length
-          const conflicts = boxScans.filter(s => s.status === 'used_in_other_doc').length
-          const undoIds = boxScans.filter(s => !s.duplicate).map(s => s.id)
-          return { documentId, undoIds, message: `Обработано кодов короба: ${boxScans.length} · повторов: ${duplicates}${conflicts ? ` · в другом документе: ${conflicts}` : ''}` }
+          const undoIds = added.map(s => s.id)
+          return { documentId, undoIds, message: `Обработано кодов короба: ${boxScans.length} · повторов: ${duplicates.length}${conflicts ? ` · в другом документе: ${conflicts}` : ''}` }
         }
 
         const targetPid = state.targetProductId
@@ -130,14 +122,12 @@ export function useScanner(documentId: string | null) {
         )
         if (useScanStore.getState().document?.id !== documentId) return
         if (state.document?.kind === 'demand') recordMarkScan(scan)
+        addScan(preferResolvedScan(useScanStore.getState().scans.find(s => s.id === scan.id), scan))
         if (scan.duplicate) {
-          // Код уже есть в этом документе: не дублируем строку, подсвечиваем её.
-          addScan(scan)
           flashScan(scan.id)
-          playBeep(scan.status === 'used_in_other_doc' ? 'used_in_other_doc' : 'error')
+          if (scan.status === 'used_in_other_doc') playBeep('used_in_other_doc')
           return { documentId, scan }
         }
-        addScan(scan)
         // Основной флоу: КМ проверяется локально при скане, статус приходит сразу в
         // ответе (scanned = принят локально; invalid = кривой формат). Бип — здесь,
         // мгновенно, без ожидания ЧЗ. Проверка в ЧЗ — потом, по кнопке «Проверить марки».

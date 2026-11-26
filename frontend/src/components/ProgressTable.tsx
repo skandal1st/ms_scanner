@@ -1,9 +1,12 @@
 import { problemPositionRows } from '../lib/shipmentProblems'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useFlowPanelVisible } from './FlowWorkspaceTabs'
 import { sortShipmentProgress } from '../lib/sortShipmentProgress'
 import {
   useScanStore,
   buildProgress,
+  findProgressRowForScan,
+  groupKey,
   normalizeGtinKey,
   selectionMatchesRow,
 } from '../store/scanStore'
@@ -42,11 +45,38 @@ export function ProgressTable({ shipment = false, signatureInn, tabbed = false, 
     return sortByName ? sortShipmentProgress(result) : result
   }, [plan, scans, sortByName])
   const repeatedId = useScanStore(s => s.flashScanId)
+  const repeatVersion = useScanStore(s => s.flashScanVersion)
+  const summaryVisible = useFlowPanelVisible('summary')
+  const repeatRef = useRef<HTMLDivElement>(null)
+  const handledRepeat = useRef(0)
   const [onlyProblems, setOnlyProblems] = useState(false)
   useEffect(() => { setOnlyProblems(false) }, [documentId])
-  const problemRows = useMemo(() => problemPositionRows(progress, scans, signatureInn, repeatedId), [progress, scans, signatureInn, repeatedId])
-  const visibleRows = onlyProblems ? problemRows : shipment
+  const problemRows = useMemo(() => problemPositionRows(progress, scans, signatureInn), [progress, scans, signatureInn])
+  const allRows = shipment
     ? [...progress.rows, ...problemRows.filter(row => !progress.rows.includes(row))] : progress.rows
+  const visibleRows = onlyProblems ? problemRows : allRows
+  const repeatedScan = repeatedId ? scans.find(scan => scan.id === repeatedId) : undefined
+  const repeatedOffPlan = repeatedId ? progress.offPlanRows.find(row => row.scanIds.includes(repeatedId)) : undefined
+  const repeatedRow = repeatedScan && !repeatedOffPlan
+    ? findProgressRowForScan(repeatedScan, allRows)
+      ?? allRows.find(row => row.gtin === (progress.hasPlan ? repeatedScan.code : groupKey(repeatedScan)))
+    : undefined
+  const repeatHidden = Boolean(repeatedRow && !visibleRows.includes(repeatedRow))
+  const repeatLocated = Boolean(repeatedRow || repeatedOffPlan)
+  useEffect(() => {
+    if (!summaryVisible || !repeatLocated || handledRepeat.current === repeatVersion) return
+    if (repeatHidden) {
+      setOnlyProblems(false)
+      return
+    }
+    const frame = requestAnimationFrame(() => {
+      if (repeatRef.current) {
+        repeatRef.current.scrollIntoView({ block: 'center', behavior: 'instant' })
+        handledRepeat.current = repeatVersion
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [summaryVisible, repeatLocated, repeatHidden, repeatVersion])
   const hasGroups = sortByName && progress.rows.some(row => row.folder_name)
   const [deletingOff, setDeletingOff] = useState<string | null>(null)
 
@@ -235,7 +265,8 @@ export function ProgressTable({ shipment = false, signatureInn, tabbed = false, 
               <div className="shipment-group-heading">{item.folder_name || 'Без группы'}</div>}
             <div
               key={item.product_id ? `${item.product_id}:${item.gtin}` : item.gtin}
-              className={incomplete ? 'assembly-incomplete' : undefined}
+              ref={item === repeatedRow ? repeatRef : undefined}
+              className={`${incomplete ? 'assembly-incomplete' : ''} ${item === repeatedRow ? 'assembly-repeat' : ''}`}
               style={rowStyle}
               role={selectable ? 'button' : undefined}
               tabIndex={selectable ? 0 : undefined}
@@ -301,7 +332,8 @@ export function ProgressTable({ shipment = false, signatureInn, tabbed = false, 
             <Icon name="warning" size={14} /> Не входят в план ({progress.offPlanRows.length}) — отсканированы ошибочно
           </div>
           {progress.offPlanRows.map((row) => (
-            <div key={row.scanIds[0]} style={styles.offPlanRow}>
+            <div key={row.scanIds[0]} style={styles.offPlanRow} ref={row === repeatedOffPlan ? repeatRef : undefined}
+              className={row === repeatedOffPlan ? 'assembly-repeat' : undefined}>
               <span style={styles.offPlanName} title={row.gtin}>
                 {row.product_name}
                 <span style={styles.offPlanCount}>

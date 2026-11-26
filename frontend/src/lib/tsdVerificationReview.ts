@@ -3,7 +3,7 @@ import { buildProgress, type ProgressRow } from '../store/scanStore'
 import { isProblemScan } from './shipmentProblems'
 
 export function needsVerificationReview(scan: Scan, rows?: ProgressRow[]) {
-  return isProblemScan(scan, null, null, rows)
+  return isProblemScan(scan, null, rows)
     || (!scan.is_barcode && ['scanned', 'pending'].includes(scan.status))
 }
 

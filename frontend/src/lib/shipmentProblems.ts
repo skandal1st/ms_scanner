@@ -2,9 +2,8 @@ import type { Scan } from '../api/client'
 import { effectiveGtinKey, findProgressRowForScan, ownerCheckState } from '../store/scanStore'
 import type { PlanProgress, ProgressRow } from '../store/scanStore'
 
-export function isProblemScan(scan: Scan, signatureInn?: string | null, repeatedId?: string | null, planRows?: ProgressRow[]): boolean {
-  return scan.id === repeatedId
-    || Boolean(scan.status !== 'pending' && planRows?.length && !findProgressRowForScan(scan, planRows))
+export function isProblemScan(scan: Scan, signatureInn?: string | null, planRows?: ProgressRow[]): boolean {
+  return Boolean(scan.status !== 'pending' && planRows?.length && !findProgressRowForScan(scan, planRows))
     || ['invalid', 'ms_approved', 'duplicate', 'overflow', 'unknown_product', 'used_in_other_doc'].includes(scan.status)
     || Boolean(scan.withdrawn || scan.verification?.ms_error || scan.verification?.child_issues?.length
       || scan.verification?.owner_result === 'mismatch' || scan.verification?.owner_result === 'unknown'
@@ -23,7 +22,7 @@ export function problemPositionRows(progress: PlanProgress, scans: Scan[], signa
   const extraRows: ProgressRow[] = []
   const offPlanIds = new Set(progress.offPlanRows.flatMap(row => row.scanIds))
   for (const scan of scans) {
-    if (!isProblemScan(scan, signatureInn, repeatedId, progress.hasPlan ? progress.rows : undefined)) continue
+    if (scan.id !== repeatedId && !isProblemScan(scan, signatureInn, progress.hasPlan ? progress.rows : undefined)) continue
     const row = findProgressRowForScan(scan, progress.rows)
     if (row) problemRows.add(row)
     else if (!offPlanIds.has(scan.id)) {

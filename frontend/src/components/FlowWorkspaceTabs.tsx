@@ -2,8 +2,11 @@ import { createContext, useContext, useEffect, useId, useState, type KeyboardEve
 import { useScanStore } from '../store/scanStore'
 
 export type FlowWorkspaceTab = 'summary' | 'marks' | 'composition'
-const MarksPanelVisible = createContext(true)
-export const useMarksPanelVisible = () => useContext(MarksPanelVisible)
+const ActiveTab = createContext<FlowWorkspaceTab | null>(null)
+export function useFlowPanelVisible(tab: FlowWorkspaceTab) {
+  const active = useContext(ActiveTab)
+  return active === null || active === tab
+}
 
 interface FlowWorkspaceTabsProps {
   summaryLabel: string
@@ -29,7 +32,7 @@ export function useFlowWorkspaceTab(storageKey: string) {
     sessionStorage.setItem(storageKey, active)
   }, [active, storageKey])
   useEffect(() => {
-    if (repeatId) setActive('marks')
+    if (repeatId) setActive(current => current === 'composition' ? 'marks' : current)
   }, [repeatId, repeatVersion])
 
   return [active, setActive] as const
@@ -105,7 +108,7 @@ export function FlowWorkspaceTabs({
         className="flow-tabs__panel"
         hidden={active !== 'summary'}
       >
-        {summary}
+        <ActiveTab.Provider value={active}>{summary}</ActiveTab.Provider>
       </div>
       <div
         id={`${baseId}-marks-panel`}
@@ -114,7 +117,7 @@ export function FlowWorkspaceTabs({
         className="flow-tabs__panel"
         hidden={active !== 'marks'}
       >
-        <MarksPanelVisible.Provider value={active === 'marks'}>{marks}</MarksPanelVisible.Provider>
+        <ActiveTab.Provider value={active}>{marks}</ActiveTab.Provider>
       </div>
       {composition && <div id={`${baseId}-composition-panel`} role="tabpanel"
         aria-labelledby={`${baseId}-composition-tab`} className="flow-tabs__panel flow-tabs__panel--composition"

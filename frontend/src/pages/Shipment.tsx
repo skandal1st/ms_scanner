@@ -175,9 +175,7 @@ export function ShipmentPage({
   // Владелец подписи (ИНН из сертификата ЧЗ) — для сверки владельца марок в отгрузке.
   const { data: integration } = useIntegration()
   const signatureInn = integration?.cz_inn ?? null
-  const repeatedScanId = useScanStore(state => state.flashScanId)
-  const workspaceIssueCount = scans.filter(scan => isProblemScan(scan, signatureInn,
-    repeatedScanId, progress.hasPlan ? progress.rows : undefined)).length
+  const workspaceIssueCount = scans.filter(scan => isProblemScan(scan, signatureInn, progress.hasPlan ? progress.rows : undefined)).length
   const ownerWarnings = scans.reduce(
     (acc, s) => {
       const st = ownerCheckState(s, signatureInn)

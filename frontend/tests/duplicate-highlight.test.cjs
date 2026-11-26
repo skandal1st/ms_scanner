@@ -42,3 +42,13 @@ test('live refresh preserves highlight; next scan and changing document clear it
   store.getState().reset();
   assert.equal(store.getState().flashScanId,null);
 });
+
+test('repeat preserves the active position filter when its mark is already visible', () => {
+  store.getState().reset();
+  store.getState().addScan(first);
+  const selection = {productId:null, gtinKey:first.gtin};
+  store.getState().setSelection(selection);
+  store.getState().flashScan(first.id);
+  assert.equal(store.getState().selection, selection);
+  assert.equal(store.getState().flashScanId, first.id);
+});

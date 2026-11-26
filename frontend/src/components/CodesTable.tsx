@@ -12,7 +12,7 @@ import { verificationLabel, ownerCheckLabel, ownerBadgeLabel } from '../lib/scan
 import { Icon } from './Icon'
 import { packActionLabel, scanPackageLabel, scanPackageType, shouldUnpack } from '../lib/scanPackaging'
 import { isProblemScan, numberedScans } from '../lib/shipmentProblems'
-import { useMarksPanelVisible } from './FlowWorkspaceTabs'
+import { useFlowPanelVisible } from './FlowWorkspaceTabs'
 import { PackagingRecheck } from './PackagingRecheck'
 import { IncludeShipmentMarks } from './IncludeShipmentMarks'
 
@@ -45,6 +45,16 @@ export function CodesTable({ signatureInn, shipment = false }: { signatureInn?: 
   const [onlyProblems, setOnlyProblems] = useState(false)
   useEffect(() => { setOnlyProblems(false) }, [documentId])
   const [expanded, setExpanded] = useState<string | null>(null)
+  const marksVisible = useFlowPanelVisible('marks')
+  const handledRepeat = useRef(0)
+  useEffect(() => {
+    if (!marksVisible || !flashScanId || handledRepeat.current === flashScanVersion) return
+    const repeated = scans.find(scan => scan.id === flashScanId)
+    if (!repeated) return
+    handledRepeat.current = flashScanVersion
+    if (!isProblemScan(repeated, signatureInn, planRows)) setOnlyProblems(false)
+    setExpanded(flashScanId)
+  }, [marksVisible, flashScanId, flashScanVersion, scans, signatureInn, planRows])
 
   if (scans.length === 0) {
     return <div className="scans-empty">Коды появятся здесь после сканирования</div>
@@ -52,8 +62,8 @@ export function CodesTable({ signatureInn, shipment = false }: { signatureInn?: 
 
   // Фокус на выбранной позиции: пока активно выделение, показываем только её марки.
   const positionScans = selection ? scans.filter(s => selectionMatchesScan(selection, s)) : scans
-  const problemCount = positionScans.filter(s => isProblemScan(s, signatureInn, flashScanId, planRows)).length
-  const visibleScans = positionScans.filter(s => !onlyProblems || isProblemScan(s, signatureInn, flashScanId, planRows))
+  const problems = positionScans.filter(s => isProblemScan(s, signatureInn, planRows))
+  const visibleScans = onlyProblems ? problems : positionScans
   const numbered = shipment ? numberedScans(scans) : scans.map((scan, index) => ({ scan, number: index + 1 }))
   const visibleIds = new Set(visibleScans.map(scan => scan.id))
   const hiddenCount = scans.length - positionScans.length
@@ -65,9 +75,9 @@ export function CodesTable({ signatureInn, shipment = false }: { signatureInn?: 
 
   return (
     <>
-      {shipment && <label className="shipment-problem-filter" title="Ошибки, марки вне плана, превышение плана, повторный скан и предупреждения о марке или владельце">
+      {shipment && <label className="shipment-problem-filter" title="Ошибки, марки вне плана, превышение плана и предупреждения о марке или владельце">
         <input type="checkbox" checked={onlyProblems} onChange={e => setOnlyProblems(e.target.checked)} />
-        Только проблемные марки ({problemCount})
+        Только проблемные марки ({problems.length})
         <span className="shipment-filter-count">Показано {visibleScans.length} из {positionScans.length}</span>
       </label>}
       {selection && (
@@ -190,7 +200,7 @@ function ScanRow({
   const [packError, setPackError] = useState('')
   const document = useScanStore((state) => state.document)
   const rowRef = useRef<HTMLTableRowElement>(null)
-  const marksVisible = useMarksPanelVisible()
+  const marksVisible = useFlowPanelVisible('marks')
   useEffect(() => {
     if (!isFlash || !marksVisible) return
     // Let the marks tab become visible before locating the row; keep scanner focus.
@@ -259,7 +269,7 @@ function ScanRow({
           ) : null}
         </td>
         <td>
-          {isFlash && <span role="status" className="badge badge--warn scan-repeat-badge">Повторный скан</span>}
+          {isFlash && <span role="status" className="badge badge--info scan-repeat-badge">Уже сканировали</span>}
           <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
           {(scan.withdrawn || (scan.status === 'invalid' && scan.inclusion_reason === 'withdrawn')) && (
             <span
